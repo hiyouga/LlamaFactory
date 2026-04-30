@@ -127,7 +127,7 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
             # Use custom SFT loss function that correctly handles num_items_in_batch
             # for global per-token mean aggregation, avoiding the mean-of-means bug.
             # See: https://arxiv.org/abs/2604.23747
-            self.compute_loss_func = sft_loss_func
+            self.compute_loss_func = partial(sft_loss_func, label_smoothing_factor=training_args.label_smoothing_factor)
 
         if training_args.fp8 and hasattr(self, "accelerator"):  # verify FP8 status after trainer initialization
             verify_fp8_status(self.accelerator, training_args)

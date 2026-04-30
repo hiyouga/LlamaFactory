@@ -637,7 +637,10 @@ def get_batch_logps(
 
 
 def sft_loss_func(
-    outputs: "torch.Tensor", labels: "torch.Tensor", num_items_in_batch: Optional["torch.Tensor"] = None
+    outputs: "torch.Tensor",
+    labels: "torch.Tensor",
+    num_items_in_batch: Optional["torch.Tensor"] = None,
+    label_smoothing_factor: float = 0.0,
 ) -> "torch.Tensor":
     r"""Compute SFT cross-entropy loss with correct global per-token mean aggregation.
 
@@ -645,6 +648,9 @@ def sft_loss_func(
     uses reduction="sum" divided by the global token count across all DP ranks and gradient
     accumulation steps, which avoids the "mean of means" bug in distributed training.
     See: https://arxiv.org/abs/2604.23747 (Algorithm 2)
+
+    Note: This requires ``average_tokens_across_devices=True`` (the HF Trainer default)
+    so that num_items_in_batch is aggregated across all DP ranks via all_gather + sum.
 
     When num_items_in_batch is not available, falls back to reduction="mean".
     """
@@ -659,15 +665,37 @@ def sft_loss_func(
     shift_logits = shift_logits.view(-1, vocab_size)
     shift_labels = shift_labels.view(-1).to(logits.device)
 
-    if num_items_in_batch is not None:
-        loss = F.cross_entropy(shift_logits, shift_labels, ignore_index=IGNORE_INDEX, reduction="sum")
-        if torch.is_tensor(num_items_in_batch):
-            num_items_in_batch = num_items_in_batch.to(loss.device)
-        loss = loss / num_items_in_batch
-    else:
-        loss = F.cross_entropy(shift_logits, shift_labels, ignore_index=IGNORE_INDEX, reduction="mean")
+    if label_smoothing_factor == 0.0:
+        if num_items_in_batch is not None:
+            loss = F.cross_entropy(shift_logits, shift_labels, ignore_index=IGNORE_INDEX, reduction="sum")
+            if torch.is_tensor(num_items_in_batch):
+                num_items_in_batch = num_items_in_batch.to(loss.device)
+            loss = loss / num_items_in_batch
+        else:
+            loss = F.cross_entropy(shift_logits, shift_labels, ignore_index=IGNORE_INDEX, reduction="mean")
 
-    return loss
+        return loss
+
+    log_probs = -F.log_softmax(shift_logits, dim=-1)
+    padding_mask = shift_labels.eq(IGNORE_INDEX)
+    safe_labels = torch.clamp(shift_labels, min=0)
+    nll_loss = log_probs.gather(dim=-1, index=safe_labels.unsqueeze(-1))
+    smoothed_loss = log_probs.sum(dim=-1, keepdim=True, dtype=torch.float32)
+
+    nll_loss.masked_fill_(padding_mask.unsqueeze(-1), 0.0)
+    smoothed_loss.masked_fill_(padding_mask.unsqueeze(-1), 0.0)
+
+    if num_items_in_batch is not None:
+        if torch.is_tensor(num_items_in_batch):
+            num_items_in_batch = num_items_in_batch.to(nll_loss.device)
+        nll_loss = nll_loss.sum() / num_items_in_batch
+        smoothed_loss = smoothed_loss.sum() / (num_items_in_batch * vocab_size)
+    else:
+        num_active_elements = padding_mask.numel() - padding_mask.long().sum()
+        nll_loss = nll_loss.sum() / num_active_elements
+        smoothed_loss = smoothed_loss.sum() / (num_active_elements * vocab_size)
+
+    return (1 - label_smoothing_factor) * nll_loss + label_smoothing_factor * smoothed_loss
 
 
 def dft_loss_func(

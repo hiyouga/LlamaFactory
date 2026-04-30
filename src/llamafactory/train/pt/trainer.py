@@ -2,7 +2,7 @@
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
-# You may obtain the copy of the License at
+# You may obtain a copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 #
@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from functools import partial
 from types import MethodType
 from typing import TYPE_CHECKING, Optional
 
@@ -59,7 +60,7 @@ class CustomTrainer(Trainer):
         # Use custom loss function that correctly handles num_items_in_batch for
         # global per-token mean aggregation, avoiding the mean-of-means bug.
         # See: https://arxiv.org/abs/2604.23747
-        self.compute_loss_func = sft_loss_func
+        self.compute_loss_func = partial(sft_loss_func, label_smoothing_factor=training_args.label_smoothing_factor)
 
         if processor is not None:
             self.add_callback(SaveProcessorCallback(processor))
