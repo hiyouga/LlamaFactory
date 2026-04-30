@@ -636,6 +636,40 @@ def get_batch_logps(
     return logps, valid_length
 
 
+def sft_loss_func(
+    outputs: "torch.Tensor", labels: "torch.Tensor", num_items_in_batch: Optional["torch.Tensor"] = None
+) -> "torch.Tensor":
+    r"""Compute SFT cross-entropy loss with correct global per-token mean aggregation.
+
+    When num_items_in_batch is provided (by the HF Trainer when compute_loss_func is set),
+    uses reduction="sum" divided by the global token count across all DP ranks and gradient
+    accumulation steps, which avoids the "mean of means" bug in distributed training.
+    See: https://arxiv.org/abs/2604.23747 (Algorithm 2)
+
+    When num_items_in_batch is not available, falls back to reduction="mean".
+    """
+    logits = outputs.get("logits")
+    if logits is None:
+        return outputs.get("loss", torch.tensor(0.0))
+
+    logits = logits.float()
+    vocab_size = logits.size(-1)
+    shift_labels = labels[..., 1:].contiguous()
+    shift_logits = logits[..., :-1, :].contiguous()
+    shift_logits = shift_logits.view(-1, vocab_size)
+    shift_labels = shift_labels.view(-1).to(logits.device)
+
+    if num_items_in_batch is not None:
+        loss = F.cross_entropy(shift_logits, shift_labels, ignore_index=IGNORE_INDEX, reduction="sum")
+        if torch.is_tensor(num_items_in_batch):
+            num_items_in_batch = num_items_in_batch.to(loss.device)
+        loss = loss / num_items_in_batch
+    else:
+        loss = F.cross_entropy(shift_logits, shift_labels, ignore_index=IGNORE_INDEX, reduction="mean")
+
+    return loss
+
+
 def dft_loss_func(
     outputs: "torch.Tensor", labels: "torch.Tensor", num_items_in_batch: Optional["torch.Tensor"] = None
 ):

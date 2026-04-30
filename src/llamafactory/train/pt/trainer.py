@@ -2,7 +2,7 @@
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# You may obtain the copy of the License at
 #
 #     http://www.apache.org/licenses/LICENSE-2.0
 #
@@ -21,7 +21,7 @@ from typing_extensions import override
 
 from ..callbacks import SaveProcessorCallback
 from ..fp8_utils import configure_fp8_environment, patch_accelerator_for_fp8, verify_fp8_status
-from ..trainer_utils import create_custom_optimizer, create_custom_scheduler
+from ..trainer_utils import create_custom_optimizer, create_custom_scheduler, sft_loss_func
 
 
 if TYPE_CHECKING:
@@ -49,12 +49,17 @@ class CustomTrainer(Trainer):
                 patch_accelerator_for_fp8()
 
         super().__init__(**kwargs)
-        if processor is not None:
-            # avoid wrong loss under gradient accumulation
-            # https://github.com/huggingface/transformers/pull/36044#issuecomment-2746657112
-            self.model_accepts_loss_kwargs = False
+        # avoid wrong loss under gradient accumulation and distributed training
+        # https://github.com/huggingface/transformers/pull/36044#issuecomment-2746657112
+        # https://arxiv.org/abs/2604.23747 (Algorithm 2)
+        self.model_accepts_loss_kwargs = False
 
         self.finetuning_args = finetuning_args
+
+        # Use custom loss function that correctly handles num_items_in_batch for
+        # global per-token mean aggregation, avoiding the mean-of-means bug.
+        # See: https://arxiv.org/abs/2604.23747
+        self.compute_loss_func = sft_loss_func
 
         if processor is not None:
             self.add_callback(SaveProcessorCallback(processor))

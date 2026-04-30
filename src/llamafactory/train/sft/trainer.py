@@ -30,7 +30,7 @@ from ...extras import logging
 from ...extras.constants import IGNORE_INDEX
 from ..callbacks import SaveProcessorCallback
 from ..fp8_utils import configure_fp8_environment, patch_accelerator_for_fp8, verify_fp8_status
-from ..trainer_utils import create_custom_optimizer, create_custom_scheduler
+from ..trainer_utils import create_custom_optimizer, create_custom_scheduler, sft_loss_func
 
 
 if TYPE_CHECKING:
@@ -65,10 +65,10 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
                 patch_accelerator_for_fp8()
 
         super().__init__(**kwargs)
-        if processor is not None:
-            # avoid wrong loss under gradient accumulation
-            # https://github.com/huggingface/transformers/pull/36044#issuecomment-2746657112
-            self.model_accepts_loss_kwargs = False
+        # avoid wrong loss under gradient accumulation and distributed training
+        # https://github.com/huggingface/transformers/pull/36044#issuecomment-2746657112
+        # https://arxiv.org/abs/2604.23747 (Algorithm 2)
+        self.model_accepts_loss_kwargs = False
 
         self.finetuning_args = finetuning_args
         if gen_kwargs is not None:
@@ -123,6 +123,11 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
                 asft_loss_func,
                 asft_alpha=finetuning_args.asft_alpha,
             )
+        else:
+            # Use custom SFT loss function that correctly handles num_items_in_batch
+            # for global per-token mean aggregation, avoiding the mean-of-means bug.
+            # See: https://arxiv.org/abs/2604.23747
+            self.compute_loss_func = sft_loss_func
 
         if training_args.fp8 and hasattr(self, "accelerator"):  # verify FP8 status after trainer initialization
             verify_fp8_status(self.accelerator, training_args)
@@ -158,8 +163,8 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
                 ref_logits = ref_outputs.logits
             outputs = model(**inputs)
             return self.compute_loss_func(outputs, inputs["labels"], ref_logits)
-        else:
-            return super().compute_loss(model, inputs, *args, **kwargs)
+
+        return super().compute_loss(model, inputs, *args, **kwargs)
 
     @override
     def prediction_step(
