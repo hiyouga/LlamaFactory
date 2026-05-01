@@ -670,8 +670,10 @@ def sft_loss_func(
         )
         if torch.is_tensor(num_items_in_batch):
             num_items_in_batch = num_items_in_batch.to(loss.device)
-        loss = loss / num_items_in_batch if num_items_in_batch > 0 else loss
+        loss = loss / num_items_in_batch if num_items_in_batch > 0 else torch.tensor(0.0, device=logits.device, dtype=logits.dtype)
     else:
+        if not (shift_labels != IGNORE_INDEX).any():
+            return torch.tensor(0.0, device=logits.device, dtype=logits.dtype)
         loss = F.cross_entropy(
             shift_logits, shift_labels, ignore_index=IGNORE_INDEX, reduction="mean", label_smoothing=label_smoothing_factor
         )
