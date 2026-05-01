@@ -659,43 +659,24 @@ def sft_loss_func(
         return outputs.get("loss", torch.tensor(0.0))
 
     logits = logits.float()
-    vocab_size = logits.size(-1)
     shift_labels = labels[..., 1:].contiguous()
     shift_logits = logits[..., :-1, :].contiguous()
-    shift_logits = shift_logits.view(-1, vocab_size)
+    shift_logits = shift_logits.view(-1, logits.size(-1))
     shift_labels = shift_labels.view(-1).to(logits.device)
 
-    if label_smoothing_factor == 0.0:
-        if num_items_in_batch is not None:
-            loss = F.cross_entropy(shift_logits, shift_labels, ignore_index=IGNORE_INDEX, reduction="sum")
-            if torch.is_tensor(num_items_in_batch):
-                num_items_in_batch = num_items_in_batch.to(loss.device)
-            loss = loss / num_items_in_batch
-        else:
-            loss = F.cross_entropy(shift_logits, shift_labels, ignore_index=IGNORE_INDEX, reduction="mean")
-
-        return loss
-
-    log_probs = -F.log_softmax(shift_logits, dim=-1)
-    padding_mask = shift_labels.eq(IGNORE_INDEX)
-    safe_labels = torch.clamp(shift_labels, min=0)
-    nll_loss = log_probs.gather(dim=-1, index=safe_labels.unsqueeze(-1))
-    smoothed_loss = log_probs.sum(dim=-1, keepdim=True, dtype=torch.float32)
-
-    nll_loss.masked_fill_(padding_mask.unsqueeze(-1), 0.0)
-    smoothed_loss.masked_fill_(padding_mask.unsqueeze(-1), 0.0)
-
     if num_items_in_batch is not None:
+        loss = F.cross_entropy(
+            shift_logits, shift_labels, ignore_index=IGNORE_INDEX, reduction="sum", label_smoothing=label_smoothing_factor
+        )
         if torch.is_tensor(num_items_in_batch):
-            num_items_in_batch = num_items_in_batch.to(nll_loss.device)
-        nll_loss = nll_loss.sum() / num_items_in_batch
-        smoothed_loss = smoothed_loss.sum() / (num_items_in_batch * vocab_size)
+            num_items_in_batch = num_items_in_batch.to(loss.device)
+        loss = loss / num_items_in_batch if num_items_in_batch > 0 else loss
     else:
-        num_active_elements = padding_mask.numel() - padding_mask.long().sum()
-        nll_loss = nll_loss.sum() / num_active_elements
-        smoothed_loss = smoothed_loss.sum() / (num_active_elements * vocab_size)
+        loss = F.cross_entropy(
+            shift_logits, shift_labels, ignore_index=IGNORE_INDEX, reduction="mean", label_smoothing=label_smoothing_factor
+        )
 
-    return (1 - label_smoothing_factor) * nll_loss + label_smoothing_factor * smoothed_loss
+    return loss
 
 
 def dft_loss_func(
