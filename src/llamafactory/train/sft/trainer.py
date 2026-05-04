@@ -65,10 +65,17 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
                 patch_accelerator_for_fp8()
 
         super().__init__(**kwargs)
-        # avoid wrong loss under gradient accumulation and distributed training
-        # https://github.com/huggingface/transformers/pull/36044#issuecomment-2746657112
-        # https://arxiv.org/abs/2604.23747 (Algorithm 2)
-        self.model_accepts_loss_kwargs = False
+        if processor is not None:
+            # avoid wrong loss under gradient accumulation and distributed training
+            # https://github.com/huggingface/transformers/pull/36044#issuecomment-2746657112
+            # https://arxiv.org/abs/2604.23747 (Algorithm 2)
+            self.model_accepts_loss_kwargs = False
+            # Use custom loss function that correctly handles num_items_in_batch for
+            # global per-token mean aggregation, avoiding the mean-of-means bug.
+            # See: https://arxiv.org/abs/2604.23747
+            self.compute_loss_func = partial(
+                sft_loss_func, label_smoothing_factor=training_args.label_smoothing_factor
+            )
 
         self.finetuning_args = finetuning_args
         if gen_kwargs is not None:
@@ -123,11 +130,6 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
                 asft_loss_func,
                 asft_alpha=finetuning_args.asft_alpha,
             )
-        else:
-            # Use custom SFT loss function that correctly handles num_items_in_batch
-            # for global per-token mean aggregation, avoiding the mean-of-means bug.
-            # See: https://arxiv.org/abs/2604.23747
-            self.compute_loss_func = partial(sft_loss_func, label_smoothing_factor=training_args.label_smoothing_factor)
 
         if training_args.fp8 and hasattr(self, "accelerator"):  # verify FP8 status after trainer initialization
             verify_fp8_status(self.accelerator, training_args)
