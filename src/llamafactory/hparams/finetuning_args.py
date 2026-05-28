@@ -567,6 +567,10 @@ class FinetuningArguments(
         default=None,
         metadata={"help": "Number of steps to stop training if the `metric_for_best_model` does not improve."},
     )
+    early_stopping_threshold: float = field(
+        default=0.0,
+        metadata={"help": "How much the `metric_for_best_model` must improve to not trigger early stopping."},
+    )
     plot_loss: bool = field(
         default=False,
         metadata={"help": "Whether or not to save the training loss curves."},
