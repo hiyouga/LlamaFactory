@@ -13,9 +13,15 @@
 #     (not a pad) so the next-token embedding is correct at every CP boundary.
 #   * `mtp_loss` is logged and should look healthy (finite, decreasing-ish).
 #
-# Run (needs >= 2 GPUs + flash-attn):
-#   USE_V1=1 torchrun --nproc_per_node 2 -m llamafactory.cli train \
-#       examples/v1/train_full/train_full_mtp_cp.yaml
+# Run (needs >= 2 GPUs + flash-attn). Do NOT invoke `torchrun -m` directly — the v1
+# launcher detects multiple GPUs and re-launches via torchrun itself, fixing up argv so
+# the yaml is parsed correctly. Manually running `torchrun -m llamafactory.cli` pollutes
+# sys.argv and makes `data_args.train_dataset` come back as None.
+#
+#   USE_V1=1 llamafactory-cli train examples/v1/train_full/train_full_mtp_cp.yaml
+#
+# To pin the process count instead of using all visible GPUs, set NPROC_PER_NODE:
+#   NPROC_PER_NODE=2 USE_V1=1 llamafactory-cli train examples/v1/train_full/train_full_mtp_cp.yaml
 #
 # CP requires `dist_config.name: fsdp2` and `flash_attn: flash_attention_2` (same as
 # non-MTP CP). To also exercise GDN CP, switch `model` to a Qwen3.5 series model AND

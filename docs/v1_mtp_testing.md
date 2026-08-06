@@ -101,8 +101,13 @@ USE_V1=1 llamafactory-cli train examples/v1/train_full/train_full_mtp_resume.yam
 **前置**：≥2 GPU + flash-attn。CP 要求 `dist_config.name: fsdp2` + `flash_attn: flash_attention_2`。
 
 ```bash
-USE_V1=1 torchrun --nproc_per_node 2 -m llamafactory.cli train \
-    examples/v1/train_full/train_full_mtp_cp.yaml
+# 不要手动 `torchrun -m llamafactory.cli` —— v1 launcher 会自己检测多卡并拉起 torchrun,
+# 同时整理 argv 让 yaml 被正确解析。手动 torchrun -m 会污染 sys.argv, 导致
+# data_args.train_dataset 变成 None (报 'NoneType' object has no attribute 'endswith').
+USE_V1=1 llamafactory-cli train examples/v1/train_full/train_full_mtp_cp.yaml
+
+# 想指定卡数（而非用所有可见卡）, 用环境变量:
+# NPROC_PER_NODE=2 USE_V1=1 llamafactory-cli train examples/v1/train_full/train_full_mtp_cp.yaml
 ```
 
 **通过标准**：
