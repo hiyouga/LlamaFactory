@@ -13,10 +13,24 @@
 # limitations under the License.
 
 
+import json
+import os
 from dataclasses import dataclass, field
 
 from ..utils.types import AttentionFunction
 from .arg_utils import ModelClass, PluginConfig, get_plugin_config
+
+
+def _is_local_telechat4_model(model_path: str) -> bool:
+    config_path = os.path.join(model_path, "config.json")
+    if not os.path.isfile(config_path):
+        return False
+
+    try:
+        with open(config_path, encoding="utf-8") as f:
+            return json.load(f).get("model_type") == "telechat4"
+    except Exception:
+        return False
 
 
 @dataclass
@@ -66,6 +80,9 @@ class ModelArguments:
             raise ValueError(
                 f"Unsupported `flash_attn`: {self.flash_attn}. Supported values are: {supported_flash_attn}."
             )
+
+        if not self.trust_remote_code and _is_local_telechat4_model(self.model):
+            self.trust_remote_code = True
 
         self.init_config = get_plugin_config(self.init_config)
         self.peft_config = get_plugin_config(self.peft_config)
