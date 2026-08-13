@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import os
 from typing import TYPE_CHECKING, Any, Optional, TypedDict
 
@@ -53,6 +54,18 @@ class TokenizerModule(TypedDict):
     processor: Optional["ProcessorMixin"]
 
 
+def _is_local_telechat4_model(model_path: str) -> bool:
+    config_path = os.path.join(model_path, "config.json")
+    if not os.path.isfile(config_path):
+        return False
+
+    try:
+        with open(config_path, encoding="utf-8") as f:
+            return json.load(f).get("model_type") == "telechat4"
+    except Exception:
+        return False
+
+
 def _get_init_kwargs(model_args: "ModelArguments") -> dict[str, Any]:
     r"""Get arguments to load config/tokenizer/model.
 
@@ -60,6 +73,10 @@ def _get_init_kwargs(model_args: "ModelArguments") -> dict[str, Any]:
     """
     skip_check_imports()
     model_args.model_name_or_path = try_download_model_from_other_hub(model_args)
+    if not model_args.trust_remote_code and _is_local_telechat4_model(model_args.model_name_or_path):
+        model_args.trust_remote_code = True
+        logger.warning_rank0("TeleChat4 uses local custom auto_map code, set `trust_remote_code` to True.")
+
     return {
         "trust_remote_code": model_args.trust_remote_code,
         "cache_dir": model_args.cache_dir,

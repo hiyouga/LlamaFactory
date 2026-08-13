@@ -3391,6 +3391,17 @@ register_model_group(
 
 register_model_group(
     models={
+        "TeleChat4-29B-Chat": {
+            DownloadSource.DEFAULT: "Tele-AI/TeleChat4-29B", 
+            DownloadSource.MODELSCOPE: "Tele-AI/TeleChat4-29B",
+        },
+    },
+    template="telechat4",
+)
+
+
+register_model_group(
+    models={
         "VibeThinker-1.5B": {
             DownloadSource.DEFAULT: "WeiboAI/VibeThinker-1.5B",
             DownloadSource.MODELSCOPE: "WeiboAI/VibeThinker-1.5B",

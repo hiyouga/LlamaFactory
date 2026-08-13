@@ -534,6 +534,46 @@ class Glm47ReasoningTemplate(ReasoningTemplate):
         return self.thought_words[0] + content + self.thought_words[1]
 
 
+@dataclass
+class TeleChat4Template(Template):
+    r"""TeleChat4 always emits a system header, even when the system message is empty."""
+
+    @override
+    def _encode(
+        self,
+        tokenizer: "PreTrainedTokenizer",
+        messages: list[dict[str, str]],
+        system: Optional[str],
+        tools: Optional[str],
+    ) -> list[list[int]]:
+        system = system or self.default_system
+        encoded_messages = []
+        for i, message in enumerate(messages):
+            elements = []
+
+            if i == 0:
+                elements += self.format_prefix.apply()
+                tool_text = self.format_tools.apply(content=tools)[0] if tools else ""
+                elements += self.format_system.apply(content=(system + tool_text))
+
+            if message["role"] == Role.USER:
+                elements += self.format_user.apply(content=message["content"], idx=str(i // 2))
+            elif message["role"] == Role.ASSISTANT:
+                elements += self.format_assistant.apply(content=message["content"])
+            elif message["role"] == Role.OBSERVATION:
+                elements += self.format_observation.apply(content=message["content"])
+            elif message["role"] == Role.FUNCTION:
+                elements += self.format_function.apply(
+                    content=message["content"], thought_words=self.thought_words, tool_call_words=self.tool_call_words
+                )
+            else:
+                raise NotImplementedError("Unexpected role: {}".format(message["role"]))
+
+            encoded_messages.append(self._convert_elements_to_ids(tokenizer, elements))
+
+        return encoded_messages
+
+
 TEMPLATES: dict[str, "Template"] = {}
 
 
@@ -2375,6 +2415,18 @@ register_template(
     default_system=(
         "你是中国电信星辰语义大模型，英文名是TeleChat，你是由中电信人工智能科技有限公司和中国电信人工智能研究院（TeleAI）研发的人工智能助手。"
     ),
+)
+
+
+register_template(
+    name="telechat4",
+    format_user=StringFormatter(slots=["<_user>{{content}}<_bot></think>"]),
+    format_assistant=StringFormatter(slots=["{{content}}", {"eos_token"}, "\n"]),
+    format_system=StringFormatter(slots=["<_system>{{content}}"]),
+    format_observation=StringFormatter(slots=["<_observation>{{content}}<_bot></think>"]),
+    thought_words=("<think>\n", "</think>"),
+    tool_call_words=("<tool_call>", "</tool_call>"),
+    template_class=TeleChat4Template,
 )
 
 
