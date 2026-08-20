@@ -566,12 +566,11 @@ def test_drop_unsupervised_samples():
 
     gen = SimpleNamespace(cutoff_len=4, _warned_truncation=False)
     samples = [
-        _s([0.0, 0.0, 1.0, 1.0]),             # fits cutoff (len 4), supervised -> kept
-        _s([0.0, 0.0, 0.0, 0.0, 1.0, 1.0]),   # len 6 > 4, supervision only beyond cutoff -> dropped
-        _s([1.0, 1.0]),                        # short, fully supervised -> kept
-        _s([0.0, 0.0, 1.0, 1.0, 1.0, 1.0]),   # len 6 > 4 but supervision within cutoff -> kept
+        _s([0.0, 0.0, 1.0, 1.0]),  # fits cutoff (len 4), supervised -> kept
+        _s([0.0, 0.0, 0.0, 0.0, 1.0, 1.0]),  # len 6 > 4, supervision only beyond cutoff -> dropped
+        _s([1.0, 1.0]),  # short, fully supervised -> kept
+        _s([0.0, 0.0, 1.0, 1.0, 1.0, 1.0]),  # len 6 > 4 but supervision within cutoff -> kept
     ]
     kept = BatchGenerator._drop_unsupervised(gen, samples)
     assert kept == [samples[0], samples[2], samples[3]]
     assert gen._warned_truncation is True
-

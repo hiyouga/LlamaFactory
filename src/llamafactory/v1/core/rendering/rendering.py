@@ -23,7 +23,6 @@ Note: ``position_ids`` are assigned by ``process_samples`` (1-based); multimodal
 ids are expected to be recomputed by the model/trainer.
 """
 
-
 import json
 
 import numpy as np

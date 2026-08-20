@@ -24,6 +24,7 @@ from ....accelerator.interface import Dim, DistributedInterface
 from ....utils import logging
 from ....utils.plugin import BasePlugin
 from ....utils.types import ModelOutput
+from .gdn_attention import _get_gdn_module, gdn_forward_with_cp, is_gdn_layer
 from .ulysses import (
     UlyssesAttention,
     get_ulysses_sequence_parallel_group,
@@ -126,6 +127,20 @@ def apply_sequence_parallel(model, cp_size: int):
                 )
         except (AttributeError, TypeError):
             continue
+
+    # Register GDN forward for CP support
+    if cp_size > 1:
+        replaced_modules = set()
+        for name, module in model.named_modules():
+            if is_gdn_layer(module):
+                gdn_module = _get_gdn_module(module)
+                if id(gdn_module) in replaced_modules:
+                    continue
+                replaced_modules.add(id(gdn_module))
+                gdn_module.original_forward = gdn_module.forward
+                gdn_module.forward = gdn_forward_with_cp.__get__(gdn_module, type(gdn_module))
+                gdn_name = name if gdn_module is module else f"{name}.linear_attn"
+                logger.info_rank0(f"Replaced GDN forward in {gdn_name} with gdn_forward_with_cp for context parallel.")
 
 
 def padding_and_split_data(data, device_mesh=None):

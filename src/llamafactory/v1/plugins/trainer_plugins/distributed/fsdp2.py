@@ -220,7 +220,7 @@ class FSDP2Engine:
     def is_lora_module_wrap(self, model) -> bool:
         return any(isinstance(module, LoraLayer) for module in model.modules())
 
-    def prepare_model(self, model: HFModel) -> HFModel:
+    def prepare_model(self, model: HFModel, ignored_params: set[nn.Parameter] | None = None) -> HFModel:
         if self.fsdp_mesh is None:
             logger.warning("No FSDP Mesh available, skipping FSDP wrapping.")
             return model
@@ -235,6 +235,11 @@ class FSDP2Engine:
         else:
             names = ", ".join(cls.__name__ for cls in transformer_layer_cls_to_wrap)
             logger.info(f"Applying per-layer FSDP to: {names}")
+
+        def _ignored_params_for(module: nn.Module) -> set[nn.Parameter] | None:
+            if not ignored_params:
+                return None
+            return ignored_params.intersection(module.parameters()) or None
 
         if self.is_lora_module_wrap(model):
             lora_modules = []
@@ -251,6 +256,7 @@ class FSDP2Engine:
                     reshard_after_forward=self.reshard_after_forward,
                     mp_policy=mp_policy,
                     offload_policy=CPUOffloadPolicy(pin_memory=self.pin_memory) if self.offload_params else None,
+                    ignored_params=_ignored_params_for(module),
                 )
 
             logger.info("Applying FSDP wrap for LoRA layer separately.")
@@ -271,6 +277,7 @@ class FSDP2Engine:
                     reshard_after_forward=self.reshard_after_forward,
                     mp_policy=mp_policy,
                     offload_policy=CPUOffloadPolicy(pin_memory=self.pin_memory) if self.offload_params else None,
+                    ignored_params=_ignored_params_for(module),
                 )
 
         # BaseTrainer is the single source of truth for gradient checkpointing.
@@ -299,6 +306,7 @@ class FSDP2Engine:
             reshard_after_forward=self.reshard_after_forward,
             mp_policy=mp_policy,
             offload_policy=CPUOffloadPolicy(pin_memory=self.pin_memory) if self.offload_params else None,
+            ignored_params=_ignored_params_for(model),
         )
 
         return model

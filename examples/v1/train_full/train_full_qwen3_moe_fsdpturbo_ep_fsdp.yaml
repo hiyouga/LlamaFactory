@@ -1,0 +1,32 @@
+model: Qwen/Qwen3.5-35B-A3B
+model_class: llm
+
+kernel_config:
+  name: auto, flash-linear-attention
+  include_kernels: chunk_gated_delta_rule, fused_recurrent_gated_delta_rule
+  chunk_size: 64
+
+dist_config:
+  name: fsdpturbo
+  ep_size: 16
+  ep_dispatcher: eager
+
+cp_size: 1
+
+init_config:
+  name: init_on_meta
+
+### data
+train_dataset: data/v1_sft_demo.yaml
+
+### training
+output_dir: outputs/Qwen3.5-35B-A3B/full/sft
+micro_batch_size: 1
+cutoff_len: 256
+learning_rate: 1.0e-4
+bf16: true
+max_steps: 5
+
+### sample
+sample_backend: hf
+max_new_tokens: 128

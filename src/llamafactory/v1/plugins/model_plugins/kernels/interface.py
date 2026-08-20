@@ -20,6 +20,7 @@ from .base import KernelPlugin
 
 # Import built-in implementations so their class decorators populate the registry.
 from .liger_kernel_ops import LigerKernel  # noqa: F401
+from .ops.linear_attention.fla import FlashLinearAttentionKernel  # noqa: F401
 from .ops.mlp.cuda_fused_moe import CudaFusedMoEKernel  # noqa: F401
 from .ops.mlp.npu_fused_moe import NpuFusedMoEKernel  # noqa: F401
 from .ops.mlp.npu_swiglu import NpuSwiGluKernel  # noqa: F401

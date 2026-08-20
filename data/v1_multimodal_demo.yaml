@@ -1,4 +1,3 @@
 multimodal_demo:
   path: data/v1_multimodal_demo.jsonl
   source: local
-

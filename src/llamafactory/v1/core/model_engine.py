@@ -112,8 +112,7 @@ class ModelEngine:
         if self.args.custom_chat_template:
             if not is_tokenizer(self.processor):
                 self.processor.chat_template = self.args.custom_chat_template
-            else:
-                tokenizer.chat_template = self.args.custom_chat_template
+            tokenizer.chat_template = self.args.custom_chat_template
 
     def _init_model_config(self) -> HFConfig:
         """Init model config."""
@@ -184,7 +183,7 @@ class ModelEngine:
         if init_device.type == DeviceType.META:
             assert self.args.quant_config is None, "Quantization is not supported with meta device."
             with init_empty_weights():
-                model = AutoClass.from_config(self.model_config)
+                model = AutoClass.from_config(self.model_config, attn_implementation=self.args.flash_attn)
         else:
             model = AutoClass.from_pretrained(
                 self.args.model,

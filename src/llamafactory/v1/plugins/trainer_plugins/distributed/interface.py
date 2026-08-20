@@ -20,7 +20,7 @@ reads mesh topology from ``TrainingArguments`` and never puts it in backend para
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Literal
 
 from ....utils.plugin import BasePlugin
@@ -39,6 +39,24 @@ class FSDP2Params:
     offload_params: bool = False
     pin_memory: bool = True
     dcp_path: str | None = None
+
+
+@dataclass
+class FSDPTurboParams:
+    name: Literal["fsdpturbo"] = "fsdpturbo"
+    reshard_after_forward: bool = True
+    offload_params: bool = False
+    pin_memory: bool = True
+    dcp_path: str | None = None
+    ep_size: int = 1
+    ep_dispatcher: str = "eager"
+    fsdp_ignored_modules: list[str] = field(default_factory=list)
+    hook_modules: list[str] = field(default_factory=list)
+    fsdp_implementation: str = "native"
+
+    def __post_init__(self) -> None:
+        if self.ep_size < 1:
+            raise ValueError(f"ep_size must be positive, got {self.ep_size}.")
 
 
 @dataclass
@@ -63,6 +81,40 @@ class FSDP2Distributed(BaseDistributed):
         from .fsdp2 import FSDP2Engine
 
         return FSDP2Engine(asdict(dist_config), bf16=bool(kwargs.get("bf16"))).shard_model(model)
+
+    @staticmethod
+    def save_model(model, output_dir, processor) -> None:
+        from .fsdp2 import save_model
+
+        save_model(model, output_dir, processor)
+
+    @staticmethod
+    def save_checkpoint(model, optimizer, ckpt_dir, **kwargs) -> None:
+        from .fsdp2 import save_checkpoint
+
+        save_checkpoint(model, optimizer, ckpt_dir, **kwargs)
+
+    @staticmethod
+    def load_checkpoint(model, optimizer, ckpt_dir, **kwargs) -> None:
+        from .fsdp2 import load_checkpoint
+
+        load_checkpoint(model, optimizer, ckpt_dir, **kwargs)
+
+
+@DistributedPlugin("fsdpturbo").register()
+class FSDPTurboDistributed(BaseDistributed):
+    @staticmethod
+    def shard_model(model: HFModel, dist_config: PluginConfig | FSDPTurboParams, **kwargs) -> HFModel:
+        dist_config = DistributedPlugin.parse_params(dist_config, FSDPTurboParams)
+        from .fsdpturbo import FSDPTurboFSDP2Engine
+
+        return FSDPTurboFSDP2Engine(asdict(dist_config), bf16=bool(kwargs.get("bf16"))).shard_model(model)
+
+    @staticmethod
+    def clip_grad_norm(model: HFModel, max_norm: float, **kwargs) -> float:
+        from .fsdpturbo import clip_grad_norm_
+
+        return clip_grad_norm_(model, max_norm, **kwargs)
 
     @staticmethod
     def save_model(model, output_dir, processor) -> None:

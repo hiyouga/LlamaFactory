@@ -13,13 +13,3 @@ num_processes: 8 # Adjust based on your GPU count; 8 is suitable for 8 GPUs
 rdzv_backend: static
 same_network: true
 use_cpu: false
-
-kt_config:
-  enabled: true
-  kt_backend: AMXINT8  # Use with online-converted INT8 expert weights
-  kt_num_threads: 96
-  kt_tp_enabled: true
-  kt_threadpool_count: 2
-  kt_max_cache_depth: 2
-  kt_share_backward_bb: true
-  lora_rank: 8

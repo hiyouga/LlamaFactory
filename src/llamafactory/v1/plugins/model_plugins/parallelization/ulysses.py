@@ -52,6 +52,14 @@ def get_ulysses_sequence_parallel_rank(group: ProcessGroup = None) -> int:
     return dist.get_rank(group) if group else 0
 
 
+def _get_text_position_ids(position_ids: Optional[Tensor]) -> Optional[Tensor]:
+    # Transformers < 5.4 broadcasts Qwen3.5 text positions over the mRoPE axes.
+    if position_ids is not None and position_ids.ndim == 3 and position_ids.stride(0) == 0:
+        position_ids = position_ids[0]
+
+    return position_ids.contiguous() if position_ids is not None and position_ids.ndim == 2 else None
+
+
 class UlyssesAttention(torch.nn.Module):
     """Initialization.
 
@@ -123,8 +131,8 @@ class UlyssesAttention(torch.nn.Module):
             softmax_scale = q.shape[-1] ** -0.5
 
         sp_world_size = get_ulysses_sequence_parallel_world_size(self.spg)
-        local_position_ids = position_ids
-
+        # HF FlashAttention only uses 2-D position IDs to detect packed sequences.
+        position_ids = _get_text_position_ids(position_ids)
         if position_ids is not None:
             global_position_ids = [torch.empty_like(position_ids) for _ in range(sp_world_size)]
             dist.all_gather(global_position_ids, position_ids, group=self.spg)
@@ -144,13 +152,11 @@ class UlyssesAttention(torch.nn.Module):
         # contribute an all-ones shard.
         if torch.any(torch.stack(global_has_attention_mask)):
             if attention_mask is None:
-                if local_position_ids is not None:
-                    attention_mask = torch.ones_like(local_position_ids, dtype=torch.int64)
-                else:
-                    attention_mask = torch.ones(query.shape[0], query.shape[1], dtype=torch.int64, device=query.device)
+                attention_mask = torch.ones(query.shape[0], query.shape[1], dtype=torch.int64, device=query.device)
             else:
                 attention_mask = attention_mask.to(torch.int64)
 
+            attention_mask = attention_mask.contiguous()
             global_attention_mask = [torch.empty_like(attention_mask) for _ in range(sp_world_size)]
             dist.all_gather(global_attention_mask, attention_mask, group=self.spg)
             attention_mask = torch.cat(global_attention_mask, dim=1).contiguous()

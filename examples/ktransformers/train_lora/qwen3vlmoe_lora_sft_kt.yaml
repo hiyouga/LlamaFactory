@@ -1,0 +1,51 @@
+### model
+model_name_or_path: Qwen/Qwen3-VL-30B-A3B-Instruct
+image_max_pixels: 262144
+video_max_pixels: 16384
+trust_remote_code: true
+
+### method
+stage: sft
+do_train: true
+finetuning_type: lora
+lora_rank: 8
+lora_alpha: 16
+lora_target: all
+
+### dataset
+dataset: mllm_demo
+template: qwen3_vl
+cutoff_len: 512
+overwrite_cache: true
+preprocessing_num_workers: 4
+dataloader_num_workers: 1
+
+### output
+output_dir: saves/KT_FT_qwen3vl_30b_a3b
+logging_steps: 1
+save_steps: 100
+plot_loss: true
+overwrite_output_dir: true
+report_to: none
+
+### train
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 1
+learning_rate: 1.0e-4
+num_train_epochs: 1.0
+lr_scheduler_type: cosine
+warmup_ratio: 0.1
+bf16: true
+ddp_timeout: 360000000
+
+### ktransformers
+use_kt: true
+kt_cpu_activation: retain
+kt_config:
+  kt_expert_weight_format: bf16
+  kt_backend: AMXBF16
+  kt_num_threads: 96
+  kt_tp_enabled: true
+  kt_threadpool_count: 2
+  kt_max_cache_depth: 2
+  kt_share_backward_bb: true

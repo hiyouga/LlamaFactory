@@ -470,9 +470,22 @@ class KTransformersArguments:
         default=False,
         metadata={"help": "Whether to use KTransformers AMX MoE backend for SFT training."},
     )
+    kt_cpu_activation: Literal["retain", "recompute"] | None = field(
+        default=None,
+        metadata={
+            "help": (
+                "Whether KTransformers retains CPU expert activations. Defaults to recompute while GPU "
+                "gradient checkpointing is enabled and retain otherwise."
+            )
+        },
+    )
     kt_weight_path: str | None = field(
         default=None,
         metadata={"help": "Path to pre-quantized INT8 expert weights (.kt files)."},
+    )
+    kt_non_expert_weight_path: str | None = field(
+        default=None,
+        metadata={"help": "Path to the KT BF16 non-expert weight cache used with routed INT8 experts."},
     )
     kt_expert_checkpoint_path: str | None = field(
         default=None,
@@ -490,52 +503,225 @@ class KTransformersArguments:
         default=None,
         metadata={"help": "Intermediate size for GPU-side LoRA Experts."},
     )
+    _kt_inference_config: dict[str, Any] | None = field(default=None, init=False, repr=False)
+    _kt_config_handle: Any = field(default=None, init=False, repr=False)
+    _kt_adapter_artifact_path: str | None = field(default=None, init=False, repr=False)
 
-    def get_kt_config_dict(self, finetuning_args: Any, model_max_length: int | None) -> dict[str, Any]:
-        r"""Build KT config values from LLaMA-Factory model and LoRA arguments."""
-        kt_config = {
-            "kt_lora_rank": getattr(finetuning_args, "lora_rank", None),
-            "kt_lora_alpha": getattr(finetuning_args, "lora_alpha", None),
-            "kt_weight_path": self.kt_weight_path,
-            "kt_expert_checkpoint_path": self.kt_expert_checkpoint_path,
-            "kt_model_max_length": model_max_length,
-            "kt_use_lora_experts": self.kt_use_lora_experts,
-            "kt_lora_expert_num": self.kt_lora_expert_num,
-            "kt_lora_expert_intermediate_size": self.kt_lora_expert_intermediate_size,
+    _KT_DERIVED_KEYS = frozenset(
+        {
+            "enabled",
+            "kt_activation_policy",
+            "kt_expert_checkpoint_path",
+            "kt_full_weight_grad",
+            "kt_lora_alpha",
+            "kt_lora_dropout",
+            "kt_lora_expert_intermediate_size",
+            "kt_lora_expert_num",
+            "kt_lora_rank",
+            "kt_non_expert_weight_path",
+            "kt_skip_expert_loading",
+            "kt_train_mode",
+            "kt_use_lora_experts",
+            "kt_weight_path",
         }
+    )
+
+    def __post_init__(self) -> None:
+        if self.kt_cpu_activation not in {None, "retain", "recompute"}:
+            raise ValueError("`kt_cpu_activation` must be `retain` or `recompute`.")
+        if not self.use_kt and self.kt_cpu_activation is not None:
+            raise ValueError("`kt_cpu_activation` is only valid when `use_kt: true`.")
+
+    def get_kt_activation_policy(self) -> dict[str, str]:
+        r"""Resolve LF's GPU checkpoint switch and KT's CPU activation setting."""
+        gpu_activation = "retain" if self.disable_gradient_checkpointing else "recompute"
+        cpu_activation = self.kt_cpu_activation or gpu_activation
+        if cpu_activation == "recompute" and gpu_activation == "retain":
+            raise ValueError(
+                "`kt_cpu_activation: recompute` requires GPU gradient checkpointing. "
+                "Set `disable_gradient_checkpointing: false` or use `kt_cpu_activation: retain`."
+            )
+
+        return {"cpu": cpu_activation, "gpu": gpu_activation}
+
+    @staticmethod
+    def _get_accelerator_kt_config(training_args: Any) -> Any:
+        accelerator_config = getattr(training_args, "accelerator_config", None)
+        if isinstance(accelerator_config, dict):
+            return accelerator_config.get("kt_config")
+        return getattr(accelerator_config, "kt_config", None)
+
+    def _normalize_advanced_kt_config(self, raw_config: Any) -> dict[str, Any]:
+        if raw_config is None:
+            return {}
+        if not isinstance(raw_config, dict):
+            raise TypeError("LLaMA-Factory `kt_config` must be a flat mapping.")
+
+        config = dict(raw_config)
+        # Transformers-KT adds these defaults to the user-owned mapping during
+        # TrainingArguments.__post_init__. They are transport metadata, not
+        # conflicting user overrides.
+        for key in ("enabled", "kt_skip_expert_loading"):
+            if config.get(key) is True:
+                config.pop(key)
+        conflicts = sorted(set(config) & self._KT_DERIVED_KEYS)
+        if conflicts:
+            raise ValueError(f"These `kt_config` values are derived from LLaMA-Factory arguments: {conflicts}.")
+        return config
+
+    def _get_advanced_kt_config(self, training_args: Any) -> dict[str, Any]:
+        raw_config = getattr(training_args, "kt_config", None)
+        accelerator_config = self._get_accelerator_kt_config(training_args)
+        if raw_config is None:
+            if accelerator_config is not None:
+                raise ValueError(
+                    "Put KTransformers settings in the LLaMA-Factory training YAML `kt_config`; "
+                    "remove `kt_config` from the Accelerate config."
+                )
+            return {}
+        if accelerator_config is not None and accelerator_config != raw_config:
+            raise ValueError("LLaMA-Factory YAML and Accelerate config cannot define different KT settings.")
+        return self._normalize_advanced_kt_config(raw_config)
+
+    def configure_kt_checkpointing(self, training_args: Any) -> None:
+        r"""Keep LLaMA-Factory as the single gradient-checkpointing entry point."""
+        if self.use_unsloth or self.use_unsloth_gc:
+            raise ValueError("KTransformers cannot be combined with Unsloth checkpoint wrapping.")
+        if getattr(training_args, "gradient_checkpointing", False):
+            raise ValueError(
+                "KTransformers uses LLaMA-Factory's `disable_gradient_checkpointing`; "
+                "remove `gradient_checkpointing: true`."
+            )
+        if getattr(training_args, "gradient_checkpointing_kwargs", None) is not None:
+            raise ValueError("KTransformers supplies its checkpoint context; remove `gradient_checkpointing_kwargs`.")
+
+        fsdp_config = getattr(training_args, "fsdp_config", None)
+        if isinstance(fsdp_config, dict) and fsdp_config.get("activation_checkpointing"):
+            raise ValueError("Disable FSDP activation checkpointing when using KTransformers.")
+        if os.environ.get("FSDP_ACTIVATION_CHECKPOINTING", "false").lower() in {"1", "true", "yes"}:
+            raise ValueError("Disable FSDP activation checkpointing when using KTransformers.")
+
+        self.get_kt_activation_policy()
+        if not self.disable_gradient_checkpointing:
+            self.use_reentrant_gc = False
+        training_args.gradient_checkpointing = False
+        training_args.gradient_checkpointing_kwargs = None
+
+    def get_kt_config_dict(
+        self,
+        finetuning_args: Any,
+        model_max_length: int | None,
+        advanced_config: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        r"""Map LLaMA-Factory-owned training values to the public KT configuration."""
+        finetuning_type = getattr(finetuning_args, "finetuning_type", None)
+        if finetuning_type not in {"lora", "full"}:
+            raise ValueError("KTransformers supports LoRA and full-parameter finetuning.")
+
+        kt_config = dict(advanced_config or {})
+        configured_capacity = kt_config.pop("kt_model_max_length", None)
+        if configured_capacity is not None:
+            try:
+                configured_capacity = int(configured_capacity)
+            except (TypeError, ValueError) as exc:
+                raise ValueError("`kt_model_max_length` must be a positive integer.") from exc
+            if configured_capacity <= 0:
+                raise ValueError("`kt_model_max_length` must be a positive integer.")
+
+        kt_config.update(
+            {
+                "kt_lora_rank": getattr(finetuning_args, "lora_rank", None),
+                "kt_lora_alpha": getattr(finetuning_args, "lora_alpha", None),
+                "kt_lora_dropout": getattr(finetuning_args, "lora_dropout", None),
+                "kt_weight_path": self.kt_weight_path,
+                "kt_non_expert_weight_path": self.kt_non_expert_weight_path,
+                "kt_expert_checkpoint_path": self.kt_expert_checkpoint_path,
+                "kt_model_max_length": max(model_max_length or 0, configured_capacity or 0) or None,
+                "kt_use_lora_experts": self.kt_use_lora_experts,
+                "kt_lora_expert_num": self.kt_lora_expert_num,
+                "kt_lora_expert_intermediate_size": self.kt_lora_expert_intermediate_size,
+                "kt_activation_policy": self.get_kt_activation_policy(),
+                "kt_train_mode": finetuning_type,
+                "kt_full_weight_grad": finetuning_type == "full",
+            }
+        )
         return {key: value for key, value in kt_config.items() if value is not None}
+
+    def _resolve_kt_adapter_artifact_dir(self, operation: str) -> str | None:
+        if not self.adapter_name_or_path:
+            return None
+        if len(self.adapter_name_or_path) != 1:
+            raise ValueError("KTransformers accepts a single `adapter_name_or_path`.")
+
+        adapter_root = os.path.realpath(os.path.expanduser(self.adapter_name_or_path[0]))
+        adapter_dir = adapter_root
+        if self.adapter_folder:
+            adapter_dir = os.path.realpath(os.path.join(adapter_root, self.adapter_folder))
+            if os.path.commonpath((adapter_root, adapter_dir)) != adapter_root:
+                raise ValueError("`adapter_folder` must stay inside the KT adapter directory.")
+        if not os.path.isdir(adapter_dir):
+            raise ValueError(f"KTransformers {operation} requires a local adapter directory.")
+        return adapter_dir
 
     def apply_kt_config(self, finetuning_args: Any, training_args: Any, model_max_length: int | None) -> None:
         r"""Apply LLaMA-Factory KT args to transformers/accelerate KT integration points."""
         if not self.use_kt:
             return
 
-        kt_config = self.get_kt_config_dict(finetuning_args, model_max_length)
-        env_mapping = {
-            "kt_weight_path": "ACCELERATE_KT_WEIGHT_PATH",
-            "kt_expert_checkpoint_path": "ACCELERATE_KT_EXPERT_CHECKPOINT_PATH",
-            "kt_model_max_length": "ACCELERATE_KT_MODEL_MAX_LENGTH",
-            "kt_lora_rank": "ACCELERATE_KT_LORA_RANK",
-            "kt_lora_alpha": "ACCELERATE_KT_LORA_ALPHA",
-            "kt_use_lora_experts": "ACCELERATE_KT_USE_LORA_EXPERTS",
-            "kt_lora_expert_num": "ACCELERATE_KT_LORA_EXPERT_NUM",
-            "kt_lora_expert_intermediate_size": "ACCELERATE_KT_LORA_EXPERT_INTERMEDIATE_SIZE",
-        }
-        for key, env_key in env_mapping.items():
-            value = kt_config.get(key)
-            if value is not None:
-                os.environ[env_key] = str(value)
-
-        hf_kt = getattr(training_args, "hf_kt_config", None)
-        if hf_kt is None or not hasattr(hf_kt, "_kt_config") or not isinstance(hf_kt._kt_config, dict):
+        self.configure_kt_checkpointing(training_args)
+        kt_config = self.get_kt_config_dict(
+            finetuning_args,
+            model_max_length,
+            self._get_advanced_kt_config(training_args),
+        )
+        update_kt_config = getattr(training_args, "update_kt_config", None)
+        adapter_dir = self._resolve_kt_adapter_artifact_dir("training")
+        if callable(update_kt_config):
+            update_kt_config(kt_config, adapter_name_or_path=adapter_dir)
             return
 
-        hf_kt._kt_config.update(kt_config)
-        gc_enabled = getattr(training_args, "gradient_checkpointing", False) or not getattr(
-            self, "disable_gradient_checkpointing", True
+        # transformers-kt 5.6 exposes the config object but predates the public
+        # update helper. Keep its flat loading config and Accelerate's nested
+        # plugin config synchronized without requiring another dependency pin.
+        from kt_kernel.sft import KTConfig
+
+        supported_keys = {item.name for item in fields(KTConfig)}
+        compatible_config = {key: value for key, value in kt_config.items() if key in supported_keys}
+        if self.get_kt_activation_policy()["gpu"] == "recompute":
+            compatible_config.setdefault("kt_share_cache_pool", True)
+
+        hf_kt_config = getattr(training_args, "hf_kt_config", None)
+        if hf_kt_config is None or not isinstance(getattr(hf_kt_config, "_kt_config", None), dict):
+            raise RuntimeError("The installed Transformers-KT does not expose a mutable KT configuration.")
+        hf_kt_config._kt_config.update(compatible_config)
+
+        accelerator_config = getattr(training_args, "accelerator_config", None)
+        if accelerator_config is not None:
+            accelerator_config.kt_config = {"enabled": True, "kt_config": compatible_config}
+
+    def configure_kt_loading(self, finetuning_args: Any, model_max_length: int | None) -> None:
+        r"""Configure KT model loading for inference and evaluation."""
+        if not self.use_kt:
+            if self._kt_inference_config is not None:
+                raise ValueError("`kt_config` requires `use_kt: true`.")
+            return
+        if self.infer_backend != EngineName.HF:
+            raise ValueError("KTransformers inference requires `infer_backend: huggingface`.")
+
+        adapter_dir = self._resolve_kt_adapter_artifact_dir("inference")
+
+        try:
+            from transformers.integrations.kt import configure_kt
+        except (ImportError, ModuleNotFoundError) as exc:
+            raise RuntimeError("The installed Transformers-KT does not provide `configure_kt()`.") from exc
+
+        kt_config = self.get_kt_config_dict(
+            finetuning_args,
+            model_max_length,
+            self._normalize_advanced_kt_config(self._kt_inference_config),
         )
-        if gc_enabled:
-            hf_kt._kt_config.setdefault("kt_share_cache_pool", True)
+        self._kt_adapter_artifact_path = adapter_dir
+        self._kt_config_handle = configure_kt(kt_config)
 
 
 @dataclass
@@ -580,6 +766,7 @@ class ModelArguments(
         ExportArguments.__post_init__(self)
         VllmArguments.__post_init__(self)
         SGLangArguments.__post_init__(self)
+        KTransformersArguments.__post_init__(self)
 
     @classmethod
     def copyfrom(cls, source: "Self", **kwargs) -> "Self":
