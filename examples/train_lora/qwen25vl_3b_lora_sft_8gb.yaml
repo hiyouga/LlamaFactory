@@ -1,0 +1,40 @@
+### model
+model_name_or_path: Qwen/Qwen2.5-VL-3B-Instruct
+image_max_pixels: 64000
+video_max_pixels: 16384
+trust_remote_code: true
+quantization_bit: 4
+
+### method
+stage: sft
+finetuning_type: lora
+lora_rank: 8
+lora_target: all
+
+### dataset
+dataset: mllm_demo,identity,alpaca_en_demo
+template: qwen2_vl
+cutoff_len: 2048
+max_samples: 500
+preprocessing_num_workers: 1
+dataloader_num_workers: 0
+
+### output
+output_dir: saves/qwen2.5-vl-3b/lora/sft
+logging_steps: 10
+save_steps: 500
+plot_loss: true
+overwrite_output_dir: true
+save_only_model: false
+report_to: none
+
+### train
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 8
+learning_rate: 1.0e-4
+num_train_epochs: 2.0
+lr_scheduler_type: cosine
+warmup_ratio: 0.1
+bf16: true
+ddp_timeout: 180000000
+resume_from_checkpoint: null
