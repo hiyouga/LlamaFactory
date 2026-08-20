@@ -71,6 +71,24 @@ def _training_function(config: dict[str, Any]) -> None:
     callbacks: list[Any] = config.get("callbacks")
     model_args, data_args, training_args, finetuning_args, generating_args = get_train_args(args)
 
+    # Windows multiprocessing fix: spawn start method cannot pickle local functions
+    # (e.g., PEFT's enable_input_require_grads closure), causing AttributeError at startup.
+    import sys
+    if sys.platform == "win32":
+        if training_args.dataloader_num_workers > 0:
+            logger.warning(
+                f"Windows detected: forcing dataloader_num_workers=0 "
+                f"(was {training_args.dataloader_num_workers}) "
+                f"to avoid multiprocessing pickling errors with spawn start method."
+            )
+            training_args.dataloader_num_workers = 0
+        if training_args.preprocessing_num_workers > 1:
+            logger.warning(
+                f"Windows detected: reducing preprocessing_num_workers=1 "
+                f"(was {training_args.preprocessing_num_workers}) for stability."
+            )
+            training_args.preprocessing_num_workers = 1
+
     callbacks.append(LogCallback())
     if finetuning_args.pissa_convert:
         callbacks.append(PissaConvertCallback())
