@@ -353,6 +353,72 @@ def test_qwen2_5_template():
 
 
 @pytest.mark.runs_on(["cpu", "mps"])
+def test_qwen2_template_consistency():
+    qwen2_models = [
+        "Qwen2-0.5B-Instruct",
+        "Qwen2-0.5B-Instruct-GPTQ-Int8",
+        "Qwen2-0.5B-Instruct-GPTQ-Int4",
+        "Qwen2-0.5B-Instruct-AWQ",
+        "Qwen2-1.5B-Instruct",
+        "Qwen2-1.5B-Instruct-GPTQ-Int8",
+        "Qwen2-1.5B-Instruct-GPTQ-Int4",
+        "Qwen2-1.5B-Instruct-AWQ",
+        "Qwen2-7B-Instruct",
+        "Qwen2-7B-Instruct-GPTQ-Int8",
+        "Qwen2-7B-Instruct-GPTQ-Int4",
+        "Qwen2-7B-Instruct-AWQ",
+        "Qwen2-72B-Instruct",
+        "Qwen2-72B-Instruct-GPTQ-Int8",
+        "Qwen2-72B-Instruct-GPTQ-Int4",
+        "Qwen2-72B-Instruct-AWQ",
+        "Qwen2-MoE-57B-A14B-Instruct",
+        "Qwen2-57B-A14B-Instruct-GPTQ-Int4",
+        "Qwen2-Math-1.5B-Instruct",
+        "Qwen2-Math-7B-Instruct",
+        "Qwen2-Math-72B-Instruct",
+        "Qwen2.5-7B-Instruct-1M",
+        "Qwen2.5-14B-Instruct-1M",
+    ]
+    for model_name in qwen2_models:
+        assert DEFAULT_TEMPLATE[model_name] == "qwen2"
+
+    math_models = [
+        "Qwen2.5-Math-1.5B-Instruct",
+        "Qwen2.5-Math-7B-Instruct",
+        "Qwen2.5-Math-72B-Instruct",
+    ]
+    for model_name in math_models:
+        assert DEFAULT_TEMPLATE[model_name] == "qwen2_5_math"
+        assert SUPPORTED_MODELS[model_name][DownloadSource.MODELSCOPE] == f"Qwen/{model_name}"
+
+    cases = [
+        ("Qwen/Qwen2-0.5B-Instruct", "qwen2"),
+        ("Qwen/Qwen2.5-7B-Instruct-1M", "qwen2"),
+        ("Qwen/Qwen2.5-Math-1.5B-Instruct", "qwen2_5_math"),
+    ]
+    custom_system = "Answer accurately and concisely."
+    for model_id, template_name in cases:
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        reference_tokenizer = AutoTokenizer.from_pretrained(model_id)
+        template = get_template_and_fix_tokenizer(tokenizer, DataArguments(template=template_name))
+        for system in (None, custom_system):
+            prompt_ids, _ = template.encode_oneturn(tokenizer, MESSAGES, system=system)
+            reference_messages = MESSAGES[:-1]
+            if system is not None:
+                reference_messages = [{"role": "system", "content": system}, *reference_messages]
+
+            reference_ids = reference_tokenizer.apply_chat_template(
+                reference_messages,
+                tokenize=True,
+                add_generation_prompt=True,
+            )
+            if is_transformers_version_greater_than("5.0.0"):
+                reference_ids = reference_ids["input_ids"]
+
+            assert prompt_ids == reference_ids, (model_id, system)
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
 @pytest.mark.parametrize("cot_messages", [True, False])
 def test_qwen3_template(cot_messages: bool):
     prompt_str = (
