@@ -32,6 +32,13 @@ from ..utils.types import BatchInput, HFModel, Tensor
 logger = logging.get_logger(__name__)
 
 
+def _disable_dropout_in_model(model: HFModel) -> None:
+    r"""Disable module dropout so preference log-probabilities stay deterministic."""
+    for module in model.modules():
+        if isinstance(module, torch.nn.Dropout):
+            module.p = 0.0
+
+
 def compute_sigmoid_dpo_loss(
     policy_chosen_logps: Tensor,
     policy_rejected_logps: Tensor,
@@ -96,6 +103,11 @@ class DPOTrainer(BaseTrainer):
     ) -> None:
         if args.cp_size > 1:
             raise NotImplementedError("DPO trainer currently only supports cp_size == 1.")
+
+        # DPO compares policy and reference log-probabilities for the same sequence. Keeping
+        # dropout active makes both estimates stochastic (including the LoRA reference path,
+        # which reuses this model with adapters disabled) and injects noise into the objective.
+        _disable_dropout_in_model(model)
 
         self.pref_loss = args.pref_loss
         self.pref_beta = args.pref_beta
