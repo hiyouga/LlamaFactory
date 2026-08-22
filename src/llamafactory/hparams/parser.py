@@ -32,7 +32,7 @@ from transformers.training_args import ParallelMode
 from transformers.utils import is_torch_bf16_gpu_available, is_torch_npu_available
 
 from ..extras import logging
-from ..extras.constants import CHECKPOINT_NAMES, EngineName
+from ..extras.constants import CHECKPOINT_NAMES, AttentionFunction, EngineName
 from ..extras.misc import check_dependencies, check_version, get_current_device, is_env_enabled
 from ..extras.packages import is_mcore_adapter_available, is_megatron_bridge_available
 from .data_args import DataArguments
@@ -265,6 +265,10 @@ def _check_extra_dependencies(
     if model_args.enable_liger_kernel:
         check_version("liger-kernel", mandatory=True)
 
+    if model_args.flash_attn == AttentionFunction.TRITON_GQA:
+        check_version("transformers>=5.5.0")
+        check_version("gemma-triton-flash-attn>=0.2.0", mandatory=True)
+
     if model_args.mixture_of_depths is not None:
         check_version("mixture-of-depth>=1.1.6", mandatory=True)
 
@@ -304,6 +308,58 @@ def _check_extra_dependencies(
             check_version("jieba", mandatory=True)
             check_version("nltk", mandatory=True)
             check_version("rouge_chinese", mandatory=True)
+
+
+def _validate_context_parallel_args(
+    model_args: "ModelArguments",
+    data_args: "DataArguments",
+    training_args: "TrainingArguments",
+    finetuning_args: "FinetuningArguments",
+    world_size: Optional[int] = None,
+) -> None:
+    """Validate the deliberately narrow first public Gemma 4 CP surface."""
+    if finetuning_args.context_parallel_size <= 1:
+        return
+
+    cp_size = finetuning_args.context_parallel_size
+    world_size = int(os.environ.get("WORLD_SIZE", "1")) if world_size is None else world_size
+    if finetuning_args.stage != "sft":
+        raise ValueError("`context_parallel_size > 1` currently supports the SFT stage only.")
+    if world_size > 1 and world_size % cp_size != 0:
+        raise ValueError(f"WORLD_SIZE ({world_size}) must be divisible by context_parallel_size ({cp_size}).")
+    if training_args.deepspeed is None:
+        raise ValueError("`context_parallel_size > 1` currently requires DeepSpeed.")
+    if not training_args.bf16:
+        raise ValueError("`context_parallel_size > 1` currently requires BF16 training.")
+    if model_args.flash_attn != AttentionFunction.TRITON_GQA:
+        raise ValueError("`context_parallel_size > 1` requires `flash_attn: triton_gqa`.")
+    if training_args.per_device_train_batch_size != 1:
+        raise ValueError("Context parallelism currently requires `per_device_train_batch_size: 1`.")
+    if not training_args.dataloader_drop_last:
+        raise ValueError("Context parallelism currently requires `dataloader_drop_last: true`.")
+    if data_args.packing or data_args.neat_packing:
+        raise ValueError("Context parallelism does not support packed SFT data yet.")
+    if (
+        getattr(training_args.eval_strategy, "value", training_args.eval_strategy) != "no"
+        or training_args.do_eval
+        or training_args.do_predict
+    ):
+        raise ValueError("Evaluation and prediction are not supported with context parallelism yet.")
+    if training_args.predict_with_generate:
+        raise ValueError("`predict_with_generate` is not supported with context parallelism.")
+    if training_args.label_smoothing_factor != 0.0:
+        raise ValueError("Label smoothing is not supported with context parallelism.")
+    if not training_args.average_tokens_across_devices:
+        raise ValueError("Context parallelism requires `average_tokens_across_devices: true`.")
+    if training_args.parallelism_config is not None:
+        raise ValueError("Do not combine LLaMA Factory context parallelism with Transformers native parallelism.")
+    if finetuning_args.use_dft_loss or finetuning_args.use_eaft_loss or finetuning_args.use_asft_loss:
+        raise ValueError("Custom SFT losses are not supported with context parallelism yet.")
+    if not finetuning_args.freeze_vision_tower or not finetuning_args.freeze_multi_modal_projector:
+        raise ValueError(
+            "Gemma 4 context parallelism currently requires `freeze_vision_tower: true` and "
+            "`freeze_multi_modal_projector: true` for text-only SFT."
+        )
 
 
 def _parse_train_args(args: dict[str, Any] | list[str] | None = None) -> _TRAIN_CLS:
@@ -427,6 +483,8 @@ def get_train_args(args: dict[str, Any] | list[str] | None = None) -> _TRAIN_CLS
 
     if finetuning_args.stage == "sft" and training_args.do_predict and not training_args.predict_with_generate:
         raise ValueError("Please enable `predict_with_generate` to save model predictions.")
+
+    _validate_context_parallel_args(model_args, data_args, training_args, finetuning_args)
 
     if finetuning_args.use_megatron_bridge:
         if finetuning_args.use_mca or finetuning_args.use_hyper_parallel:

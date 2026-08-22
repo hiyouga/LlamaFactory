@@ -90,6 +90,25 @@ def configure_attn_implementation(config: "PretrainedConfig", model_args: "Model
             return
 
         requested_attn_implementation = "flash_attention_3"
+    elif model_args.flash_attn == AttentionFunction.TRITON_GQA:
+        text_config = config.get_text_config() if hasattr(config, "get_text_config") else config
+        if getattr(text_config, "model_type", None) not in ("gemma4", "gemma4_text"):
+            raise ValueError("`flash_attn: triton_gqa` currently supports Gemma 4 text attention only.")
+
+        from gemma_triton_flash_attn import register_triton_attention
+
+        register_triton_attention()
+        requested_attn_implementation = "triton_gqa"
+        if hasattr(config, "text_config"):
+            # Composite Gemma 4 also contains a vision tower with 72-d heads.
+            # Transformers' dict form scopes the custom kernel to the language
+            # model and leaves vision/audio on their native implementation.
+            setattr(config, "_attn_implementation", {"text_config": requested_attn_implementation})
+            setattr(config.text_config, "_attn_implementation", requested_attn_implementation)
+        else:
+            setattr(config, "_attn_implementation", requested_attn_implementation)
+
+        return
     else:
         raise NotImplementedError(f"Unknown attention type: {model_args.flash_attn}")
 
@@ -114,6 +133,9 @@ def print_attn_implementation(config: "PretrainedConfig") -> None:
         attn_implementation = getattr(config, "attn_implementation", None)
     else:
         attn_implementation = getattr(config, "_attn_implementation", None)
+        text_attn_implementation = getattr(getattr(config, "text_config", None), "_attn_implementation", None)
+        if text_attn_implementation in ("triton_gqa", "triton_gqa_ulysses"):
+            attn_implementation = text_attn_implementation
 
     if attn_implementation == "flash_attention_2":
         logger.info_rank0("Using FlashAttention-2 for faster training and inference.")
@@ -121,5 +143,7 @@ def print_attn_implementation(config: "PretrainedConfig") -> None:
         logger.info_rank0("Using FlashAttention-3 for faster training and inference.")
     elif attn_implementation == "sdpa":
         logger.info_rank0("Using torch SDPA for faster training and inference.")
+    elif attn_implementation in ("triton_gqa", "triton_gqa_ulysses"):
+        logger.info_rank0("Using Triton GQA attention for Gemma 4.")
     else:
         logger.info_rank0("Using vanilla attention implementation.")

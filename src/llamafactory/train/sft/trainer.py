@@ -127,6 +127,61 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
         if training_args.fp8 and hasattr(self, "accelerator"):  # verify FP8 status after trainer initialization
             verify_fp8_status(self.accelerator, training_args)
 
+        self.context_parallel_group = None
+        self.context_parallel_size = finetuning_args.context_parallel_size
+        self.context_parallel_rank = 0
+        if self.context_parallel_size > 1:
+            import torch.distributed as dist
+            from gemma_triton_flash_attn import register_triton_attention_ulysses
+
+            from .context_parallel import create_context_parallel_group
+
+            self.context_parallel_group = create_context_parallel_group(self.context_parallel_size)
+            self.context_parallel_rank = dist.get_rank(self.context_parallel_group)
+
+            text_config = (
+                self.model.config.get_text_config()
+                if hasattr(self.model.config, "get_text_config")
+                else self.model.config
+            )
+            num_query_heads = text_config.num_attention_heads
+            kv_head_counts = {
+                text_config.num_key_value_heads,
+                getattr(text_config, "num_global_key_value_heads", text_config.num_key_value_heads),
+            }
+            if num_query_heads % self.context_parallel_size != 0:
+                raise ValueError(
+                    f"num_attention_heads ({num_query_heads}) must be divisible by context_parallel_size "
+                    f"({self.context_parallel_size})."
+                )
+            for num_kv_heads in kv_head_counts:
+                if num_kv_heads >= self.context_parallel_size and num_kv_heads % self.context_parallel_size != 0:
+                    raise ValueError(
+                        f"num_key_value_heads ({num_kv_heads}) must divide or be divisible by "
+                        f"context_parallel_size ({self.context_parallel_size})."
+                    )
+
+            register_triton_attention_ulysses(self.context_parallel_group)
+            unwrapped_model = self.accelerator.unwrap_model(self.model)
+            if hasattr(unwrapped_model, "set_attn_implementation"):
+                if hasattr(unwrapped_model.config, "text_config"):
+                    unwrapped_model.set_attn_implementation({"text_config": "triton_gqa_ulysses"})
+                else:
+                    unwrapped_model.set_attn_implementation("triton_gqa_ulysses")
+            else:
+                if hasattr(unwrapped_model.config, "text_config"):
+                    setattr(unwrapped_model.config.text_config, "_attn_implementation", "triton_gqa_ulysses")
+                else:
+                    setattr(unwrapped_model.config, "_attn_implementation", "triton_gqa_ulysses")
+
+            # Enables Transformers' exact global-token loss normalization. The
+            # CP override below removes the duplicate count from CP peers.
+            self.model_accepts_loss_kwargs = True
+            logger.info_rank0(
+                f"Enabled Gemma 4 Ulysses context parallelism: cp_size={self.context_parallel_size}, "
+                f"dp_size={dist.get_world_size() // self.context_parallel_size}."
+            )
+
     @override
     def create_optimizer(self, *args, **kwargs) -> "torch.optim.Optimizer":
         if self.optimizer is None:
@@ -143,12 +198,86 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
     @override
     def _get_train_sampler(self, *args, **kwargs) -> Optional["torch.utils.data.Sampler"]:
         if self.finetuning_args.disable_shuffling:
-            return torch.utils.data.SequentialSampler(self.train_dataset)
+            sampler = torch.utils.data.SequentialSampler(self.train_dataset)
+        else:
+            sampler = super()._get_train_sampler(*args, **kwargs)
 
-        return super()._get_train_sampler(*args, **kwargs)
+        if self.context_parallel_size > 1:
+            from .context_parallel import ContextParallelSampler
+
+            sampler = ContextParallelSampler(sampler, self.context_parallel_size)
+
+        return sampler
+
+    @override
+    def _get_num_items_in_batch(self, batch_samples, device=None):
+        if self.context_parallel_group is None:
+            return super()._get_num_items_in_batch(batch_samples, device)
+
+        import torch.distributed as dist
+
+        from .context_parallel import make_shift_labels
+
+        num_items = None
+        for batch in batch_samples:
+            try:
+                labels = batch["labels"]
+            except (KeyError, TypeError, IndexError):
+                continue
+            count = make_shift_labels(labels).ne(IGNORE_INDEX).sum()
+            num_items = count if num_items is None else num_items + count
+
+        if num_items is None:
+            return None
+
+        num_items = num_items.to(device if device is not None else self.args.device)
+        cp_min_items = num_items.clone()
+        cp_max_items = num_items.clone()
+        dist.all_reduce(cp_min_items, op=dist.ReduceOp.MIN, group=self.context_parallel_group)
+        dist.all_reduce(cp_max_items, op=dist.ReduceOp.MAX, group=self.context_parallel_group)
+        if not torch.equal(cp_min_items, cp_max_items):
+            raise RuntimeError("Ranks in a context-parallel group received different label counts.")
+
+        dist.all_reduce(num_items, op=dist.ReduceOp.SUM)
+        if num_items.remainder(self.context_parallel_size).item() != 0:
+            raise RuntimeError("The full-world label count is not divisible by the context-parallel size.")
+
+        return num_items // self.context_parallel_size
 
     @override
     def compute_loss(self, model, inputs, *args, **kwargs):
+        if self.context_parallel_group is not None:
+            import torch.distributed as dist
+
+            from .context_parallel import context_parallel_cross_entropy, make_shift_labels, split_sequence_inputs
+
+            inputs = dict(inputs)
+            if "position_ids" not in inputs:
+                inputs["position_ids"] = (
+                    torch.arange(inputs["input_ids"].shape[1], device=inputs["input_ids"].device)
+                    .unsqueeze(0)
+                    .expand(inputs["input_ids"].shape[0], -1)
+                )
+            inputs["shift_labels"] = make_shift_labels(inputs["labels"])
+            inputs = split_sequence_inputs(inputs, self.context_parallel_size, self.context_parallel_rank)
+            shift_labels = inputs.pop("shift_labels")
+            inputs.pop("labels")
+            outputs = model(**inputs)
+            num_items_in_batch = kwargs.get("num_items_in_batch")
+            if num_items_in_batch is None:
+                raise RuntimeError("Context parallel loss requires `num_items_in_batch`.")
+
+            loss = context_parallel_cross_entropy(
+                outputs.logits,
+                shift_labels,
+                num_items_in_batch=num_items_in_batch,
+                world_size=dist.get_world_size(),
+            )
+            if kwargs.get("return_outputs", False):
+                return loss, outputs
+
+            return loss
+
         if self.finetuning_args.use_asft_loss:
             with torch.no_grad():
                 ref_outputs = self.ref_model(
