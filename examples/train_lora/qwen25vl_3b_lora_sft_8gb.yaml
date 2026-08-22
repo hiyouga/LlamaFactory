@@ -1,4 +1,4 @@
-### model
+﻿### model
 model_name_or_path: Qwen/Qwen2.5-VL-3B-Instruct
 image_max_pixels: 64000
 video_max_pixels: 16384
@@ -7,6 +7,7 @@ quantization_bit: 4
 
 ### method
 stage: sft
+do_train: true
 finetuning_type: lora
 lora_rank: 8
 lora_target: all
