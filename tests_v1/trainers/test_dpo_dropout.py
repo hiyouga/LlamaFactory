@@ -16,19 +16,37 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import torch
+import torch.nn.functional as F
+from transformers import PretrainedConfig
 
 from llamafactory.v1.trainers.dpo_trainer import DPOTrainer
+from llamafactory.v1.trainers.rm_trainer import RMTrainer
 
 
-def test_dpo_trainer_disables_dropout():
-    model = torch.nn.Sequential(
-        torch.nn.Linear(4, 4),
-        torch.nn.Dropout(p=0.75),
-        torch.nn.Sequential(torch.nn.Dropout(p=0.25)),
-    )
-    model.train()
+class _FunctionalDropout(torch.nn.Module):
+    def __init__(self, p: float = 0.5) -> None:
+        super().__init__()
+        self.attention_dropout = p
 
-    args = SimpleNamespace(
+    def forward(self, inputs):
+        return F.dropout(inputs, p=self.attention_dropout, training=self.training)
+
+
+class _DropoutModel(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.config = PretrainedConfig(attention_dropout=0.5)
+        self.config.text_config = PretrainedConfig(hidden_dropout=0.25)
+        self.linear = torch.nn.Linear(4, 4)
+        self.module_dropout = torch.nn.Dropout(p=0.75)
+        self.functional_dropout = _FunctionalDropout(p=0.5)
+
+    def forward(self, inputs):
+        return self.functional_dropout(self.module_dropout(self.linear(inputs)))
+
+
+def _get_args():
+    return SimpleNamespace(
         cp_size=1,
         pref_loss="orpo",
         pref_beta=0.1,
@@ -37,14 +55,50 @@ def test_dpo_trainer_disables_dropout():
         ld_alpha=None,
         dpo_label_smoothing=0.0,
     )
+
+
+def test_dpo_trainer_disables_dropout():
+    model = _DropoutModel()
+    model.train()
+
     with patch("llamafactory.v1.trainers.dpo_trainer.BaseTrainer.__init__", return_value=None):
-        DPOTrainer(args, model, renderer=None, train_dataset=None)
+        DPOTrainer(_get_args(), model, renderer=None, train_dataset=None)
 
     assert model.training
-    assert all(module.p == 0.0 for module in model.modules() if isinstance(module, torch.nn.Dropout))
+    assert model.module_dropout.p == 0.0
+    assert model.functional_dropout.attention_dropout == 0.0
+    assert model.config.attention_dropout == 0.0
+    assert model.config.text_config.hidden_dropout == 0.0
     inputs = torch.ones(2, 4)
     torch.manual_seed(1)
     first = model(inputs)
     torch.manual_seed(2)
     second = model(inputs)
     torch.testing.assert_close(first, second)
+
+
+def test_rm_trainer_disables_dropout():
+    model = _DropoutModel()
+
+    with patch("llamafactory.v1.trainers.rm_trainer.BaseTrainer.__init__", return_value=None):
+        RMTrainer(_get_args(), model, renderer=None, train_dataset=None)
+
+    assert model.module_dropout.p == 0.0
+    assert model.functional_dropout.attention_dropout == 0.0
+
+
+def test_preference_trainers_can_keep_dropout_enabled():
+    dpo_model = _DropoutModel()
+    rm_model = _DropoutModel()
+
+    with (
+        patch("llamafactory.v1.trainers.dpo_trainer.BaseTrainer.__init__", return_value=None),
+        patch("llamafactory.v1.trainers.rm_trainer.BaseTrainer.__init__", return_value=None),
+    ):
+        DPOTrainer(_get_args(), dpo_model, renderer=None, train_dataset=None, disable_dropout=False)
+        RMTrainer(_get_args(), rm_model, renderer=None, train_dataset=None, disable_dropout=False)
+
+    assert dpo_model.module_dropout.p == 0.75
+    assert dpo_model.functional_dropout.attention_dropout == 0.5
+    assert rm_model.module_dropout.p == 0.75
+    assert rm_model.functional_dropout.attention_dropout == 0.5
