@@ -483,10 +483,6 @@ def patch_model(
     #     of List[str].
     #   * `_init_rope` should read `rope_scaling["rope_type"]` (with a fallback to
     #     the legacy `"type"` key) instead of hard-coding `rope_scaling["type"]`.
-    #
-    # See also `scripts/patch_nanbeige_remote_code.py` for a one-shot patcher that
-    # fixes the cached remote code in place (useful for standalone scripts that
-    # bypass LlamaFactory, e.g. test_embed.py).
     # ---------------------------------------------------------------------------
     if getattr(model.config, "model_type", None) == "nanbeige":
         # Shim 1: `_tied_weights_keys` list -> dict.
