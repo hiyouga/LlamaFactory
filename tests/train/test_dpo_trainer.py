@@ -26,10 +26,15 @@ def test_get_batch_logps_memory_efficient_matches_baseline():
     chunked_logits = baseline_logits.detach().clone().requires_grad_(True)
 
     expected_logps, expected_lengths = get_batch_logps(baseline_logits, labels)
-    actual_logps, actual_lengths = get_batch_logps_memory_efficient(chunked_logits, labels)
+    actual_logps, actual_lengths = get_batch_logps_memory_efficient(chunked_logits, labels, chunk_size=32)
 
     torch.testing.assert_close(actual_logps, expected_logps)
     torch.testing.assert_close(actual_lengths, expected_lengths)
+
+    # adaptive chunk size (vocabulary-aware default) must match the baseline as well
+    default_logps, default_lengths = get_batch_logps_memory_efficient(baseline_logits.detach(), labels)
+    torch.testing.assert_close(default_logps, expected_logps)
+    torch.testing.assert_close(default_lengths, expected_lengths)
 
     expected_logps.sum().backward()
     actual_logps.sum().backward()
