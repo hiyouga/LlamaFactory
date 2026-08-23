@@ -68,18 +68,45 @@ ROLE_MAPPING = {
     Role.FUNCTION: DataRole.FUNCTION.value,
     Role.TOOL: DataRole.OBSERVATION.value,
 }
+MAX_REMOTE_MEDIA_SIZE = int(os.getenv("MAX_REMOTE_MEDIA_SIZE", str(100 * 1024 * 1024)))
+REMOTE_MEDIA_CHUNK_SIZE = 64 * 1024
 
 
 def _fetch_remote_media(url: str) -> io.BytesIO:
     check_ssrf_url(url)
     response = None
     try:
-        response = requests.get(url, timeout=10, allow_redirects=False)
+        response = requests.get(url, stream=True, timeout=10, allow_redirects=False)
         if response.is_redirect:
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Media URL redirects are not allowed.")
 
         response.raise_for_status()
-        return io.BytesIO(response.content)
+        content_length = response.headers.get("Content-Length")
+        if content_length is not None:
+            try:
+                if int(content_length) > MAX_REMOTE_MEDIA_SIZE:
+                    raise HTTPException(
+                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        detail="Remote media exceeds the maximum allowed size.",
+                    )
+            except ValueError:
+                pass
+
+        media = io.BytesIO()
+        total_size = 0
+        for chunk in response.iter_content(chunk_size=REMOTE_MEDIA_CHUNK_SIZE):
+            if chunk:
+                total_size += len(chunk)
+                if total_size > MAX_REMOTE_MEDIA_SIZE:
+                    raise HTTPException(
+                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        detail="Remote media exceeds the maximum allowed size.",
+                    )
+
+                media.write(chunk)
+
+        media.seek(0)
+        return media
     except requests.RequestException as err:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Failed to fetch media URL: {err}")
     finally:
