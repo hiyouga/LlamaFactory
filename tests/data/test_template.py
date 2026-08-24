@@ -56,6 +56,25 @@ MESSAGES_WITH_THOUGHT = [
 ]
 
 
+class _RecordingTokenizer:
+    bos_token_id = 1
+    eos_token_id = 2
+
+    def __init__(self):
+        self.encoded_texts = []
+
+    def encode(self, text: str, add_special_tokens: bool = False) -> list[int]:
+        assert not add_special_tokens
+        self.encoded_texts.append(text)
+        return [len(self.encoded_texts) + 2]
+
+    def convert_tokens_to_ids(self, token: str) -> int:
+        raise AssertionError(f"Unexpected direct token conversion: {token}")
+
+    def decode(self, *args, **kwargs) -> str:
+        raise AssertionError("DeepSeek formatter rendering must not decode token ids.")
+
+
 def _check_tokenization(
     tokenizer: "PreTrainedTokenizer", batch_input_ids: list[list[int]], batch_text: list[str]
 ) -> None:
@@ -463,3 +482,173 @@ def test_parse_qwen3_template():
     assert template.format_system.slots == ["<|im_start|>system\n{{content}}<|im_end|>\n"]
     assert template.format_prefix.slots == []
     assert template.default_system == ""
+
+
+@pytest.mark.parametrize(
+    ("enable_thinking", "response", "expected_prompt", "expected_response"),
+    [
+        (
+            True,
+            "<think>\nreasoning\n</think>\n\nanswer",
+            "<｜User｜>question<｜Assistant｜><think>\n",
+            "reasoning\n</think>\n\nanswer",
+        ),
+        (
+            True,
+            "<think>reasoning</think>\n\nanswer",
+            "<｜User｜>question<｜Assistant｜>",
+            "<think>reasoning</think>\n\nanswer",
+        ),
+    ],
+)
+def test_deepseekr1_renders_thinking_boundary_before_tokenization(
+    enable_thinking: bool,
+    response: str,
+    expected_prompt: str,
+    expected_response: str,
+):
+    tokenizer = _RecordingTokenizer()
+    template = deepcopy(TEMPLATES["deepseekr1"])
+    template.enable_thinking = enable_thinking
+    messages = [
+        {"role": "user", "content": "question"},
+        {"role": "assistant", "content": response},
+    ]
+    original_messages = deepcopy(messages)
+
+    prompt_ids, response_ids = template.encode_oneturn(tokenizer, messages)
+
+    assert messages == original_messages
+    assert tokenizer.encoded_texts == [expected_prompt, expected_response]
+    assert prompt_ids == [tokenizer.bos_token_id, 3]
+    assert response_ids == [4, tokenizer.eos_token_id]
+
+
+def test_deepseekr1_multiturn_discards_only_historical_thinking():
+    tokenizer = _RecordingTokenizer()
+    template = deepcopy(TEMPLATES["deepseekr1"])
+    template.enable_thinking = True
+    messages = [
+        {"role": "user", "content": "question 1"},
+        {"role": "assistant", "content": "<think>\nreasoning 1\n</think>\n\nanswer 1"},
+        {"role": "user", "content": "question 2"},
+        {"role": "assistant", "content": "<think>\nreasoning 2\n</think>\n\nanswer 2"},
+    ]
+    original_messages = deepcopy(messages)
+
+    encoded_pairs = template.encode_multiturn(tokenizer, messages, discarding_history_cot=True)
+
+    assert messages == original_messages
+    assert tokenizer.encoded_texts == [
+        "<｜User｜>question 1<｜Assistant｜>",
+        "\n\nanswer 1",
+        "<｜User｜>question 2<｜Assistant｜><think>\n",
+        "reasoning 2\n</think>\n\nanswer 2",
+    ]
+    assert encoded_pairs == [
+        ([tokenizer.bos_token_id, 3], [4, tokenizer.eos_token_id]),
+        ([5], [6, tokenizer.eos_token_id]),
+    ]
+
+
+def test_deepseekr1_inference_adds_thinking_prefill():
+    tokenizer = _RecordingTokenizer()
+    template = deepcopy(TEMPLATES["deepseekr1"])
+    template.enable_thinking = True
+    messages = [
+        {"role": "user", "content": "question"},
+        {"role": "assistant", "content": ""},
+    ]
+
+    prompt_ids, _ = template.encode_oneturn(tokenizer, messages)
+
+    assert tokenizer.encoded_texts[0] == "<｜User｜>question<｜Assistant｜><think>\n"
+    assert prompt_ids == [tokenizer.bos_token_id, 3]
+
+
+def test_deepseekr1_0528_keeps_thinking_marker_in_response():
+    tokenizer = _RecordingTokenizer()
+    template = deepcopy(TEMPLATES["deepseekr1_0528"])
+    messages = [
+        {"role": "user", "content": "question"},
+        {"role": "assistant", "content": "<think>\nreasoning\n</think>\n\nanswer"},
+    ]
+
+    template.encode_oneturn(tokenizer, messages)
+
+    assert tokenizer.encoded_texts == [
+        "<｜User｜>question<｜Assistant｜>",
+        "<think>\nreasoning\n</think>\n\nanswer",
+    ]
+
+
+def test_default_rendered_message_processing_leaves_formatter_output_unchanged():
+    tokenizer = _RecordingTokenizer()
+    template = deepcopy(TEMPLATES["deepseek3"])
+    messages = [
+        {"role": "user", "content": "question"},
+        {"role": "assistant", "content": "<think>\nreasoning\n</think>\n\nanswer"},
+    ]
+
+    template.encode_oneturn(tokenizer, messages)
+
+    assert tokenizer.encoded_texts == [
+        "<｜User｜>question<｜Assistant｜>",
+        "<think>\nreasoning\n</think>\n\nanswer",
+    ]
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
+def test_deepseek_template_consistency():
+    expected_templates = {
+        "DeepSeek-Coder-6.7B-Instruct": "deepseekcoder",
+        "DeepSeek-Coder-7B-Instruct": "deepseekcoder",
+        "DeepSeek-Coder-33B-Instruct": "deepseekcoder",
+        "DeepSeek-LLM-7B-Chat": "deepseek",
+        "DeepSeek-LLM-67B-Chat": "deepseek",
+        "DeepSeek-Math-7B-Instruct": "deepseek",
+        "DeepSeek-R1-1.5B-Distill": "deepseekr1",
+        "DeepSeek-R1-7B-Distill": "deepseekr1",
+        "DeepSeek-R1-8B-Distill": "deepseekr1",
+        "DeepSeek-R1-14B-Distill": "deepseekr1",
+        "DeepSeek-R1-32B-Distill": "deepseekr1",
+        "DeepSeek-R1-70B-Distill": "deepseekr1",
+        "DeepSeek-R1-671B-Chat-Zero": "deepseekr1",
+        "DeepSeek-R1-671B-Chat": "deepseekr1",
+        "DeepSeek-R1-0528-8B-Distill": "deepseekr1_0528",
+        "DeepSeek-R1-0528-671B-Chat": "deepseekr1_0528",
+    }
+    for model_name, template_name in expected_templates.items():
+        assert DEFAULT_TEMPLATE[model_name] == template_name
+
+    cases = [
+        ("deepseek-ai/deepseek-coder-6.7b-instruct", "deepseekcoder", MESSAGES),
+        ("deepseek-ai/deepseek-llm-7b-chat", "deepseek", MESSAGES),
+        ("deepseek-ai/deepseek-math-7b-instruct", "deepseek", MESSAGES),
+        ("deepseek-ai/DeepSeek-R1-Distill-Qwen-1.5B", "deepseekr1", MESSAGES_WITH_THOUGHT),
+        ("deepseek-ai/DeepSeek-R1-0528-Qwen3-8B", "deepseekr1_0528", MESSAGES_WITH_THOUGHT),
+        ("deepseek-ai/DeepSeek-R1-0528", "deepseekr1_0528", MESSAGES_WITH_THOUGHT),
+    ]
+    for model_id, template_name, messages in cases:
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        reference_tokenizer = AutoTokenizer.from_pretrained(model_id)
+        template = get_template_and_fix_tokenizer(
+            tokenizer,
+            DataArguments(template=template_name, enable_thinking=True),
+        )
+        prompt_ids, _ = template.encode_oneturn(tokenizer, messages)
+        inference_prompt_ids, _ = template.encode_oneturn(
+            tokenizer,
+            messages[:-1] + [{"role": "assistant", "content": ""}],
+        )
+        reference_prompt_ids = reference_tokenizer.apply_chat_template(
+            messages[:-1],
+            tokenize=True,
+            add_generation_prompt=True,
+            enable_thinking=True,
+        )
+        if is_transformers_version_greater_than("5.0.0"):
+            reference_prompt_ids = reference_prompt_ids["input_ids"]
+
+        assert prompt_ids == reference_prompt_ids, model_id
+        assert inference_prompt_ids == reference_prompt_ids, model_id
