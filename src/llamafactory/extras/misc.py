@@ -101,8 +101,10 @@ def check_dependencies() -> None:
     check_version("trl>=0.18.0,<=0.24.0")
 
 
-def calculate_tps(dataset: list[dict[str, Any]], metrics: dict[str, float], stage: Literal["sft", "rm"]) -> float:
-    r"""Calculate effective tokens per second."""
+def calculate_tps(
+    dataset: list[dict[str, Any]], metrics: dict[str, float], stage: Literal["sft", "rm"]
+) -> dict[str, Union[int, float]]:
+    r"""Calculate effective tokens per second and related dataset-level metrics."""
     effective_token_num = 0
     for data in dataset:
         if stage == "sft":
@@ -110,8 +112,21 @@ def calculate_tps(dataset: list[dict[str, Any]], metrics: dict[str, float], stag
         elif stage == "rm":
             effective_token_num += len(data["chosen_input_ids"]) + len(data["rejected_input_ids"])
 
-    result = effective_token_num * metrics["epoch"] / metrics["train_runtime"]
-    return result / dist.get_world_size() if dist.is_initialized() else result
+    train_runtime = metrics["train_runtime"]
+    epoch = metrics["epoch"]
+    world_size = dist.get_world_size() if dist.is_initialized() else 1
+    num_samples = len(dataset)
+
+    effective_tokens_per_sec_all_device = effective_token_num * epoch / train_runtime if train_runtime > 0 else 0.0
+    effective_tokens_per_sec_per_device = effective_tokens_per_sec_all_device / world_size
+    average_effective_tokens_per_sample = effective_token_num / num_samples if num_samples > 0 else 0.0
+
+    return {
+        "effective_tokens_per_sec_per_device": effective_tokens_per_sec_per_device,
+        "effective_tokens_per_sec_all_device": effective_tokens_per_sec_all_device,
+        "num_samples_per_epoch": num_samples,
+        "average_effective_tokens_per_sample": average_effective_tokens_per_sample,
+    }
 
 
 def count_parameters(model: "torch.nn.Module") -> tuple[int, int]:
