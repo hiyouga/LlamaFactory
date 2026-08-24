@@ -54,14 +54,14 @@ class TokenizerModule(TypedDict):
     processor: Optional["ProcessorMixin"]
 
 
-def _is_local_telechat4_model(model_path: str) -> bool:
+def _is_local_xingchen4_model(model_path: str) -> bool:
     config_path = os.path.join(model_path, "config.json")
     if not os.path.isfile(config_path):
         return False
 
     try:
         with open(config_path, encoding="utf-8") as f:
-            return json.load(f).get("model_type") == "telechat4"
+            return json.load(f).get("model_type") == "xingchen4"
     except Exception:
         return False
 
@@ -73,9 +73,9 @@ def _get_init_kwargs(model_args: "ModelArguments") -> dict[str, Any]:
     """
     skip_check_imports()
     model_args.model_name_or_path = try_download_model_from_other_hub(model_args)
-    if not model_args.trust_remote_code and _is_local_telechat4_model(model_args.model_name_or_path):
+    if not model_args.trust_remote_code and _is_local_xingchen4_model(model_args.model_name_or_path):
         model_args.trust_remote_code = True
-        logger.warning_rank0("TeleChat4 uses local custom auto_map code, set `trust_remote_code` to True.")
+        logger.warning_rank0("XingChen4 uses local custom auto_map code, set `trust_remote_code` to True.")
 
     return {
         "trust_remote_code": model_args.trust_remote_code,
