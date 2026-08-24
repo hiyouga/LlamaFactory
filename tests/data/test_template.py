@@ -426,6 +426,162 @@ def test_qwen3_template(cot_messages: bool):
 
 
 @pytest.mark.runs_on(["cpu", "mps"])
+def test_glm_template_consistency():
+    system = "You are a helpful weather assistant. Use the available tools when needed."
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_temperature",
+                "description": "Get the current temperature for a city.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}},
+                    "required": ["city"],
+                },
+            },
+        }
+    ]
+    function_call = '{"name":"get_current_temperature","arguments":{"city":"Paris"}}'
+    function_arguments = '{"city": "Paris"}'
+    observation = '{"temperature_celsius":21}'
+    thought = "<think>\nI should use the weather tool.\n</think>\n\n"
+
+    assert DEFAULT_TEMPLATE["GLM-4-0414-9B-Chat"] == "glm4_0414"
+    assert DEFAULT_TEMPLATE["GLM-4-0414-32B-Chat"] == "glm4_0414"
+    assert DEFAULT_TEMPLATE.get("GLM-4.5-Base") is None
+    assert DEFAULT_TEMPLATE.get("GLM-4.5-Air-Base") is None
+    assert DEFAULT_TEMPLATE["GLM-4.5-Thinking"] == "glm4_moe"
+    assert DEFAULT_TEMPLATE["GLM-4.5-Air-Thinking"] == "glm4_moe"
+    assert DEFAULT_TEMPLATE["GLM-Z1-0414-9B-Chat"] == "glmz1"
+    assert DEFAULT_TEMPLATE["GLM-Z1-0414-32B-Chat"] == "glmz1"
+
+    glm4_moe = TEMPLATES["glm4_moe"]
+    assert glm4_moe.__class__.__name__ == "Glm45Template"
+    assert glm4_moe.format_function.slots == ["\n{{content}}"]
+    assert glm4_moe.format_observation.slots == [
+        "<|observation|>\n<tool_response>\n{{content}}\n</tool_response><|assistant|>"
+    ]
+    assert glm4_moe.thought_words == ("<think>", "</think>")
+    tool_call = glm4_moe.format_function.apply(content=function_call)[0]
+    assert tool_call.endswith("\n</tool_call>")
+
+    cases = [
+        {
+            "model_id": "zai-org/GLM-4-9B-0414",
+            "template": "glm4_0414",
+            "enable_thinking": False,
+            "messages": [
+                {"role": "user", "content": "What is the current temperature in Paris?"},
+                {"role": "function", "content": function_call},
+                {"role": "observation", "content": observation},
+                {"role": "assistant", "content": "It is 21 degrees Celsius."},
+            ],
+            "official_messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": "What is the current temperature in Paris?"},
+                {"role": "assistant", "content": function_arguments, "metadata": "get_current_temperature"},
+                {"role": "observation", "content": observation},
+            ],
+        },
+    ]
+    for enable_thinking in (True, False):
+        cases.append(
+            {
+                "model_id": "zai-org/GLM-Z1-9B-0414",
+                "template": "glmz1",
+                "enable_thinking": enable_thinking,
+                "messages": [
+                    {"role": "user", "content": "What is the current temperature in Paris?"},
+                    {"role": "function", "content": thought + function_call},
+                    {"role": "observation", "content": observation},
+                    {"role": "assistant", "content": thought + "It is 21 degrees Celsius."},
+                ],
+                "official_messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": "What is the current temperature in Paris?"},
+                    {
+                        "role": "assistant",
+                        "content": thought + function_arguments,
+                        "metadata": "get_current_temperature",
+                    },
+                    {"role": "observation", "content": observation},
+                ],
+            }
+        )
+    for enable_thinking in (True, False):
+        visible_answer = "There are 20 markers."
+        history_answer = f"<think>\n12 + 8 = 20.\n</think>\n\n{visible_answer}"
+        function_content = thought + function_call if enable_thinking else function_call
+        final_answer = thought + "It is 21 degrees Celsius." if enable_thinking else "It is 21 degrees Celsius."
+        cases.append(
+            {
+                "model_id": "zai-org/GLM-4.5",
+                "template": "glm4_moe",
+                "enable_thinking": enable_thinking,
+                "preserve_thinking": False,
+                "messages": [
+                    {"role": "user", "content": "How many markers are in the box?"},
+                    {"role": "assistant", "content": history_answer if enable_thinking else visible_answer},
+                    {"role": "user", "content": "What is the current temperature in Paris?"},
+                    {"role": "function", "content": function_content},
+                    {"role": "observation", "content": observation},
+                    {"role": "assistant", "content": final_answer},
+                ],
+                "official_messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": "How many markers are in the box?"},
+                    {"role": "assistant", "content": history_answer if enable_thinking else visible_answer},
+                    {"role": "user", "content": "What is the current temperature in Paris?"},
+                    {
+                        "role": "assistant",
+                        "content": thought.rstrip() if enable_thinking else "",
+                        "tool_calls": [
+                            {
+                                "type": "function",
+                                "function": {
+                                    "name": "get_current_temperature",
+                                    "arguments": {"city": "Paris"},
+                                },
+                            }
+                        ],
+                    },
+                    {"role": "tool", "name": "get_current_temperature", "content": observation},
+                ],
+            }
+        )
+
+    for case in cases:
+        tokenizer = AutoTokenizer.from_pretrained(case["model_id"])
+        reference_tokenizer = AutoTokenizer.from_pretrained(case["model_id"])
+        template = get_template_and_fix_tokenizer(
+            tokenizer,
+            DataArguments(
+                template=case["template"],
+                enable_thinking=case["enable_thinking"],
+                preserve_thinking=case.get("preserve_thinking", False),
+            ),
+        )
+        prompt_ids, _ = template.encode_oneturn(
+            tokenizer,
+            case["messages"],
+            system=system,
+            tools=json.dumps(tools, ensure_ascii=False),
+        )
+        reference_ids = reference_tokenizer.apply_chat_template(
+            case["official_messages"],
+            tools=tools,
+            tokenize=True,
+            add_generation_prompt=True,
+            enable_thinking=case["enable_thinking"],
+        )
+        if is_transformers_version_greater_than("5.0.0"):
+            reference_ids = reference_ids["input_ids"]
+
+        assert prompt_ids == reference_ids, case["model_id"]
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
 def test_parse_llama3_template():
     tokenizer = AutoTokenizer.from_pretrained(TINY_LLAMA3)
     template = parse_template(tokenizer)

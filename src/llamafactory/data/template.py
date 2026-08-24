@@ -519,6 +519,115 @@ class ReasoningTemplate(Template):
         return [(encoded_messages[i], encoded_messages[i + 1]) for i in range(0, len(encoded_messages), 2)]
 
 
+class Glm4ToolSystemMixin:
+    r"""Place tool instructions and the user system prompt in separate system turns."""
+
+    @override
+    def _format_system_and_tools(self, system: str, tools: Optional[str]) -> "SLOTS":
+        elements = []
+        if tools:
+            tool_text = self.format_tools.apply(content=tools)[0].strip("\n")
+            elements += self.format_system.apply(content=tool_text)
+        if system:
+            elements += self.format_system.apply(content=system)
+
+        return elements
+
+
+@dataclass
+class Glm40414Template(Glm4ToolSystemMixin, Template):
+    r"""GLM-4-0414 template with tokenizer-defined tool system turns."""
+
+
+@dataclass
+class Glm45Template(Glm4ToolSystemMixin, ReasoningTemplate):
+    r"""Render GLM-4.5 reasoning and tool turns."""
+
+    @override
+    def add_thought(self, content: str = "") -> str:
+        return f"\n{self.thought_words[0]}{self.thought_words[1]}" + content
+
+    @override
+    def _process_messages(self, messages: list[dict[str, str]]) -> Optional[list[dict[str, str]]]:
+        if self.enable_thinking is not False:
+            return None
+
+        messages = deepcopy(messages)
+        for message in messages:
+            if message["role"] == Role.USER and not message["content"].endswith("/nothink"):
+                message["content"] += "/nothink"
+
+        return messages
+
+    @override
+    def _process_history_thoughts(self, messages: list[dict[str, str]], is_inference: bool) -> bool:
+        last_user_index = max(
+            (index for index, message in enumerate(messages[:-1]) if message["role"] == Role.USER),
+            default=-1,
+        )
+        for index, message in enumerate(messages[:-1]):
+            if message["role"] not in {Role.ASSISTANT, Role.FUNCTION}:
+                continue
+
+            content = message["content"]
+            if self.thought_words[1] in content:
+                reasoning_content = content.split(self.thought_words[1])[0]
+                reasoning_content = reasoning_content.rstrip("\n").split(self.thought_words[0])[-1].lstrip("\n")
+                visible_content = content.split(self.thought_words[1])[-1].lstrip("\n")
+            else:
+                reasoning_content = ""
+                visible_content = content
+
+            if index <= last_user_index:
+                reasoning_content = ""
+
+            message["content"] = self.thought_words[0] + reasoning_content.strip() + self.thought_words[1]
+            if visible_content.strip():
+                message["content"] += "\n" + visible_content.strip()
+
+        return True
+
+
+@dataclass
+class GlmZ1Template(Glm4ToolSystemMixin, ReasoningTemplate):
+    r"""Render GLM-Z1's visible history and thinking prefill."""
+
+    thought_prefill = "\n<think>"
+
+    @override
+    def add_thought(self, content: str = "") -> str:
+        return content
+
+    @override
+    def _process_history_thoughts(self, messages: list[dict[str, str]], is_inference: bool) -> bool:
+        for message in messages[:-1]:
+            message["content"] = message["content"].split("</think>")[-1].strip()
+
+        return True
+
+    @override
+    def _process_rendered_messages(self, rendered_messages: list["SLOTS"], messages: list[dict[str, str]]) -> None:
+        response_index = len(rendered_messages) - 1
+        if messages[response_index]["role"] != Role.ASSISTANT:
+            return
+
+        response_elements = rendered_messages[response_index]
+        if not response_elements or not isinstance(response_elements[0], str):
+            return
+
+        response_content = response_elements[0]
+        if messages[response_index]["content"] == "" and response_content == "\n":
+            response_elements[0] = ""
+        elif response_content.startswith(self.thought_prefill):
+            response_elements[0] = response_content[len(self.thought_prefill) :]
+
+        prompt_elements = rendered_messages[response_index - 1]
+        if prompt_elements and isinstance(prompt_elements[-1], str):
+            prompt_elements[-1] += self.thought_prefill
+        else:
+            prompt_elements.append(self.thought_prefill)
+
+
 @dataclass
 class Glm47ReasoningTemplate(ReasoningTemplate):
     r"""GLM-4.7 uses only the closing </think> tag for empty thinking blocks."""
@@ -1143,17 +1252,36 @@ register_template(
 
 # copied from glm4 template
 register_template(
+    name="glm4_0414",
+    format_user=StringFormatter(slots=["<|user|>\n{{content}}<|assistant|>"]),
+    format_assistant=StringFormatter(slots=["\n{{content}}"]),
+    format_system=StringFormatter(slots=["<|system|>\n{{content}}"]),
+    format_function=FunctionFormatter(slots=["{{content}}"], tool_format="glm4_0414"),
+    format_observation=StringFormatter(slots=["<|observation|>\n{{content}}<|assistant|>"]),
+    format_tools=ToolFormatter(tool_format="glm4_0414"),
+    format_prefix=EmptyFormatter(slots=["[gMASK]<sop>"]),
+    stop_words=["<|user|>", "<|observation|>"],
+    efficient_eos=True,
+    template_class=Glm40414Template,
+)
+
+
+# copied from glm4 template
+register_template(
     name="glm4_moe",
     format_user=StringFormatter(slots=["<|user|>\n{{content}}<|assistant|>"]),
     format_assistant=StringFormatter(slots=["\n{{content}}"]),
     format_system=StringFormatter(slots=["<|system|>\n{{content}}"]),
-    format_function=FunctionFormatter(slots=["{{content}}"], tool_format="glm4_moe"),
-    format_observation=StringFormatter(slots=["<|observation|>\n{{content}}<|assistant|>"]),
+    format_function=FunctionFormatter(slots=["\n{{content}}"], tool_format="glm4_moe"),
+    format_observation=StringFormatter(
+        slots=["<|observation|>\n<tool_response>\n{{content}}\n</tool_response><|assistant|>"]
+    ),
     format_tools=ToolFormatter(tool_format="glm4_moe"),
     format_prefix=EmptyFormatter(slots=["[gMASK]<sop>"]),
     stop_words=["<|user|>", "<|observation|>"],
+    thought_words=("<think>", "</think>"),
     efficient_eos=True,
-    template_class=ReasoningTemplate,
+    template_class=Glm45Template,
 )
 
 
@@ -1230,13 +1358,13 @@ register_template(
     format_user=StringFormatter(slots=["<|user|>\n{{content}}<|assistant|>"]),
     format_assistant=StringFormatter(slots=["\n{{content}}"]),
     format_system=StringFormatter(slots=["<|system|>\n{{content}}"]),
-    format_function=FunctionFormatter(slots=["{{content}}"], tool_format="glm4"),
+    format_function=FunctionFormatter(slots=["{{content}}"], tool_format="glmz1"),
     format_observation=StringFormatter(slots=["<|observation|>\n{{content}}<|assistant|>"]),
-    format_tools=ToolFormatter(tool_format="glm4"),
+    format_tools=ToolFormatter(tool_format="glmz1"),
     format_prefix=EmptyFormatter(slots=["[gMASK]<sop>"]),
     stop_words=["<|user|>", "<|observation|>"],
     efficient_eos=True,
-    template_class=ReasoningTemplate,
+    template_class=GlmZ1Template,
 )
 
 
