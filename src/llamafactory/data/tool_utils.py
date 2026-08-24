@@ -42,6 +42,8 @@ GLM4_TOOL_PROMPT = (
     "你是一个名为 ChatGLM 的人工智能助手。你是基于智谱 AI 公司训练的语言模型 GLM-4 模型开发的，"
     "你的任务是针对用户的问题和要求提供适当的答复和支持。\n\n# 可用工具{tool_text}"
 )
+GLM4_0414_TOOL_PROMPT = "# 可用工具{tool_text}"
+GLM_Z1_TOOL_PROMPT = GLM4_TOOL_PROMPT
 
 GLM4_MOE_TOOL_PROMPT = (
     "\n\n# Tools\n\nYou may call one or more functions to assist with the user query.\n\n"
@@ -408,6 +410,38 @@ class GLM4ToolUtils(ToolUtils):
         return [FunctionCall(tool_name, json.dumps(arguments, ensure_ascii=False))]
 
 
+class GLM40414ToolUtils(GLM4ToolUtils):
+    r"""GLM-4-0414 tool format without the legacy assistant description."""
+
+    @override
+    @staticmethod
+    def tool_formatter(tools: list[dict[str, Any]]) -> str:
+        tool_text = ""
+        for tool in tools:
+            tool = tool.get("function", "") if tool.get("type") == "function" else tool
+            tool_text += "\n\n## {name}\n\n{body}\n在调用上述函数时，请使用 Json 格式表示调用的参数。".format(
+                name=tool["name"], body=json.dumps(tool, indent=4, ensure_ascii=False)
+            )
+
+        return GLM4_0414_TOOL_PROMPT.format(tool_text=tool_text)
+
+
+class GLMZ1ToolUtils(GLM4ToolUtils):
+    r"""GLM-Z1-0414 tool format with tokenizer-defined heading spacing."""
+
+    @override
+    @staticmethod
+    def tool_formatter(tools: list[dict[str, Any]]) -> str:
+        tool_text = ""
+        for tool in tools:
+            tool = tool.get("function", "") if tool.get("type") == "function" else tool
+            tool_text += "\n## {name}\n\n{body}\n在调用上述函数时，请使用 Json 格式表示调用的参数。".format(
+                name=tool["name"], body=json.dumps(tool, indent=4, ensure_ascii=False)
+            )
+
+        return GLM_Z1_TOOL_PROMPT.format(tool_text=tool_text)
+
+
 class Llama3ToolUtils(ToolUtils):
     r"""Llama 3.x tool using template with `tools_in_user_message=False`.
 
@@ -708,7 +742,7 @@ class GLM4MOEToolUtils(QwenToolUtils):
                 if not isinstance(value, str):
                     value = json.dumps(value, ensure_ascii=False)
                 prompt += "\n<arg_value>" + value + "</arg_value>"
-            function_texts.append(prompt)
+            function_texts.append(prompt + "\n</tool_call>")
 
         return "\n".join(function_texts)
 
@@ -885,6 +919,8 @@ TOOLS = {
     "default": DefaultToolUtils(),
     "gemma4": Gemma4ToolUtils(),
     "glm4": GLM4ToolUtils(),
+    "glm4_0414": GLM40414ToolUtils(),
+    "glmz1": GLMZ1ToolUtils(),
     "llama3": Llama3ToolUtils(),
     "lfm2": LFM2ToolUtils(),
     "minimax1": MiniMaxM1ToolUtils(),
