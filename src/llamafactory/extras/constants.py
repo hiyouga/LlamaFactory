@@ -3391,12 +3391,12 @@ register_model_group(
 
 register_model_group(
     models={
-        "TeleChat4-29B-Chat": {
-            DownloadSource.DEFAULT: "Tele-AI/TeleChat4-29B", 
-            DownloadSource.MODELSCOPE: "Tele-AI/TeleChat4-29B",
+        "XingChen4-29B-A4B": {
+            DownloadSource.DEFAULT: "Tele-AI/XingChen4-29B-A4B",
+            DownloadSource.MODELSCOPE: "TeleAI/XingChen4-29B-A4B",
         },
     },
-    template="telechat4",
+    template="xingchen4",
 )
 
 

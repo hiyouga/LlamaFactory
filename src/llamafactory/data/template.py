@@ -47,6 +47,7 @@ class Template:
     format_tools: "Formatter"
     format_prefix: "Formatter"
     default_system: str
+    always_emit_system: bool
     stop_words: list[str]
     thought_words: tuple[str, str]
     tool_call_words: tuple[str, str]
@@ -148,7 +149,7 @@ class Template:
 
             if i == 0:
                 elements += self.format_prefix.apply()
-                if system or tools:
+                if system or tools or self.always_emit_system:
                     tool_text = self.format_tools.apply(content=tools)[0] if tools else ""
                     if tools and not system:
                         # Tool prompts that separate themselves from the system message with a
@@ -258,7 +259,7 @@ class Template:
         if prefix:
             jinja_template += "{{ " + prefix + " }}"
 
-        if self.default_system:
+        if self.default_system or self.always_emit_system:
             jinja_template += "{% set system_message = '" + self._jinja_escape(self.default_system) + "' %}"
 
         jinja_template += (
@@ -315,8 +316,9 @@ class Template:
         system = self._convert_slots_to_ollama(self.format_system.apply(), tokenizer, placeholder=".System")
         user = self._convert_slots_to_ollama(self.format_user.apply(), tokenizer, placeholder=".Content")
         assistant = self._convert_slots_to_ollama(self.format_assistant.apply(), tokenizer, placeholder=".Content")
+        system_template = system if self.always_emit_system else f"{{{{ if .System }}}}{system}{{{{ end }}}}"
         return (
-            f"{prefix}{{{{ if .System }}}}{system}{{{{ end }}}}"
+            f"{prefix}{system_template}"
             f"""{{{{ range .Messages }}}}{{{{ if eq .Role "user" }}}}{user}"""
             f"""{{{{ else if eq .Role "assistant" }}}}{assistant}{{{{ end }}}}{{{{ end }}}}"""
         )
@@ -533,47 +535,6 @@ class Glm47ReasoningTemplate(ReasoningTemplate):
 
         return self.thought_words[0] + content + self.thought_words[1]
 
-
-@dataclass
-class TeleChat4Template(Template):
-    r"""TeleChat4 always emits a system header, even when the system message is empty."""
-
-    @override
-    def _encode(
-        self,
-        tokenizer: "PreTrainedTokenizer",
-        messages: list[dict[str, str]],
-        system: Optional[str],
-        tools: Optional[str],
-    ) -> list[list[int]]:
-        system = system or self.default_system
-        encoded_messages = []
-        for i, message in enumerate(messages):
-            elements = []
-
-            if i == 0:
-                elements += self.format_prefix.apply()
-                tool_text = self.format_tools.apply(content=tools)[0] if tools else ""
-                elements += self.format_system.apply(content=(system + tool_text))
-
-            if message["role"] == Role.USER:
-                elements += self.format_user.apply(content=message["content"], idx=str(i // 2))
-            elif message["role"] == Role.ASSISTANT:
-                elements += self.format_assistant.apply(content=message["content"])
-            elif message["role"] == Role.OBSERVATION:
-                elements += self.format_observation.apply(content=message["content"])
-            elif message["role"] == Role.FUNCTION:
-                elements += self.format_function.apply(
-                    content=message["content"], thought_words=self.thought_words, tool_call_words=self.tool_call_words
-                )
-            else:
-                raise NotImplementedError("Unexpected role: {}".format(message["role"]))
-
-            encoded_messages.append(self._convert_elements_to_ids(tokenizer, elements))
-
-        return encoded_messages
-
-
 TEMPLATES: dict[str, "Template"] = {}
 
 
@@ -587,6 +548,7 @@ def register_template(
     format_tools: Optional["Formatter"] = None,
     format_prefix: Optional["Formatter"] = None,
     default_system: str = "",
+    always_emit_system: bool = False,
     stop_words: Optional[list[str]] = None,
     thought_words: Optional[tuple[str, str]] = None,
     tool_call_words: Optional[tuple[str, str]] = None,
@@ -640,6 +602,7 @@ def register_template(
         format_tools=format_tools or default_tool_formatter,
         format_prefix=format_prefix or default_prefix_formatter,
         default_system=default_system,
+        always_emit_system=always_emit_system,
         stop_words=stop_words or [],
         thought_words=thought_words or ("<think>\n", "\n</think>\n\n"),
         tool_call_words=tool_call_words or ("<tool_call>", "</tool_call>"),
@@ -703,6 +666,7 @@ def parse_template(tokenizer: "PreTrainedTokenizer") -> "Template":
         format_tools=ToolFormatter(tool_format="default"),
         format_prefix=EmptyFormatter(slots=[prefix]) if prefix else EmptyFormatter(),
         default_system=default_system,
+        always_emit_system=False,
         stop_words=[],
         thought_words=("<think>\n", "\n</think>\n\n"),
         tool_call_words=("<tool_call>", "</tool_call>"),
@@ -2419,14 +2383,14 @@ register_template(
 
 
 register_template(
-    name="telechat4",
+    name="xingchen4",
     format_user=StringFormatter(slots=["<_user>{{content}}<_bot></think>"]),
     format_assistant=StringFormatter(slots=["{{content}}", {"eos_token"}, "\n"]),
     format_system=StringFormatter(slots=["<_system>{{content}}"]),
     format_observation=StringFormatter(slots=["<_observation>{{content}}<_bot></think>"]),
     thought_words=("<think>\n", "</think>"),
     tool_call_words=("<tool_call>", "</tool_call>"),
-    template_class=TeleChat4Template,
+    always_emit_system=True,
 )
 
 
