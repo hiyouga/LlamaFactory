@@ -531,6 +531,55 @@ class ReasoningTemplate(Template):
         return [(encoded_messages[i], encoded_messages[i + 1]) for i in range(0, len(encoded_messages), 2)]
 
 
+class DeepSeekR1ReasoningMixin:
+    r"""Discard historical reasoning while preserving the whitespace after it."""
+
+    thought_end_tag = "</think>"
+
+    def remove_thought(self, content: str) -> str:
+        if self.thought_end_tag in content:
+            return content.split(self.thought_end_tag)[-1]
+
+        return content
+
+
+@dataclass
+class DeepSeekR1Template(DeepSeekR1ReasoningMixin, ReasoningTemplate):
+    r"""Render the original R1 thinking prefill before tokenization."""
+
+    @override
+    def _process_rendered_messages(
+        self, rendered_messages: list["SLOTS"], messages: list[dict[str, str]]
+    ) -> None:
+        if self.enable_thinking is True:
+            self._move_thought_prefill(rendered_messages)
+
+    def _move_thought_prefill(self, rendered_messages: list["SLOTS"]) -> None:
+        thought_start = self.thought_words[0]
+        for response_index in range(1, len(rendered_messages), 2):
+            response_elements = rendered_messages[response_index]
+            if not response_elements or not isinstance(response_elements[0], str):
+                continue
+
+            response_content = response_elements[0]
+            if response_content and not response_content.startswith(thought_start):
+                continue
+
+            prompt_elements = rendered_messages[response_index - 1]
+            if prompt_elements and isinstance(prompt_elements[-1], str):
+                prompt_elements[-1] += thought_start
+            else:
+                prompt_elements.append(thought_start)
+
+            if response_content:
+                response_elements[0] = response_content[len(thought_start) :]
+
+
+@dataclass
+class DeepSeekR10528Template(DeepSeekR1ReasoningMixin, ReasoningTemplate):
+    r"""Keep the thinking marker in the response for R1-0528 tokenizers."""
+
+
 @dataclass
 class Glm47ReasoningTemplate(ReasoningTemplate):
     r"""GLM-4.7 uses only the closing </think> tag for empty thinking blocks."""
@@ -873,6 +922,7 @@ register_template(
 register_template(
     name="deepseek",
     format_user=StringFormatter(slots=["User: {{content}}\n\nAssistant:"]),
+    format_assistant=StringFormatter(slots=[" {{content}}", {"eos_token"}]),
     format_system=StringFormatter(slots=["{{content}}\n\n"]),
     format_prefix=EmptyFormatter(slots=[{"bos_token"}]),
 )
@@ -890,7 +940,16 @@ register_template(
     name="deepseekr1",
     format_user=StringFormatter(slots=["<｜User｜>{{content}}<｜Assistant｜>"]),
     format_prefix=EmptyFormatter(slots=[{"bos_token"}]),
-    template_class=ReasoningTemplate,
+    template_class=DeepSeekR1Template,
+)
+
+
+# copied from deepseekr1 template
+register_template(
+    name="deepseekr1_0528",
+    format_user=StringFormatter(slots=["<｜User｜>{{content}}<｜Assistant｜>"]),
+    format_prefix=EmptyFormatter(slots=[{"bos_token"}]),
+    template_class=DeepSeekR10528Template,
 )
 
 
@@ -909,14 +968,14 @@ register_template(
 
 register_template(
     name="deepseekcoder",
-    format_user=StringFormatter(slots=["### Instruction:\n{{content}}\n### Response:"]),
-    format_assistant=StringFormatter(slots=["\n{{content}}\n<|EOT|>\n"]),
+    format_user=StringFormatter(slots=["### Instruction:\n{{content}}\n### Response:\n"]),
+    format_assistant=StringFormatter(slots=["{{content}}\n<|EOT|>\n"]),
     format_prefix=EmptyFormatter(slots=[{"bos_token"}]),
     default_system=(
-        "You are an AI programming assistant, utilizing the DeepSeek Coder model, "
-        "developed by DeepSeek Company, and you only answer questions related to computer science. "
+        "You are an AI programming assistant, utilizing the Deepseek Coder model, "
+        "developed by Deepseek Company, and you only answer questions related to computer science. "
         "For politically sensitive questions, security and privacy issues, "
-        "and other non-computer science questions, you will refuse to answer.\n"
+        "and other non-computer science questions, you will refuse to answer\n"
     ),
 )
 

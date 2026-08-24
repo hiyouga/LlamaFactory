@@ -545,6 +545,13 @@ register_model_group(
             DownloadSource.DEFAULT: "deepseek-ai/DeepSeek-R1",
             DownloadSource.MODELSCOPE: "deepseek-ai/DeepSeek-R1",
         },
+    },
+    template="deepseekr1",
+)
+
+
+register_model_group(
+    models={
         "DeepSeek-R1-0528-8B-Distill": {
             DownloadSource.DEFAULT: "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
             DownloadSource.MODELSCOPE: "deepseek-ai/DeepSeek-R1-0528-Qwen3-8B",
@@ -554,7 +561,7 @@ register_model_group(
             DownloadSource.MODELSCOPE: "deepseek-ai/DeepSeek-R1-0528",
         },
     },
-    template="deepseekr1",
+    template="deepseekr1_0528",
 )
 
 
