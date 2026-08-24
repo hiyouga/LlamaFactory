@@ -317,6 +317,16 @@ class MultiModalDataCollatorForSeq2Seq(DataCollatorForSeq2Seq):
                 [features["attention_mask"], dummy_image_right_padding_attention_mask], dim=-1
             )
 
+        # Mirror the non-FA2 packing fix (#10737) for the packed-mrope path. The merged position_ids
+        # is built from per-subseq sequence_boundaries, which end at cutoff_len, while
+        # `DataCollatorForSeq2Seq(pad_to_multiple_of=...)` right-pads input_ids/attention_mask past
+        # cutoff_len. Right-pad the trailing (masked) positions with 0 so the merged position_ids
+        # matches seq_len before validating. Works for both 2D and 3D (mrope) position_ids since the
+        # sequence axis is last, and is idempotent with the has_dummy_image cat above.
+        pad_len = seq_len - features["position_ids"].shape[-1]
+        if pad_len > 0:
+            features["position_ids"] = F.pad(features["position_ids"], (0, pad_len), value=0)
+
         if features["position_ids"].shape != expected_position_ids_shape:
             raise ValueError(
                 "Merged position_ids shape mismatch: "
