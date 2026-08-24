@@ -186,6 +186,8 @@ def get_process_group_backend() -> str:
         return "hccl"
     elif get_current_accelerator().type == DeviceType.CUDA:
         return "nccl"
+    elif get_current_accelerator().type == DeviceType.XPU:
+        return "xccl"
     else:
         return "gloo"
 

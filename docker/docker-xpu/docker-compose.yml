@@ -1,0 +1,47 @@
+services:
+  llamafactory:
+    build:
+      dockerfile: ./docker/docker-xpu/Dockerfile
+      context: ../..
+      args:
+        # The DLE base image determines which Intel GPU runtime (libze-intel-gpu)
+        # is shipped. The runtime version must be >= the host driver version,
+        # otherwise torch.xpu.device_count() returns 0:
+        #   DLE 2025.3 → libze-intel-gpu 25.18.x  (works on driver ≤26.09)
+        #   DLE 2026.1 → libze-intel-gpu 26.18.x+ (works on driver 26.18/26.22)
+        # Verify host driver: dpkg -l libze-intel-gpu1 | grep -oP '\d+\.\d+\.\d+'
+        BASE_IMAGE: intel/deep-learning-essentials:2026.1.0-devel-ubuntu24.04
+    container_name: llamafactory
+    image: llamafactory:xpu
+    ports:
+      - "7860:7860"
+      - "8000:8000"
+    ipc: host
+    tty: true
+    # shm_size: "16gb"  # ipc: host is set
+    stdin_open: true
+    command: bash
+    devices:
+      # Intel GPU character devices (renderD* and card* under /dev/dri).
+      # renderD* nodes are owned by group `render`; card* by group `video`.
+      - /dev/dri:/dev/dri
+    volumes:
+      # by-path symlinks are required for oneCCL's ze_fd_manager (2-GPU IPC).
+      # `devices:` alone does not carry sub-directories — this volume does.
+      - /dev/dri/by-path:/dev/dri/by-path
+      - ~/.cache/huggingface:/root/.cache/huggingface
+    group_add:
+      # Grant access to the Intel GPU device nodes.
+      # renderD* nodes are owned by group `render`; card* nodes by `video`.
+      # Use numeric GIDs here — Docker compose resolves group names against
+      # the CONTAINER's /etc/group (not the host), and the DLE base image
+      # does not carry a `render` group entry. Standard Linux GIDs:
+      # If your host uses different GIDs, run `getent group render video` and
+      # update these values accordingly.
+      # example output.
+      # getent group render video
+      # render:x:992:root
+      # video:x:44:support
+      - "992"   # render — owns /dev/dri/renderD* nodes
+      - "44"    # video  — owns /dev/dri/card* nodes
+    restart: unless-stopped
