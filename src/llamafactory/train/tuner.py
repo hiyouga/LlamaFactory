@@ -47,6 +47,7 @@ from .pt import run_pt
 from .rm import run_rm
 from .sft import run_sft
 from .trainer_utils import (
+    _get_ray_resource_name,
     get_placement_group,
     get_ray_head_node_ip,
     get_ray_remote_config_for_worker,
@@ -318,7 +319,7 @@ def _ray_training_function(ray_args: "RayArguments", config: dict[str, Any]) -> 
             ray.init()
 
     # verify resources
-    device_name = get_device_name().upper()
+    device_name = _get_ray_resource_name()
     total_devices = int(ray.cluster_resources().get(device_name, 0))
     if num_workers > total_devices:
         raise ValueError(
