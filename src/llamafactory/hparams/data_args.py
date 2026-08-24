@@ -143,6 +143,34 @@ class DataArguments:
         default=False,
         metadata={"help": "Whether or not to use a shared file system for the datasets."},
     )
+    dataset_format: Literal["default", "tokenized_ids"] = field(
+        default="default",
+        metadata={
+            "help": (
+                "Format of the input dataset. Use 'tokenized_ids' for pre-tokenized parquet files "
+                "containing token IDs. This bypasses the tokenization step during training."
+            )
+        },
+    )
+    data_files: Any = field(
+        default=None,
+        metadata={
+            "help": (
+                "Path(s) to data files for tokenized_ids format. "
+                "Can be a single path, comma-separated paths, or a list of paths."
+            )
+        },
+    )
+    dataset_columns: dict[str, str] | None = field(
+        default=None,
+        metadata={
+            "help": (
+                "Column name mapping for tokenized datasets. "
+                "Example: {'ids': 'token_ids', 'mask': 'attn_mask'}. "
+                "Defaults to {'ids': 'input_ids', 'mask': 'attention_mask'}."
+            )
+        },
+    )
 
     def __post_init__(self):
         def split_arg(arg):
@@ -152,6 +180,12 @@ class DataArguments:
 
         self.dataset = split_arg(self.dataset)
         self.eval_dataset = split_arg(self.eval_dataset)
+
+        # Handle data_files for tokenized_ids format
+        if self.dataset_format == "tokenized_ids":
+            if self.data_files is None:
+                raise ValueError("data_files must be specified when using dataset_format='tokenized_ids'.")
+            self.data_files = split_arg(self.data_files)
 
         if self.media_dir is None:
             self.media_dir = self.dataset_dir
