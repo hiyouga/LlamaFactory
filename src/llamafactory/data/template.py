@@ -447,6 +447,22 @@ class Llama2Template(Template):
 
 
 @dataclass
+class Granite30Template(Template):
+    r"""Place Granite 3.0 available tools before the optional system message."""
+
+    @override
+    def _format_system_and_tools(self, system: str, tools: Optional[str]) -> Optional["SLOTS"]:
+        if not tools:
+            return None
+
+        elements = self.format_tools.apply(content=tools)
+        if system:
+            elements += self.format_system.apply(content=system)
+
+        return elements
+
+
+@dataclass
 class ReasoningTemplate(Template):
     r"""A template that add thought to assistant message."""
 
@@ -1261,6 +1277,30 @@ register_template(
     ),
     format_assistant=StringFormatter(slots=["{{content}}<|end_of_text|>\n"]),
     format_system=StringFormatter(slots=["<|start_of_role|>system<|end_of_role|>{{content}}<|end_of_text|>\n"]),
+)
+
+
+register_template(
+    name="granite3_0",
+    format_user=StringFormatter(
+        slots=[
+            "<|start_of_role|>user<|end_of_role|>{{content}}<|end_of_text|>\n<|start_of_role|>assistant<|end_of_role|>"
+        ]
+    ),
+    format_assistant=StringFormatter(slots=["{{content}}<|end_of_text|>\n"]),
+    format_system=StringFormatter(slots=["<|start_of_role|>system<|end_of_role|>{{content}}<|end_of_text|>\n"]),
+    format_function=FunctionFormatter(
+        slots=["<|tool_call|>{{content}}<|end_of_text|>\n"],
+        tool_format="granite3_0",
+    ),
+    format_observation=StringFormatter(
+        slots=[
+            "<|start_of_role|>tool_response<|end_of_role|>{{content}}<|end_of_text|>\n"
+            "<|start_of_role|>assistant<|end_of_role|>"
+        ]
+    ),
+    format_tools=ToolFormatter(tool_format="granite3_0"),
+    template_class=Granite30Template,
 )
 
 
