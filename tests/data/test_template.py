@@ -461,6 +461,186 @@ def test_qwen3_template(cot_messages: bool):
 
 
 @pytest.mark.runs_on(["cpu", "mps"])
+def test_qwq_template_consistency():
+    assert DEFAULT_TEMPLATE["QwQ-32B-Instruct"] == "qwq"
+    assert DEFAULT_TEMPLATE["QwQ-32B-Preview-Instruct"] == "qwq_preview"
+    assert TEMPLATES["qwq"].__class__.__name__ == "QwQTemplate"
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_temperature",
+                "description": "Get the current temperature for a city.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}},
+                    "required": ["city"],
+                },
+            },
+        }
+    ]
+    system = "You are a helpful weather assistant. Use the available tools when needed."
+    history_thought = "<think>\n12 + 8 = 20.\n</think>\n\n"
+    tool_thought = "<think>\nI should use the weather tool.\n</think>\n\n"
+    function_call = '{"name":"get_current_temperature","arguments":{"city":"Paris"}}'
+    observation = '{"temperature_celsius":21}'
+    qwq_tool_messages = [
+        {"role": "user", "content": "How many markers are in the box?"},
+        {"role": "assistant", "content": history_thought + "There are 20 markers."},
+        {"role": "user", "content": "What is the current temperature in Paris?"},
+        {"role": "function", "content": tool_thought + function_call},
+        {"role": "observation", "content": observation},
+        {"role": "assistant", "content": tool_thought + "It is 21 degrees Celsius."},
+    ]
+    qwq_tool_reference = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": "How many markers are in the box?"},
+        {"role": "assistant", "content": history_thought + "There are 20 markers."},
+        {"role": "user", "content": "What is the current temperature in Paris?"},
+        {
+            "role": "assistant",
+            "content": tool_thought.rstrip(),
+            "tool_calls": [
+                {
+                    "type": "function",
+                    "function": {"name": "get_current_temperature", "arguments": {"city": "Paris"}},
+                }
+            ],
+        },
+        {"role": "tool", "name": "get_current_temperature", "content": observation},
+    ]
+    qwq_single_messages = [
+        {"role": "user", "content": "What is 17 multiplied by 24?"},
+        {"role": "assistant", "content": "<think>\n17 * 24 = 408.\n</think>\n\n408"},
+    ]
+    preview_messages = [
+        {"role": "user", "content": "What is 17 multiplied by 24?"},
+        {"role": "assistant", "content": "408"},
+    ]
+
+    cases = [
+        (
+            "Qwen/QwQ-32B",
+            "qwq",
+            qwq_single_messages,
+            [{"role": "user", "content": "What is 17 multiplied by 24?"}],
+            None,
+            None,
+        ),
+        ("Qwen/QwQ-32B", "qwq", qwq_tool_messages, qwq_tool_reference, system, tools),
+        (
+            "Qwen/QwQ-32B-Preview",
+            "qwq_preview",
+            preview_messages,
+            [{"role": "user", "content": "What is 17 multiplied by 24?"}],
+            None,
+            None,
+        ),
+        (
+            "Qwen/QwQ-32B-Preview",
+            "qwq_preview",
+            preview_messages,
+            [
+                {"role": "system", "content": system},
+                {"role": "user", "content": "What is 17 multiplied by 24?"},
+            ],
+            system,
+            None,
+        ),
+    ]
+    tokenizers = {}
+    for model_id, template_name, messages, reference_messages, case_system, case_tools in cases:
+        if model_id not in tokenizers:
+            tokenizers[model_id] = (
+                AutoTokenizer.from_pretrained(model_id),
+                AutoTokenizer.from_pretrained(model_id),
+            )
+
+        tokenizer, reference_tokenizer = tokenizers[model_id]
+        template = get_template_and_fix_tokenizer(
+            tokenizer,
+            DataArguments(template=template_name, enable_thinking=True),
+        )
+        prompt_ids, response_ids = template.encode_oneturn(
+            tokenizer,
+            messages,
+            system=case_system,
+            tools=json.dumps(case_tools, ensure_ascii=False) if case_tools else None,
+        )
+        reference_ids = reference_tokenizer.apply_chat_template(
+            reference_messages,
+            tools=case_tools,
+            tokenize=True,
+            add_generation_prompt=True,
+        )
+        if is_transformers_version_greater_than("5.0.0"):
+            reference_ids = reference_ids["input_ids"]
+
+        assert prompt_ids == reference_ids, (model_id, template_name, case_system, bool(case_tools))
+
+        reference_full_ids = reference_tokenizer.apply_chat_template(
+            [*reference_messages, {"role": "assistant", "content": messages[-1]["content"]}],
+            tools=case_tools,
+            tokenize=True,
+        )
+        if is_transformers_version_greater_than("5.0.0"):
+            reference_full_ids = reference_full_ids["input_ids"]
+
+        assert prompt_ids + response_ids == reference_full_ids, (
+            model_id,
+            template_name,
+            case_system,
+            bool(case_tools),
+        )
+
+    tokenizer, reference_tokenizer = tokenizers["Qwen/QwQ-32B"]
+    template = get_template_and_fix_tokenizer(
+        tokenizer,
+        DataArguments(template="qwq", enable_thinking=True),
+    )
+    function_target_messages = [
+        {"role": "user", "content": "What is the current temperature in Paris?"},
+        {"role": "function", "content": tool_thought + function_call},
+    ]
+    function_target_reference = [
+        {"role": "user", "content": "What is the current temperature in Paris?"},
+        {
+            "role": "assistant",
+            "content": tool_thought.rstrip(),
+            "tool_calls": [
+                {
+                    "type": "function",
+                    "function": {"name": "get_current_temperature", "arguments": {"city": "Paris"}},
+                }
+            ],
+        },
+    ]
+    prompt_ids, response_ids = template.encode_oneturn(
+        tokenizer,
+        function_target_messages,
+        tools=json.dumps(tools, ensure_ascii=False),
+    )
+    reference_prompt_ids = reference_tokenizer.apply_chat_template(
+        function_target_reference[:-1],
+        tools=tools,
+        tokenize=True,
+        add_generation_prompt=True,
+    )
+    reference_full_ids = reference_tokenizer.apply_chat_template(
+        function_target_reference,
+        tools=tools,
+        tokenize=True,
+    )
+    if is_transformers_version_greater_than("5.0.0"):
+        reference_prompt_ids = reference_prompt_ids["input_ids"]
+        reference_full_ids = reference_full_ids["input_ids"]
+
+    assert prompt_ids == reference_prompt_ids
+    assert prompt_ids + response_ids == reference_full_ids
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
 def test_parse_llama3_template():
     tokenizer = AutoTokenizer.from_pretrained(TINY_LLAMA3)
     template = parse_template(tokenizer)
