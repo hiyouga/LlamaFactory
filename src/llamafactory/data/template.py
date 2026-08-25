@@ -373,6 +373,67 @@ class Template:
 
 
 @dataclass
+class YiLegacyTemplate(Template):
+    r"""Tokenize legacy Yi prompt-response pairs in their rendered context."""
+
+    @staticmethod
+    def _convert_elements_to_text(tokenizer: "PreTrainedTokenizer", elements: "SLOTS") -> str:
+        text = []
+        for element in elements:
+            if isinstance(element, str):
+                text.append(element)
+            elif isinstance(element, dict):
+                text.append(element["token"])
+            elif isinstance(element, set):
+                if "bos_token" in element and tokenizer.bos_token is not None:
+                    text.append(tokenizer.bos_token)
+                elif "eos_token" in element and tokenizer.eos_token is not None:
+                    text.append(tokenizer.eos_token)
+
+        return "".join(text)
+
+    @staticmethod
+    def _get_common_prefix_length(first_ids: list[int], second_ids: list[int]) -> int:
+        common_length = 0
+        for first_id, second_id in zip(first_ids, second_ids):
+            if first_id != second_id:
+                break
+
+            common_length += 1
+
+        return common_length
+
+    @override
+    def _encode(
+        self,
+        tokenizer: "PreTrainedTokenizer",
+        messages: list[dict[str, str]],
+        system: Optional[str],
+        tools: Optional[str],
+    ) -> list[list[int]]:
+        processed_messages = self._process_messages(messages)
+        if processed_messages is not None:
+            messages = processed_messages
+
+        rendered_messages = self._render(messages, system, tools)
+        self._process_rendered_messages(rendered_messages, messages)
+        encoded_messages = []
+        for index in range(0, len(rendered_messages), 2):
+            source_text = self._convert_elements_to_text(tokenizer, rendered_messages[index])
+            source_ids = tokenizer.encode(source_text, add_special_tokens=False)
+            if index + 1 == len(rendered_messages):
+                encoded_messages.append(source_ids)
+                break
+
+            target_text = self._convert_elements_to_text(tokenizer, rendered_messages[index + 1])
+            full_ids = tokenizer.encode(source_text + target_text, add_special_tokens=False)
+            split_index = self._get_common_prefix_length(source_ids, full_ids)
+            encoded_messages.extend([full_ids[:split_index], full_ids[split_index:]])
+
+        return encoded_messages
+
+
+@dataclass
 class MossVLTemplate(Template):
     @override
     def _format_system_and_tools(self, system: str, tools: Optional[str]) -> "SLOTS":
@@ -2410,6 +2471,17 @@ register_template(
     format_assistant=StringFormatter(slots=["{{content}}<|im_end|>\n"]),
     format_system=StringFormatter(slots=["<|im_start|>system\n{{content}}<|im_end|>\n"]),
     stop_words=["<|im_end|>"],
+)
+
+
+# copied from yi template
+register_template(
+    name="yi_legacy",
+    format_user=StringFormatter(slots=["<|im_start|>user\n{{content}}<|im_end|>\n<|im_start|>assistant\n"]),
+    format_assistant=StringFormatter(slots=["{{content}}<|im_end|>\n"]),
+    format_system=StringFormatter(slots=["<|im_start|>system\n{{content}}<|im_end|>\n"]),
+    stop_words=["<|im_end|>"],
+    template_class=YiLegacyTemplate,
 )
 
 
