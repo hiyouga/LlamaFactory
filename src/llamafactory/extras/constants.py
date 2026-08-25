@@ -3508,14 +3508,6 @@ register_model_group(
             DownloadSource.DEFAULT: "01-ai/Yi-34B",
             DownloadSource.MODELSCOPE: "01ai/Yi-34B",
         },
-        "Yi-6B-Chat": {
-            DownloadSource.DEFAULT: "01-ai/Yi-6B-Chat",
-            DownloadSource.MODELSCOPE: "01ai/Yi-6B-Chat",
-        },
-        "Yi-34B-Chat": {
-            DownloadSource.DEFAULT: "01-ai/Yi-34B-Chat",
-            DownloadSource.MODELSCOPE: "01ai/Yi-34B-Chat",
-        },
         "Yi-6B-Chat-8bits": {
             DownloadSource.DEFAULT: "01-ai/Yi-6B-Chat-8bits",
             DownloadSource.MODELSCOPE: "01ai/Yi-6B-Chat-8bits",
@@ -3575,6 +3567,21 @@ register_model_group(
         },
     },
     template="yi",
+)
+
+
+register_model_group(
+    models={
+        "Yi-6B-Chat": {
+            DownloadSource.DEFAULT: "01-ai/Yi-6B-Chat",
+            DownloadSource.MODELSCOPE: "01ai/Yi-6B-Chat",
+        },
+        "Yi-34B-Chat": {
+            DownloadSource.DEFAULT: "01-ai/Yi-34B-Chat",
+            DownloadSource.MODELSCOPE: "01ai/Yi-34B-Chat",
+        },
+    },
+    template="yi_legacy",
 )
 
 
