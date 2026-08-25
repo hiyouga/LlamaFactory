@@ -13,9 +13,12 @@
 # limitations under the License.
 
 
+import sys
+
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
+from transformers.activations import ACT2FN
 
 from .seq_comm import SeqAllToAll4D
 from .ulysses import (
@@ -69,6 +72,22 @@ def get_parameter_local_cp(param, dim, cp_group, split_sections=None):
     dim_size = param.size(dim=dim)
     slices[dim] = slice(cp_rank * dim_size // cp_size, (cp_rank + 1) * dim_size // cp_size)
     return param[slices]
+
+
+def resolve_gdn_kernel(module, attribute: str, module_level: str):
+    """Return a GDN kernel, looking in both places transformers has kept them.
+
+    Up to transformers 5.14 the linear-attention kernels hang off the module, so
+    `self.causal_conv1d_fn` resolves. 5.15 moved them to module-level functions behind a
+    kernel-hub fallback decorator and dropped the attributes, so the same lookup returns
+    nothing. Check the instance first, since that is also where the NPU patch installs its
+    replacement, then the module the layer class came from.
+    """
+    kernel = getattr(module, attribute, None)
+    if kernel is not None:
+        return kernel
+
+    return getattr(sys.modules[type(module).__module__], module_level, None)
 
 
 def gdn_forward_with_cp(self, hidden_states, attention_mask=None, **kwargs):
@@ -164,9 +183,12 @@ def gdn_forward_with_cp(self, hidden_states, attention_mask=None, **kwargs):
             split_sections=[self.key_dim, self.key_dim, self.value_dim],
         )
 
-    if self.causal_conv1d_fn is not None:
-        mixed_qkv = self.causal_conv1d_fn(
-            x=mixed_qkv,
+    causal_conv1d_fn = resolve_gdn_kernel(self, "causal_conv1d_fn", "causal_conv1d_fn")
+    if causal_conv1d_fn is not None:
+        # The tensor goes in positionally: FLA names it `x`, the transformers 5.15 fallback
+        # names it `hidden_states`. Every other argument is keyword in both.
+        mixed_qkv = causal_conv1d_fn(
+            mixed_qkv,
             weight=conv1d_weight.squeeze(1),
             bias=conv1d_bias,
             activation=self.activation,
@@ -188,7 +210,7 @@ def gdn_forward_with_cp(self, hidden_states, attention_mask=None, **kwargs):
             dilation=self.conv1d.dilation,
             groups=self.conv_dim // cp_size,
         )
-        mixed_qkv = self.act(conv_out[..., :full_seq_len])
+        mixed_qkv = ACT2FN[self.activation](conv_out[..., :full_seq_len])
     mixed_qkv = mixed_qkv.transpose(1, 2).contiguous()  # [B, S, conv_dim/cp]
 
     query, key, value = torch.split(
@@ -222,7 +244,8 @@ def gdn_forward_with_cp(self, hidden_states, attention_mask=None, **kwargs):
     beta_final = beta.sigmoid()
 
     # Gated delta rule in HP layout (needs full sequence)
-    core_attn_out, _ = self.chunk_gated_delta_rule(
+    chunk_gated_delta_rule = resolve_gdn_kernel(self, "chunk_gated_delta_rule", "torch_chunk_gated_delta_rule")
+    core_attn_out, _ = chunk_gated_delta_rule(
         query,
         key,
         value,
