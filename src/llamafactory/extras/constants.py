@@ -2793,16 +2793,30 @@ register_model_group(
             DownloadSource.DEFAULT: "Qwen/Qwen2.5-Math-72B-Instruct",
             DownloadSource.MODELSCOPE: "Qwen/Qwen2.5-Coder-72B-Instruct",
         },
-        "QwQ-32B-Preview-Instruct": {
-            DownloadSource.DEFAULT: "Qwen/QwQ-32B-Preview",
-            DownloadSource.MODELSCOPE: "Qwen/QwQ-32B-Preview",
-        },
+    },
+    template="qwen",
+)
+
+
+register_model_group(
+    models={
         "QwQ-32B-Instruct": {
             DownloadSource.DEFAULT: "Qwen/QwQ-32B",
             DownloadSource.MODELSCOPE: "Qwen/QwQ-32B",
         },
     },
-    template="qwen",
+    template="qwq",
+)
+
+
+register_model_group(
+    models={
+        "QwQ-32B-Preview-Instruct": {
+            DownloadSource.DEFAULT: "Qwen/QwQ-32B-Preview",
+            DownloadSource.MODELSCOPE: "Qwen/QwQ-32B-Preview",
+        },
+    },
+    template="qwq_preview",
 )
 
 

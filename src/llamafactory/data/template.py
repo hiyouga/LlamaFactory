@@ -520,6 +520,84 @@ class ReasoningTemplate(Template):
 
 
 @dataclass
+class QwQTemplate(ReasoningTemplate):
+    r"""Render QwQ thinking and tokenizer-defined tool-call whitespace."""
+
+    @override
+    def _process_rendered_messages(self, rendered_messages: list["SLOTS"], messages: list[dict[str, str]]) -> None:
+        if not self.enable_thinking:
+            return
+
+        last_response_index = len(rendered_messages) - 1
+        for response_index in range(1, len(rendered_messages), 2):
+            if messages[response_index]["role"] not in {Role.ASSISTANT, Role.FUNCTION}:
+                continue
+
+            response_elements = rendered_messages[response_index]
+            if not response_elements or not isinstance(response_elements[0], str):
+                continue
+
+            if (
+                response_index != last_response_index
+                and messages[response_index]["role"] == Role.FUNCTION
+                and not self.preserve_thinking
+                and self.thought_words[1] in messages[response_index]["content"]
+            ):
+                response_elements[0] = "\n" + self.remove_thought(response_elements[0])
+                prompt_elements = rendered_messages[response_index - 1]
+                if prompt_elements and isinstance(prompt_elements[-1], str):
+                    prompt_elements[-1] += "\n"
+                    response_elements[0] = response_elements[0][1:]
+
+            if messages[response_index]["role"] == Role.FUNCTION and self.thought_words[1] in response_elements[0]:
+                function_thought_end = self.thought_words[1].rstrip("\n") + "\n"
+                response_elements[0] = response_elements[0].replace(self.thought_words[1], function_thought_end, 1)
+
+            response_content = response_elements[0]
+            matched_prefix = next(
+                (
+                    prefix
+                    for prefix in (self.thought_words[0], self.thought_words[0].strip())
+                    if response_content.startswith(prefix)
+                ),
+                None,
+            )
+            if matched_prefix is None and response_index != last_response_index:
+                if (
+                    self.thought_words[0].strip() not in messages[response_index]["content"]
+                    and self.thought_words[1].strip() not in messages[response_index]["content"]
+                ):
+                    messages[response_index]["content"] = self.thought_words[0] + messages[response_index]["content"]
+
+                continue
+
+            prompt_elements = rendered_messages[response_index - 1]
+            if prompt_elements and isinstance(prompt_elements[-1], str):
+                prompt_elements[-1] += self.thought_words[0]
+            else:
+                prompt_elements.append(self.thought_words[0])
+
+            if matched_prefix is not None:
+                response_elements[0] = response_content[len(matched_prefix) :]
+            elif messages[response_index]["content"]:
+                response_elements[0] = self.thought_words[1] + response_content
+
+            if (
+                self.thought_words[0].strip() not in messages[response_index]["content"]
+                and self.thought_words[1].strip() not in messages[response_index]["content"]
+            ):
+                messages[response_index]["content"] = self.thought_words[0] + messages[response_index]["content"]
+
+    @override
+    def _process_history_thoughts(self, messages: list[dict[str, str]], is_inference: bool) -> bool:
+        for message in messages[:-1]:
+            if message["role"] == Role.ASSISTANT:
+                message["content"] = self.remove_thought(message["content"])
+
+        return True
+
+
+@dataclass
 class Glm47ReasoningTemplate(ReasoningTemplate):
     r"""GLM-4.7 uses only the closing </think> tag for empty thinking blocks."""
 
@@ -2052,6 +2130,42 @@ register_template(
     ),
     format_tools=ToolFormatter(tool_format="qwen"),
     default_system="You are Qwen, created by Alibaba Cloud. You are a helpful assistant.",
+    stop_words=["<|im_end|>"],
+    replace_eos=True,
+)
+
+
+# copied from qwen template
+register_template(
+    name="qwq",
+    format_user=StringFormatter(slots=["<|im_start|>user\n{{content}}<|im_end|>\n<|im_start|>assistant\n"]),
+    format_assistant=StringFormatter(slots=["{{content}}<|im_end|>\n"]),
+    format_system=StringFormatter(slots=["<|im_start|>system\n{{content}}<|im_end|>\n"]),
+    format_function=FunctionFormatter(slots=["{{content}}<|im_end|>\n"], tool_format="qwen"),
+    format_observation=StringFormatter(
+        slots=["<|im_start|>user\n<tool_response>\n{{content}}\n</tool_response><|im_end|>\n<|im_start|>assistant\n"]
+    ),
+    format_tools=ToolFormatter(tool_format="qwen"),
+    stop_words=["<|im_end|>"],
+    replace_eos=True,
+    template_class=QwQTemplate,
+)
+
+
+# copied from qwen template
+register_template(
+    name="qwq_preview",
+    format_user=StringFormatter(slots=["<|im_start|>user\n{{content}}<|im_end|>\n<|im_start|>assistant\n"]),
+    format_assistant=StringFormatter(slots=["{{content}}<|im_end|>\n"]),
+    format_system=StringFormatter(slots=["<|im_start|>system\n{{content}}<|im_end|>\n"]),
+    format_function=FunctionFormatter(slots=["{{content}}<|im_end|>\n"], tool_format="qwen"),
+    format_observation=StringFormatter(
+        slots=["<|im_start|>user\n<tool_response>\n{{content}}\n</tool_response><|im_end|>\n<|im_start|>assistant\n"]
+    ),
+    format_tools=ToolFormatter(tool_format="qwen"),
+    default_system=(
+        "You are a helpful and harmless assistant. You are Qwen developed by Alibaba. You should think step-by-step."
+    ),
     stop_words=["<|im_end|>"],
     replace_eos=True,
 )
