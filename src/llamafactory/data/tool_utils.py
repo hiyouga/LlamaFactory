@@ -38,6 +38,14 @@ DEFAULT_TOOL_PROMPT = (
     "```\n"
 )
 
+FALCON_H1_TOOL_PROMPT = (
+    "You are a function calling AI model. You are provided with function signature within <tools> </tools> XML tags. "
+    "You may call one or more functions to assist with the user query. Don't make assumptions about what values to "
+    "plug into functions.\n<tools>\n{tool_text}\n</tools>\nFor each function call, return a json object with function "
+    "name and arguments within <tool_call> </tool_call> tags with the following schema:\n<tool_call>\n"
+    "{{'arguments': <args-dict>, 'name': <function-name>}}\n</tool_call>\n"
+)
+
 GLM4_TOOL_PROMPT = (
     "你是一个名为 ChatGLM 的人工智能助手。你是基于智谱 AI 公司训练的语言模型 GLM-4 模型开发的，"
     "你的任务是针对用户的问题和要求提供适当的答复和支持。\n\n# 可用工具{tool_text}"
@@ -630,6 +638,29 @@ class QwenToolUtils(ToolUtils):
         return results
 
 
+class FalconH1ToolUtils(QwenToolUtils):
+    r"""Falcon-H1 tool format used by its official chat template."""
+
+    @override
+    @staticmethod
+    def tool_formatter(tools: list[dict[str, Any]]) -> str:
+        tool_texts = []
+        for tool in tools:
+            wrapped_tool = tool if tool.get("type") == "function" else {"type": "function", "function": tool}
+            tool_texts.append(f"[{json.dumps(wrapped_tool, ensure_ascii=False)}]")
+
+        return FALCON_H1_TOOL_PROMPT.format(tool_text="".join(tool_texts))
+
+    @override
+    @staticmethod
+    def function_formatter(functions: list["FunctionCall"]) -> str:
+        function_texts = [
+            json.dumps({"arguments": json.loads(arguments), "name": name}, ensure_ascii=False)
+            for name, arguments in functions
+        ]
+        return "\n".join([f"<tool_call>\n{text}\n</tool_call>" for text in function_texts])
+
+
 class Qwen35ToolUtils(ToolUtils):
     r"""Qwen 3.5 tool using template."""
 
@@ -883,6 +914,7 @@ class LFM2ToolUtils(ToolUtils):
 
 TOOLS = {
     "default": DefaultToolUtils(),
+    "falcon_h1": FalconH1ToolUtils(),
     "gemma4": Gemma4ToolUtils(),
     "glm4": GLM4ToolUtils(),
     "llama3": Llama3ToolUtils(),

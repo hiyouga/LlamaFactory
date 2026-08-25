@@ -453,6 +453,24 @@ class Llama2Template(Template):
 
 
 @dataclass
+class FalconH1Template(Template):
+    r"""Falcon-H1 keeps tool instructions in an unterminated system turn."""
+
+    @override
+    def _format_system_and_tools(self, system: str, tools: Optional[str]) -> Optional["SLOTS"]:
+        if not tools:
+            return None
+
+        tool_text = self.format_tools.apply(content=tools)[0]
+        elements = ["<|im_start|>system\n"]
+        if system:
+            elements.append(system + "\n\n")
+
+        elements.append(tool_text)
+        return elements
+
+
+@dataclass
 class ReasoningTemplate(Template):
     r"""A template that add thought to assistant message."""
 
@@ -1010,9 +1028,12 @@ register_template(
     format_user=StringFormatter(slots=["<|im_start|>user\n{{content}}<|im_end|>\n<|im_start|>assistant\n"]),
     format_assistant=StringFormatter(slots=["{{content}}<|im_end|>\n"]),
     format_system=StringFormatter(slots=["<|im_start|>system\n{{content}}<|im_end|>\n"]),
+    format_function=FunctionFormatter(slots=["{{content}}<|im_end|>\n"], tool_format="falcon_h1"),
     format_observation=StringFormatter(slots=["<|im_start|>tool\n{{content}}<|im_end|>\n<|im_start|>assistant\n"]),
+    format_tools=ToolFormatter(tool_format="falcon_h1"),
     format_prefix=EmptyFormatter(slots=[{"bos_token"}]),
     stop_words=["<|im_end|>", "<|end_of_text|>"],
+    template_class=FalconH1Template,
 )
 
 

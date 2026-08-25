@@ -428,6 +428,106 @@ def test_phi4_template():
 
 
 @pytest.mark.runs_on(["cpu", "mps"])
+def test_falcon_h1_template_consistency():
+    instruct_models = [
+        "Falcon-H1-0.5B-Instruct",
+        "Falcon-H1-1.5B-Instruct",
+        "Falcon-H1-1.5B-Deep-Instruct",
+        "Falcon-H1-3B-Instruct",
+        "Falcon-H1-7B-Instruct",
+        "Falcon-H1-34B-Instruct",
+    ]
+    base_models = [
+        "Falcon-H1-0.5B-Base",
+        "Falcon-H1-1.5B-Base",
+        "Falcon-H1-1.5B-Deep-Base",
+        "Falcon-H1-3B-Base",
+        "Falcon-H1-7B-Base",
+        "Falcon-H1-34B-Base",
+    ]
+    for model_name in instruct_models:
+        assert DEFAULT_TEMPLATE[model_name] == "falcon_h1"
+    for model_name in base_models:
+        assert model_name not in DEFAULT_TEMPLATE
+
+    assert TEMPLATES["falcon_h1"].__class__.__name__ == "FalconH1Template"
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_temperature",
+                "description": "Get the current temperature for a city.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}},
+                    "required": ["city"],
+                },
+            },
+        }
+    ]
+    system = "You are a helpful weather assistant. Use the available tools when needed."
+    observation = '{"temperature_celsius":21}'
+    function_call = '<tool_call>{"name":"get_current_temperature","arguments":{"city":"Paris"}}</tool_call>'
+    no_tool_messages = [
+        {"role": "user", "content": "What is 17 multiplied by 24?"},
+        {"role": "assistant", "content": "408"},
+    ]
+    tool_messages = [
+        {"role": "user", "content": "What is the current temperature in Paris?"},
+        {"role": "function", "content": function_call},
+        {"role": "observation", "content": observation},
+        {"role": "assistant", "content": "It is 21 degrees Celsius."},
+    ]
+    tool_call_text = '<tool_call>\n{"arguments": {"city": "Paris"}, "name": "get_current_temperature"}\n</tool_call>'
+    cases = [
+        (
+            no_tool_messages,
+            [
+                {"role": "system", "content": system},
+                {"role": "user", "content": "What is 17 multiplied by 24?"},
+            ],
+            None,
+        ),
+        (
+            tool_messages,
+            [
+                {"role": "system", "content": system},
+                {"role": "user", "content": "What is the current temperature in Paris?"},
+                {"role": "assistant", "content": tool_call_text},
+                {"role": "tool", "content": observation},
+            ],
+            tools,
+        ),
+    ]
+
+    tokenizer = AutoTokenizer.from_pretrained("tiiuae/Falcon-H1-0.5B-Instruct")
+    reference_tokenizer = AutoTokenizer.from_pretrained("tiiuae/Falcon-H1-0.5B-Instruct")
+    template = get_template_and_fix_tokenizer(tokenizer, DataArguments(template="falcon_h1"))
+    extracted_calls = template.extract_tool(tool_call_text)
+    assert len(extracted_calls) == 1
+    assert extracted_calls[0].name == "get_current_temperature"
+    assert json.loads(extracted_calls[0].arguments) == {"city": "Paris"}
+    for messages, reference_messages, case_tools in cases:
+        prompt_ids, _ = template.encode_oneturn(
+            tokenizer,
+            messages,
+            system=system,
+            tools=json.dumps(case_tools, ensure_ascii=False) if case_tools else None,
+        )
+        reference_ids = reference_tokenizer.apply_chat_template(
+            reference_messages,
+            tools=case_tools,
+            tokenize=True,
+            add_generation_prompt=True,
+        )
+        if is_transformers_version_greater_than("5.0.0"):
+            reference_ids = reference_ids["input_ids"]
+
+        assert prompt_ids == reference_ids, bool(case_tools)
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
 @pytest.mark.xfail(not HF_TOKEN, reason="Authorization.")
 def test_qwen2_5_template():
     prompt_str = (
