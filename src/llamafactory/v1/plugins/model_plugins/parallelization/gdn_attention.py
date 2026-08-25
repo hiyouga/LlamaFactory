@@ -19,6 +19,7 @@ import torch.nn.functional as F
 
 from .seq_comm import SeqAllToAll4D
 from .ulysses import (
+    _get_text_position_ids,
     get_ulysses_sequence_parallel_group,
     get_ulysses_sequence_parallel_world_size,
 )
@@ -68,7 +69,52 @@ def get_parameter_local_cp(param, dim, cp_group, split_sections=None):
     slices = [slice(None)] * param.dim()
     dim_size = param.size(dim=dim)
     slices[dim] = slice(cp_rank * dim_size // cp_size, (cp_rank + 1) * dim_size // cp_size)
-    return param[slices]
+    return param[tuple(slices)]
+
+
+def packed_cu_seqlens(position_ids, cp_group, cp_size):
+    """Document boundaries of the whole packed sequence, or None when there is nothing to split.
+
+    Every rank holds one shard of position_ids, so the boundaries are only visible after
+    gathering them back into one sequence.
+    """
+    position_ids = _get_text_position_ids(position_ids)
+    if position_ids is None:
+        return None
+
+    global_position_ids = [torch.empty_like(position_ids) for _ in range(cp_size)]
+    dist.all_gather(global_position_ids, position_ids, group=cp_group)
+    global_position_ids = torch.cat(global_position_ids, dim=-1).contiguous()
+
+    try:
+        from transformers.modeling_flash_attention_utils import prepare_fa_kwargs_from_position_ids
+    except ImportError:
+        return None
+
+    cu_seqlens = prepare_fa_kwargs_from_position_ids(global_position_ids)[0][0]
+    if cu_seqlens.numel() <= 2:
+        # One unbroken sequence. Nothing for the kernels to separate, and claiming otherwise
+        # would demand FLA from runs that are not packed at all.
+        return None
+
+    return cu_seqlens
+
+
+def bind_position_ids(decoder_layer, gdn_module):
+    """Hand the decoder layer's position_ids down to the GDN module it owns.
+
+    Transformers calls `linear_attn(hidden_states=..., cache_params=..., attention_mask=...)`
+    and stops there, so the packed document boundaries the collator encodes in position_ids
+    never reach the delta-rule kernels. Full attention receives them through the attention
+    interface, which is why only the linear layers of a hybrid model lose them.
+    """
+    original_forward = decoder_layer.forward
+
+    def forward_with_position_ids(*args, **kwargs):
+        gdn_module.cp_position_ids = kwargs.get("position_ids")
+        return original_forward(*args, **kwargs)
+
+    decoder_layer.forward = forward_with_position_ids
 
 
 def gdn_forward_with_cp(self, hidden_states, attention_mask=None, **kwargs):
@@ -98,18 +144,14 @@ def gdn_forward_with_cp(self, hidden_states, attention_mask=None, **kwargs):
     batch_size, seq_len, _ = hidden_states.shape
     full_seq_len = seq_len * cp_size
 
-    # Extract position_ids and derive cu_seqlens for pack support
+    # The decoder layer does not forward position_ids, so bind_position_ids parks them on the
+    # module before this runs.
     position_ids = kwargs.get("position_ids", None)
+    if position_ids is None:
+        position_ids = getattr(self, "cp_position_ids", None)
     cu_seqlens = None
-    if position_ids is not None and batch_size == 1:
-        global_position_ids = [torch.empty_like(position_ids) for _ in range(cp_size)]
-        dist.all_gather(global_position_ids, position_ids, group=cp_group)
-        global_position_ids = torch.cat(global_position_ids, dim=-1).contiguous()
-        try:
-            from transformers.modeling_flash_attention_utils import prepare_fa_kwargs_from_position_ids
-            cu_seqlens = prepare_fa_kwargs_from_position_ids(global_position_ids)[0][0]
-        except ImportError:
-            cu_seqlens = None
+    if batch_size == 1:
+        cu_seqlens = packed_cu_seqlens(position_ids, cp_group, cp_size)
 
     # Input projections in CP layout: [B, seq/cp, hidden]
     qkv = self.in_proj_qkv(hidden_states)  # [B, seq/cp, key_dim*2 + value_dim]
