@@ -282,6 +282,14 @@ def test_qwen_tool_extractor():
 
 
 @pytest.mark.runs_on(["cpu", "mps"])
+def test_qwen38_tool_formatter():
+    formatter = ToolFormatter(tool_format="qwen3_8")
+    wrapped_tool = {"type": "function", "function": TOOLS[0]}
+    output = formatter.apply(content=json.dumps(TOOLS))[0]
+    assert json.dumps(wrapped_tool, ensure_ascii=False) in output
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
 def test_qwen_multi_tool_extractor():
     formatter = ToolFormatter(tool_format="qwen")
     result = (
