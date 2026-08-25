@@ -461,6 +461,195 @@ def test_qwen3_template(cot_messages: bool):
 
 
 @pytest.mark.runs_on(["cpu", "mps"])
+def test_qwen3_family_template_consistency():
+    qwen3_models = [
+        "Qwen3-0.6B-Thinking",
+        "Qwen3-1.7B-Thinking",
+        "Qwen3-4B-Thinking",
+        "Qwen3-8B-Thinking",
+        "Qwen3-14B-Thinking",
+        "Qwen3-32B-Thinking",
+        "Qwen3-30B-A3B-Thinking",
+        "Qwen3-235B-A22B-Thinking",
+        "Qwen3-0.6B-Thinking-GPTQ-Int8",
+        "Qwen3-1.7B-Thinking-GPTQ-Int8",
+        "Qwen3-4B-Thinking-AWQ",
+        "Qwen3-8B-Thinking-AWQ",
+        "Qwen3-14B-Thinking-AWQ",
+        "Qwen3-32B-Thinking-AWQ",
+        "Qwen3-30B-A3B-Thinking-GPTQ-Int4",
+        "Qwen3-235B-A22B-Thinking-GPTQ-Int4",
+    ]
+    for model_name in qwen3_models:
+        assert DEFAULT_TEMPLATE[model_name] == "qwen3"
+
+    reasoning_only_models = [
+        "Qwen3-4B-Thinking-2507",
+        "Qwen3-30B-A3B-Thinking-2507",
+        "Qwen3-235B-A22B-Thinking-2507",
+        "Qwen3-Next-80B-A3B-Thinking",
+    ]
+    for model_name in reasoning_only_models:
+        assert DEFAULT_TEMPLATE[model_name] == "qwen_thinking"
+
+    instruct_models = [
+        "Qwen3-4B-Instruct-2507",
+        "Qwen3-30B-A3B-Instruct-2507",
+        "Qwen3-235B-A22B-Instruct-2507",
+        "Qwen3-Next-80B-A3B-Instruct",
+    ]
+    for model_name in instruct_models:
+        assert DEFAULT_TEMPLATE[model_name] == "qwen3_instruct"
+
+    assert "Qwen/Qwen3-Next-80B-A3B-Thinking" not in SUPPORTED_MODELS
+    assert TEMPLATES["qwen3_nothink"].__class__.__name__ == "QwenNothinkTemplate"
+
+    system = "You are a helpful weather assistant. Use the available tools when needed."
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_temperature",
+                "description": "Get the current temperature for a city.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}},
+                    "required": ["city"],
+                },
+            },
+        }
+    ]
+    function_call = '{"name":"get_current_temperature","arguments":{"city":"Paris"}}'
+    observation = '{"temperature_celsius":21}'
+    history_thought = "<think>\n12 + 8 = 20.\n</think>\n\n"
+    tool_thought = "<think>\nI should use the weather tool.\n</think>\n\n"
+    thinking_messages = [
+        {"role": "user", "content": "How many markers are in the box?"},
+        {"role": "assistant", "content": history_thought + "There are 20 markers."},
+        {"role": "user", "content": "What is the current temperature in Paris?"},
+        {"role": "function", "content": tool_thought + function_call},
+        {"role": "observation", "content": observation},
+        {"role": "assistant", "content": tool_thought + "It is 21 degrees Celsius."},
+    ]
+    no_thinking_messages = [
+        {"role": "user", "content": "How many markers are in the box?"},
+        {"role": "assistant", "content": "There are 20 markers."},
+        {"role": "user", "content": "What is the current temperature in Paris?"},
+        {"role": "function", "content": function_call},
+        {"role": "observation", "content": observation},
+        {"role": "assistant", "content": "It is 21 degrees Celsius."},
+    ]
+    thinking_reference = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": "How many markers are in the box?"},
+        {"role": "assistant", "content": history_thought + "There are 20 markers."},
+        {"role": "user", "content": "What is the current temperature in Paris?"},
+        {
+            "role": "assistant",
+            "content": tool_thought.rstrip(),
+            "tool_calls": [
+                {
+                    "type": "function",
+                    "function": {"name": "get_current_temperature", "arguments": {"city": "Paris"}},
+                }
+            ],
+        },
+        {"role": "tool", "name": "get_current_temperature", "content": observation},
+    ]
+    no_thinking_reference = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": "How many markers are in the box?"},
+        {"role": "assistant", "content": "There are 20 markers."},
+        {"role": "user", "content": "What is the current temperature in Paris?"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "type": "function",
+                    "function": {"name": "get_current_temperature", "arguments": {"city": "Paris"}},
+                }
+            ],
+        },
+        {"role": "tool", "name": "get_current_temperature", "content": observation},
+    ]
+    cases = [
+        ("Qwen/Qwen3-4B", "qwen3", True, thinking_messages, thinking_reference),
+        ("Qwen/Qwen3-4B", "qwen3", False, no_thinking_messages, no_thinking_reference),
+        ("Qwen/Qwen3-4B", "qwen3_nothink", False, no_thinking_messages, no_thinking_reference),
+        ("Qwen/Qwen3-4B-Thinking-2507", "qwen_thinking", True, thinking_messages, thinking_reference),
+        ("Qwen/Qwen3-Next-80B-A3B-Thinking", "qwen_thinking", True, thinking_messages, thinking_reference),
+        ("Qwen/Qwen3-4B-Instruct-2507", "qwen3_instruct", False, no_thinking_messages, no_thinking_reference),
+        ("Qwen/Qwen3-Next-80B-A3B-Instruct", "qwen3_instruct", False, no_thinking_messages, no_thinking_reference),
+    ]
+    tokenizers = {}
+    for model_id, template_name, enable_thinking, messages, reference_messages in cases:
+        if model_id not in tokenizers:
+            tokenizers[model_id] = (
+                AutoTokenizer.from_pretrained(model_id),
+                AutoTokenizer.from_pretrained(model_id),
+            )
+
+        tokenizer, reference_tokenizer = tokenizers[model_id]
+        template = get_template_and_fix_tokenizer(
+            tokenizer,
+            DataArguments(template=template_name, enable_thinking=enable_thinking),
+        )
+        prompt_ids, response_ids = template.encode_oneturn(
+            tokenizer,
+            messages,
+            system=system,
+            tools=json.dumps(tools, ensure_ascii=False),
+        )
+        reference_prompt_ids = reference_tokenizer.apply_chat_template(
+            reference_messages,
+            tools=tools,
+            tokenize=True,
+            add_generation_prompt=True,
+            enable_thinking=enable_thinking,
+        )
+        reference_full_ids = reference_tokenizer.apply_chat_template(
+            [*reference_messages, {"role": "assistant", "content": messages[-1]["content"]}],
+            tools=tools,
+            tokenize=True,
+            add_generation_prompt=False,
+            enable_thinking=enable_thinking,
+        )
+        if is_transformers_version_greater_than("5.0.0"):
+            reference_prompt_ids = reference_prompt_ids["input_ids"]
+            reference_full_ids = reference_full_ids["input_ids"]
+
+        assert prompt_ids == reference_prompt_ids, (model_id, template_name, enable_thinking, "prompt")
+        assert prompt_ids + response_ids == reference_full_ids, (model_id, template_name, enable_thinking, "full")
+
+    history_prompts = {}
+    for template_name, model_id in (
+        ("qwen3", "Qwen/Qwen3-4B"),
+        ("qwen_thinking", "Qwen/Qwen3-4B-Thinking-2507"),
+    ):
+        tokenizer = tokenizers[model_id][0]
+        for preserve_thinking in (False, True):
+            template = get_template_and_fix_tokenizer(
+                tokenizer,
+                DataArguments(
+                    template=template_name,
+                    enable_thinking=True,
+                    preserve_thinking=preserve_thinking,
+                ),
+            )
+            prompt_ids, _ = template.encode_oneturn(
+                tokenizer,
+                thinking_messages,
+                system=system,
+                tools=json.dumps(tools, ensure_ascii=False),
+            )
+            history_prompts[template_name, preserve_thinking] = tokenizer.decode(prompt_ids, skip_special_tokens=False)
+
+        assert "12 + 8 = 20." not in history_prompts[template_name, False]
+        assert "12 + 8 = 20." in history_prompts[template_name, True]
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
 def test_parse_llama3_template():
     tokenizer = AutoTokenizer.from_pretrained(TINY_LLAMA3)
     template = parse_template(tokenizer)
