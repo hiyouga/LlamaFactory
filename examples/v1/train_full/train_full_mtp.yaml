@@ -1,0 +1,79 @@
+### Multi-Token Prediction (MTP) — all-in-one example
+#
+# Covers every MTP feature in one config:
+#   * MTP heads + scaled mtp_loss under FSDP2 (single or multi GPU)
+#   * Ulysses context parallelism (cp_mode/cp_size below) with the CP-aware
+#     `shift_input_ids_for_mtp` (chunk-tails take the next rank's first token) and
+#     `sequence_parallel_mtp_loss` (per-head all-gather of labels/loss_weights/log_probs)
+#   * DCP checkpoint snapshots + resume (save_steps / resume_from_checkpoint)
+#   * final HF-format export at the end of training (`save_model` path; shared
+#     embed_tokens/lm_head are stripped so mtp.* reloads cleanly)
+#
+# Run (do NOT invoke `torchrun -m` directly — the v1 launcher detects multiple GPUs
+# and re-launches via torchrun itself; manual `torchrun -m llamafactory.cli` pollutes
+# sys.argv and makes `data_args.train_dataset` come back as None):
+#
+#   USE_V1=1 llamafactory-cli train examples/v1/train_full/train_full_mtp.yaml
+#
+# To pin the process count instead of using all visible GPUs, set NPROC_PER_NODE:
+#   NPROC_PER_NODE=2 USE_V1=1 llamafactory-cli train examples/v1/train_full/train_full_mtp.yaml
+#
+# Resume (two-step):
+#   1) train to the save_steps snapshot, note loss & mtp_loss around that step;
+#   2) uncomment `resume_from_checkpoint` below and re-run — the first step's loss AND
+#      mtp_loss must continue smoothly (a jump back to a high initial loss means mtp.*
+#      or the optimizer was not restored). Keep `mtp_config` identical between runs:
+#      a different num_layers/loss_scale makes the grafted MTP structure mismatch the
+#      checkpoint FQNs.
+#
+# Single-GPU / no flash-attn: delete the `flash_attn` line and the `cp_mode`/`cp_size`
+# lines (CP needs >= 2 GPUs + flash-attn). CP requires `dist_config.name: fsdp2`
+# (not supported with DeepSpeed).
+#
+# Qwen3-0.6B is all `full_attention`, so this exercises the plain MTP + CP path. Switch
+# `model` to a Qwen3.5 series model to also exercise hybrid-attention layer selection.
+
+model: Qwen/Qwen3-0.6B
+model_class: llm
+
+kernel_config:
+  name: auto
+  include_kernels: auto
+
+quant_config: null
+
+# Multi-Token Prediction: `num_layers` is the number of MTP heads (K); `loss_scale`
+# weights the MTP loss in the total loss (total = lm_loss + loss_scale * mtp_loss).
+# `mtp_loss` is logged each logging_steps and should look healthy (finite, decreasing-ish).
+mtp_config:
+  name: mtp
+  num_layers: 1
+  loss_scale: 0.3
+
+flash_attn: flash_attention_2
+
+dist_config:
+  name: fsdp2
+  dcp_path: null
+  cp_mode: ulysses
+  cp_size: 2
+
+### data
+train_dataset: data/v1_sft_demo.yaml
+
+### training
+output_dir: outputs/test_mtp
+micro_batch_size: 1
+cutoff_len: 2048
+learning_rate: 1.0e-4
+max_steps: 20
+save_steps: 10          # snapshot a DCP checkpoint every 10 steps (model/ optimizer/ scheduler.pt ...)
+# save_ckpt_as_hf: true  # optional: also save an HF-format copy under checkpoint-*/hf_model
+
+### resume (uncomment for step 2 of the two-step resume flow)
+# resume_from_checkpoint: outputs/test_mtp/checkpoint-10
+# resume_from_checkpoint: auto   # auto-picks the latest checkpoint-* in output_dir
+
+### sample
+sample_backend: hf
+max_new_tokens: 128

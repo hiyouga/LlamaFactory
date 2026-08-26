@@ -47,14 +47,15 @@ dist_config:
   dcp_path: null
 
 train_dataset: data/v1_sft_demo.yaml
-output_dir: outputs/test_mtp_fsdp2
+output_dir: outputs/test_mtp
 micro_batch_size: 1
 cutoff_len: 2048
 learning_rate: 1.0e-4
 max_steps: 10
 ```
 
-See `examples/v1/train_full/train_full_mtp_fsdp2.yaml` for a complete example.
+See `examples/v1/train_full/train_full_mtp.yaml` for a complete example (MTP + CP +
+checkpoint save/resume in one config).
 
 ## Compatibility
 
@@ -123,5 +124,5 @@ dist_config:
   cp_size: 2
 ```
 
-See `examples/v1/train_full/train_full_mtp_ulysses_cp.yaml`. CP is not supported with
-DeepSpeed (use FSDP2).
+See the CP section of `examples/v1/train_full/train_full_mtp.yaml`. CP is not supported
+with DeepSpeed (use FSDP2).
