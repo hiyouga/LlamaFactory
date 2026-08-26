@@ -163,6 +163,27 @@ def _parse_args(
     return tuple(parsed_args)
 
 
+def _route_swanlab_reporting(finetuning_args: "FinetuningArguments", training_args: "TrainingArguments") -> None:
+    """Send ``report_to: swanlab`` through this project's SwanLab callback.
+
+    The example configs list ``swanlab`` as a ``report_to`` choice, but only ``use_swanlab``
+    reached our callback, so ``report_to: swanlab`` alone fell through to the one in
+    transformers. That one probes ``swanlab.get_run() is None``, and SwanLab raises
+    ``RuntimeError: No active Run`` instead of returning None, which ends training in
+    ``on_train_begin``. Ours also skips the setup off rank zero, which the transformers
+    callback does not.
+    """
+    report_to = training_args.report_to
+    if not report_to:
+        return
+
+    if isinstance(report_to, str):
+        report_to = [report_to]
+
+    if "swanlab" in report_to:
+        finetuning_args.use_swanlab = True
+
+
 def _verify_trackio_args(training_args: "TrainingArguments") -> None:
     """Validates Trackio-specific arguments.
 
@@ -537,6 +558,7 @@ def get_train_args(args: dict[str, Any] | list[str] | None = None) -> _TRAIN_CLS
 
     _set_env_vars()
     _verify_model_args(model_args, data_args, finetuning_args)
+    _route_swanlab_reporting(finetuning_args, training_args)
     _check_extra_dependencies(model_args, finetuning_args, training_args)
     _verify_trackio_args(training_args)
 
