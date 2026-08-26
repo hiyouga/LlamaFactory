@@ -2,10 +2,6 @@
 
 **English** | [简体中文](v1_mtp_zh.md)
 
-本特性为 v1 架构新增多 Token 预测(Multi-Token Prediction, MTP)支持,改编自
-[MindSpeed-LLM](https://gitcode.com/Ascend/MindSpeed-LLM) 中的 FSDP2 MTP 实现
-(`mindspeed_llm/fsdp2/models/common/mtp.py`)。
-
 MTP 在 decoder-only 因果语言模型上追加 `K` 个额外预测头。第 `k` 个头预测当前位置
 偏移 `k + 2` 处的 token(主头预测偏移 `1` 处)。训练总损失为:
 
