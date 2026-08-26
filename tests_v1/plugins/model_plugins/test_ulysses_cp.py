@@ -62,6 +62,49 @@ def test_true_mrope_position_ids_are_not_used_as_packed_boundaries():
     assert ulysses._get_text_position_ids(mrope_position_ids) is None
 
 
+def test_kv_heads_fewer_than_cp_size_are_repeated_before_the_all2all(monkeypatch: pytest.MonkeyPatch):
+    # apply_sequence_parallel() accepts models whose KV head count divides cp_size, so a
+    # 2-KV-head model may run on 4 ranks. tensor_split() would then hand ranks 2 and 3
+    # empty shards and all_to_all rejects them, so the heads have to be repeated first.
+    captured = []
+
+    def fake_all2all(_group, tensor, *_args):
+        captured.append(tensor)
+        return tensor
+
+    monkeypatch.setattr(ulysses.SeqAllToAll4D, "apply", fake_all2all)
+    monkeypatch.setattr(ulysses, "get_ulysses_sequence_parallel_world_size", lambda _: 4)
+    monkeypatch.setattr(ulysses.dist, "all_gather", lambda outputs, tensor, **_: [o.copy_(tensor) for o in outputs])
+
+    attention = ulysses.UlyssesAttention(sequence_process_group=object(), attn_fn=lambda query, *_, **__: query)
+    query = torch.zeros(1, 4, 8, 2)
+    key = torch.arange(2, dtype=torch.float32).view(1, 1, 2, 1).expand(1, 4, 2, 2).contiguous()
+
+    attention(query, key, key.clone(), None, 16)
+
+    query_sent, key_sent, value_sent = captured[:3]
+    assert [query_sent.shape[2], key_sent.shape[2], value_sent.shape[2]] == [8, 4, 4]
+    # Each rank owns two of the eight query heads, so it needs the KV head backing that
+    # group: ranks 0-1 take KV head 0 and ranks 2-3 take KV head 1.
+    assert key_sent[0, 0, :, 0].tolist() == [0.0, 0.0, 1.0, 1.0]
+    assert value_sent[0, 0, :, 0].tolist() == [0.0, 0.0, 1.0, 1.0]
+
+
+def test_kv_heads_matching_cp_size_are_left_alone(monkeypatch: pytest.MonkeyPatch):
+    captured = []
+
+    monkeypatch.setattr(ulysses.SeqAllToAll4D, "apply", lambda _g, tensor, *_a: captured.append(tensor) or tensor)
+    monkeypatch.setattr(ulysses, "get_ulysses_sequence_parallel_world_size", lambda _: 2)
+    monkeypatch.setattr(ulysses.dist, "all_gather", lambda outputs, tensor, **_: [o.copy_(tensor) for o in outputs])
+
+    attention = ulysses.UlyssesAttention(sequence_process_group=object(), attn_fn=lambda query, *_, **__: query)
+    key = torch.zeros(1, 4, 4, 2)
+
+    attention(torch.zeros(1, 4, 8, 2), key, key.clone(), None, 8)
+
+    assert [captured[1].shape[2], captured[2].shape[2]] == [4, 4]
+
+
 def _test_sequence_parallel_loss(
     local_rank: int, world_size: int, master_port: int, cp_size: int, dp_size: int, batch_size: int
 ):
