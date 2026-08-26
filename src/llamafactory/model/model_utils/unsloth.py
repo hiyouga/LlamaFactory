@@ -27,6 +27,31 @@ if TYPE_CHECKING:
 logger = logging.get_logger(__name__)
 
 
+def _coerce_unsloth_target_modules(model: "PreTrainedModel", target_modules: list[str]) -> list[str]:
+    r"""Coerce full VLM module paths into leaf names for Unsloth.
+
+    Unsloth builds LoRA regexes from leaf module names, but LlamaFactory's
+    ``patch_target_modules()`` returns full dotted paths for composite VLMs.
+    Convert those full paths back to leaf names while preserving the set of
+    targeted layers (forbidden modules were already filtered out upstream).
+    """
+    from .visual import COMPOSITE_MODELS
+
+    model_type = getattr(model.config, "model_type", None)
+    if model_type not in COMPOSITE_MODELS:
+        return target_modules
+
+    if not target_modules or all("." not in name for name in target_modules):
+        return target_modules
+
+    leaf_names = sorted({name.rsplit(".", 1)[-1] for name in target_modules})
+    logger.info_rank0(
+        f"Unsloth expects leaf LoRA targets; converting {model_type} composite target_modules "
+        f"to leaf names: {leaf_names}"
+    )
+    return leaf_names
+
+
 def _get_unsloth_kwargs(
     config: "PretrainedConfig",
     model_name_or_path: str,
@@ -70,6 +95,9 @@ def get_unsloth_peft_model(
 ) -> "PreTrainedModel":
     r"""Get the peft model for the pretrained model with unsloth. Used in training."""
     from unsloth import FastLanguageModel  # type: ignore
+
+    if "target_modules" in peft_kwargs:
+        peft_kwargs["target_modules"] = _coerce_unsloth_target_modules(model, peft_kwargs["target_modules"])
 
     unsloth_peft_kwargs = {
         "model": model,
