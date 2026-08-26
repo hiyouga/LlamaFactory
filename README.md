@@ -25,7 +25,7 @@
 
 <div align="center" markdown="1">
 
-### Check our new open-source project — 🐧 [PenguinHarness](https://github.com/Prism-Shadow/penguin-harness): Local-first multi-agent app development platform - Create, fine-tune, deploy AI apps automatically!
+### Check our new open-source project —<br>🐧 [PenguinHarness](https://github.com/Prism-Shadow/penguin-harness): Local-first multi-agent app development platform - Create, fine-tune, deploy AI apps automatically!
 
 Follow our project: https://github.com/Prism-Shadow/penguin-harness
 
