@@ -1,5 +1,7 @@
 # Multi-Token Prediction (MTP) — v1 architecture
 
+[English](v1_mtp.md) | **简体中文**
+
 This feature adds Multi-Token Prediction (MTP) support to the v1 architecture, adapted
 from the FSDP2 MTP implementation in
 [MindSpeed-LLM](https://gitcode.com/Ascend/MindSpeed-LLM) (`mindspeed_llm/fsdp2/models/common/mtp.py`).
