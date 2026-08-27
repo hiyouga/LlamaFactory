@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import os
 from typing import TYPE_CHECKING
 
@@ -52,6 +53,33 @@ MESSAGES_WITH_THOUGHT = [
     {"role": "user", "content": "你好"},
     {"role": "assistant", "content": "<think>\n模型思考内容\n</think>\n\n很高兴认识你！"},
 ]
+
+TOOL_CALL_MESSAGES = [
+    {"role": "user", "content": "What is the weather in Beijing?"},
+    {"role": "function", "content": '{"name": "get_weather", "arguments": {"city": "Beijing"}}'},
+    {"role": "observation", "content": '{"temperature": "25C"}'},
+    {"role": "assistant", "content": "It is 25C in Beijing."},
+    {"role": "user", "content": "And in Shanghai?"},
+    {"role": "function", "content": '{"name": "get_weather", "arguments": {"city": "Shanghai"}}'},
+    {"role": "observation", "content": '{"temperature": "30C"}'},
+    {"role": "assistant", "content": "It is 30C in Shanghai."},
+]
+
+TOOLS_JSON = json.dumps(
+    [
+        {
+            "name": "get_weather",
+            "description": "Get weather info",
+            "parameters": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"],
+            },
+        }
+    ]
+)
+
+SYSTEM_PROMPT = "You are a helpful assistant."
 
 
 def _check_tokenization(
@@ -191,10 +219,8 @@ def test_reasoning_encode_multiturn(cot_messages: bool, enable_thinking: bool):
     answer_str_2 = f"{messages[3]['content']}<|im_end|>\n"
     if not cot_messages or enable_thinking is False:
         if enable_thinking:
-            answer_str_1 = "<think>\n\n</think>\n\n" + answer_str_1
             answer_str_2 = "<think>\n\n</think>\n\n" + answer_str_2
         else:
-            prompt_str_1 = prompt_str_1 + "<think>\n\n</think>\n\n"
             prompt_str_2 = prompt_str_2 + "<think>\n\n</think>\n\n"
 
     _check_tokenization(
@@ -224,7 +250,6 @@ def test_reasoning_encode_multiturn_discarding_history_cot(enable_thinking: bool
         if discarding_history_cot:
             prompt_str_2 = prompt_str_2 + "<think>\n\n</think>\n\n"
         else:
-            prompt_str_1 = prompt_str_1 + "<think>\n\n</think>\n\n"
             prompt_str_2 = prompt_str_2 + "<think>\n\n</think>\n\n"
     else:
         if discarding_history_cot:
@@ -238,6 +263,30 @@ def test_reasoning_encode_multiturn_discarding_history_cot(enable_thinking: bool
         (encoded_pairs[0][0], encoded_pairs[0][1], encoded_pairs[1][0], encoded_pairs[1][1]),
         (prompt_str_1, answer_str_1, prompt_str_2, answer_str_2),
     )
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
+@pytest.mark.parametrize("template_name", ["qwen3_5", "qwen3_5_nothink", "qwen3_6"])
+def test_qwen35_tool_prompt_precedes_system_prompt(template_name: str):
+    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-8B")
+    template = get_template_and_fix_tokenizer(tokenizer, DataArguments(template=template_name, enable_thinking=False))
+    prompt_ids, _ = template.encode_oneturn(tokenizer, TOOL_CALL_MESSAGES[:4], system=SYSTEM_PROMPT, tools=TOOLS_JSON)
+    prompt = tokenizer.decode(prompt_ids)
+    assert prompt.startswith("<|im_start|>system\n# Tools")
+    assert prompt.index("# Tools") < prompt.index(SYSTEM_PROMPT)
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
+@pytest.mark.parametrize("template_name", ["qwen3_5", "qwen3_6"])
+def test_qwen35_thinking_starts_after_last_real_user_query(template_name: str):
+    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-8B")
+    template = get_template_and_fix_tokenizer(tokenizer, DataArguments(template=template_name, enable_thinking=False))
+    encoded_pairs = template.encode_multiturn(tokenizer, TOOL_CALL_MESSAGES, system=SYSTEM_PROMPT, tools=TOOLS_JSON)
+    decoded_prompts = [tokenizer.decode(prompt_ids) for prompt_ids, _ in encoded_pairs]
+    assert "<think>\n\n</think>\n\n" not in decoded_prompts[0]
+    assert "<think>\n\n</think>\n\n" not in decoded_prompts[1]
+    assert decoded_prompts[2].endswith("<|im_start|>assistant\n<think>\n\n</think>\n\n")
+    assert decoded_prompts[3].endswith("<|im_start|>assistant\n<think>\n\n</think>\n\n")
 
 
 @pytest.mark.runs_on(["cpu", "mps"])

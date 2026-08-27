@@ -132,8 +132,14 @@ class FunctionFormatter(StringFormatter):
             if thought_match:
                 function_str = thought_match.group(0) + function_str
         else:
-            thought_content = content.replace(tool_call_match.group(0), "")
-            functions = _parse_functions(tool_call_match.group(1))
+            extracted = self.tool_utils.tool_extractor(content)
+            if isinstance(extracted, list):
+                thought_content = re.sub(tool_call_regex, "", content)
+                functions = extracted
+            else:
+                thought_content = content.replace(tool_call_match.group(0), "")
+                functions = _parse_functions(tool_call_match.group(1))
+
             function_str = self.tool_utils.function_formatter(functions)
             function_str = thought_content + function_str
 

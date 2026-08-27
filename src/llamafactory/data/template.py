@@ -56,6 +56,7 @@ class Template:
     enable_thinking: Optional[bool]
     preserve_thinking: bool
     mm_plugin: "BasePlugin"
+    tools_before_system: bool = False
 
     def encode_oneturn(
         self,
@@ -110,6 +111,13 @@ class Template:
         r"""Get the token ids of thought words."""
         return tokenizer.encode(self.add_thought(), add_special_tokens=False)
 
+    def _get_system_content(self, system: str, tools: Optional[str]) -> str:
+        tool_text = self.format_tools.apply(content=tools)[0] if tools else ""
+        if self.tools_before_system and tool_text:
+            return tool_text.lstrip("\n") + (f"\n\n{system}" if system else "")
+
+        return system + tool_text
+
     def _convert_elements_to_ids(self, tokenizer: "PreTrainedTokenizer", elements: "SLOTS") -> list[int]:
         r"""Convert elements to token ids."""
         token_ids = []
@@ -149,8 +157,7 @@ class Template:
             if i == 0:
                 elements += self.format_prefix.apply()
                 if system or tools:
-                    tool_text = self.format_tools.apply(content=tools)[0] if tools else ""
-                    elements += self.format_system.apply(content=(system + tool_text))
+                    elements += self.format_system.apply(content=self._get_system_content(system, tools))
 
             if message["role"] == Role.USER:
                 elements += self.format_user.apply(content=message["content"], idx=str(i // 2))
@@ -398,8 +405,7 @@ class Llama2Template(Template):
             if i == 0:
                 elements += self.format_prefix.apply()
                 if system or tools:
-                    tool_text = self.format_tools.apply(content=tools)[0] if tools else ""
-                    system_text = self.format_system.apply(content=(system + tool_text))[0]
+                    system_text = self.format_system.apply(content=self._get_system_content(system, tools))[0]
 
             if message["role"] == Role.USER:
                 elements += self.format_user.apply(content=system_text + message["content"])
@@ -501,7 +507,13 @@ class ReasoningTemplate(Template):
         if discarding_history_cot:
             turn_indices = [len(messages) - 2]
         else:
-            turn_indices = range(0, len(messages), 2)
+            last_query_index = 0
+            for i in range(len(messages) - 2, -1, -2):
+                if messages[i]["role"] == Role.USER:
+                    last_query_index = i
+                    break
+
+            turn_indices = [i for i in range(0, len(messages), 2) if i >= last_query_index]
 
         for i in turn_indices:
             if (
@@ -551,6 +563,7 @@ def register_template(
     preserve_thinking: bool = False,
     mm_plugin: "BasePlugin" = get_mm_plugin(name="base"),
     template_class: type["Template"] = Template,
+    tools_before_system: bool = False,
 ) -> None:
     r"""Register a chat template.
 
@@ -603,6 +616,7 @@ def register_template(
         enable_thinking=enable_thinking,
         preserve_thinking=preserve_thinking,
         mm_plugin=mm_plugin,
+        tools_before_system=tools_before_system,
     )
 
 
@@ -2231,6 +2245,7 @@ register_template(
     replace_eos=True,
     mm_plugin=get_mm_plugin(name="qwen3_vl", image_token="<|image_pad|>", video_token="<|video_pad|>"),
     template_class=ReasoningTemplate,
+    tools_before_system=True,
 )
 
 
@@ -2247,6 +2262,7 @@ register_template(
     stop_words=["<|im_end|>"],
     replace_eos=True,
     mm_plugin=get_mm_plugin(name="qwen3_vl", image_token="<|image_pad|>", video_token="<|video_pad|>"),
+    tools_before_system=True,
 )
 
 
@@ -2265,6 +2281,7 @@ register_template(
     replace_eos=True,
     mm_plugin=get_mm_plugin(name="qwen3_vl", image_token="<|image_pad|>", video_token="<|video_pad|>"),
     template_class=ReasoningTemplate,
+    tools_before_system=True,
 )
 
 

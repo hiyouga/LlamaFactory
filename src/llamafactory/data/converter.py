@@ -145,28 +145,84 @@ class SharegptDatasetConverter(DatasetConverter):
         even_tags = (self.dataset_attr.assistant_tag, self.dataset_attr.function_tag)
         accept_tags = (odd_tags, even_tags)
         messages = example[self.dataset_attr.messages]
+
+        def _get_role(message: dict[str, Any]) -> str:
+            return message[self.dataset_attr.role_tag]
+
+        def _get_content(message: dict[str, Any]) -> str:
+            return message.get(self.dataset_attr.content_tag) or ""
+
+        def _wrap_tool_call(content: str) -> str:
+            if "<tool_call>" in content and "</tool_call>" in content:
+                return content
+
+            return f"<tool_call>\n{content}\n</tool_call>"
+
         if (
             self.dataset_attr.system_tag
             and len(messages) != 0
-            and messages[0][self.dataset_attr.role_tag] == self.dataset_attr.system_tag
+            and _get_role(messages[0]) == self.dataset_attr.system_tag
         ):
-            system = messages[0][self.dataset_attr.content_tag]
+            system = _get_content(messages[0])
             messages = messages[1:]
         else:
             system = example[self.dataset_attr.system] if self.dataset_attr.system else ""
 
         aligned_messages = []
         broken_data = False
+
+        preprocessed = []
+        i = 0
+        while i < len(messages):
+            role = _get_role(messages[i])
+            content = _get_content(messages[i])
+
+            if (
+                role == self.dataset_attr.assistant_tag
+                and i + 1 < len(messages)
+                and _get_role(messages[i + 1]) == self.dataset_attr.function_tag
+            ):
+                function_content = _wrap_tool_call(_get_content(messages[i + 1]))
+                merged_content = f"{content}\n\n{function_content}" if content else function_content
+                preprocessed.append(
+                    {
+                        self.dataset_attr.role_tag: self.dataset_attr.function_tag,
+                        self.dataset_attr.content_tag: merged_content,
+                    }
+                )
+                i += 2
+                continue
+
+            if role == self.dataset_attr.observation_tag:
+                obs_parts = [content]
+                while i + 1 < len(messages) and _get_role(messages[i + 1]) == self.dataset_attr.observation_tag:
+                    i += 1
+                    obs_parts.append(_get_content(messages[i]))
+
+                preprocessed.append(
+                    {
+                        self.dataset_attr.role_tag: self.dataset_attr.observation_tag,
+                        self.dataset_attr.content_tag: "\n</tool_response>\n<tool_response>\n".join(obs_parts),
+                    }
+                )
+                i += 1
+                continue
+
+            preprocessed.append({**messages[i], self.dataset_attr.content_tag: content})
+            i += 1
+
+        messages = preprocessed
+
         for turn_idx, message in enumerate(messages):
-            if message[self.dataset_attr.role_tag] not in accept_tags[turn_idx % 2]:
+            if _get_role(message) not in accept_tags[turn_idx % 2]:
                 logger.warning_rank0(f"Invalid role tag in {messages}.")
                 broken_data = True
                 break
 
             aligned_messages.append(
                 {
-                    "role": tag_mapping[message[self.dataset_attr.role_tag]],
-                    "content": message[self.dataset_attr.content_tag],
+                    "role": tag_mapping[_get_role(message)],
+                    "content": _get_content(message),
                 }
             )
 
@@ -203,12 +259,12 @@ class SharegptDatasetConverter(DatasetConverter):
             prompt = aligned_messages
             response = [
                 {
-                    "role": tag_mapping[chosen[self.dataset_attr.role_tag]],
-                    "content": chosen[self.dataset_attr.content_tag],
+                    "role": tag_mapping[_get_role(chosen)],
+                    "content": _get_content(chosen),
                 },
                 {
-                    "role": tag_mapping[rejected[self.dataset_attr.role_tag]],
-                    "content": rejected[self.dataset_attr.content_tag],
+                    "role": tag_mapping[_get_role(rejected)],
+                    "content": _get_content(rejected),
                 },
             ]
         else:  # normal example

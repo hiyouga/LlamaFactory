@@ -62,3 +62,69 @@ def test_sharegpt_converter():
         "_videos": None,
         "_audios": None,
     }
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
+def test_sharegpt_converter_merges_assistant_text_with_function_call():
+    dataset_attr = DatasetAttr("hf_hub", "llamafactory/tiny-supervised-dataset")
+    data_args = DataArguments()
+    example = {
+        "conversations": [
+            {"from": "human", "value": "What is the weather in Beijing?"},
+            {"from": "gpt", "value": "Let me check that for you."},
+            {"from": "function_call", "value": '{"name": "get_weather", "arguments": {"city": "Beijing"}}'},
+        ]
+    }
+    dataset_converter = get_dataset_converter("sharegpt", dataset_attr, data_args)
+    assert dataset_converter(example)["_response"] == [
+        {
+            "role": Role.FUNCTION.value,
+            "content": (
+                "Let me check that for you.\n\n"
+                '<tool_call>\n{"name": "get_weather", "arguments": {"city": "Beijing"}}\n</tool_call>'
+            ),
+        }
+    ]
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
+def test_sharegpt_converter_merges_consecutive_observations():
+    dataset_attr = DatasetAttr("hf_hub", "llamafactory/tiny-supervised-dataset")
+    data_args = DataArguments()
+    example = {
+        "conversations": [
+            {"from": "human", "value": "Fetch both results."},
+            {"from": "function_call", "value": '{"name": "lookup", "arguments": {"query": "both"}}'},
+            {"from": "observation", "value": '{"result": "first"}'},
+            {"from": "observation", "value": '{"result": "second"}'},
+            {"from": "gpt", "value": "Done."},
+        ]
+    }
+    dataset_converter = get_dataset_converter("sharegpt", dataset_attr, data_args)
+    out = dataset_converter(example)
+    assert out["_prompt"] == [
+        {"role": Role.USER.value, "content": "Fetch both results."},
+        {"role": Role.FUNCTION.value, "content": '{"name": "lookup", "arguments": {"query": "both"}}'},
+        {
+            "role": Role.OBSERVATION.value,
+            "content": '{"result": "first"}\n</tool_response>\n<tool_response>\n{"result": "second"}',
+        },
+    ]
+    assert out["_response"] == [{"role": Role.ASSISTANT.value, "content": "Done."}]
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
+def test_sharegpt_converter_coerces_single_none_observation():
+    dataset_attr = DatasetAttr("hf_hub", "llamafactory/tiny-supervised-dataset")
+    data_args = DataArguments()
+    example = {
+        "conversations": [
+            {"from": "human", "value": "Run noop."},
+            {"from": "function_call", "value": '{"name": "noop", "arguments": {}}'},
+            {"from": "observation", "value": None},
+            {"from": "gpt", "value": "Done."},
+        ]
+    }
+    dataset_converter = get_dataset_converter("sharegpt", dataset_attr, data_args)
+    out = dataset_converter(example)
+    assert out["_prompt"][2] == {"role": Role.OBSERVATION.value, "content": ""}

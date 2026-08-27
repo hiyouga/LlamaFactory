@@ -261,6 +261,50 @@ def test_qwen_multi_function_formatter():
 
 
 @pytest.mark.runs_on(["cpu", "mps"])
+def test_qwen35_function_formatter_preserves_text_before_native_tool_call():
+    formatter = FunctionFormatter(slots=["{{content}}<|im_end|>\n"], tool_format="qwen3_5")
+    content = (
+        "Let me check that for you.\n\n"
+        "<tool_call>\n"
+        "<function=get_weather>\n"
+        "<parameter=city>\n"
+        "Beijing\n"
+        "</parameter>\n"
+        "</function>\n"
+        "</tool_call>"
+    )
+    assert formatter.apply(content=content, tool_call_words=("<tool_call>", "</tool_call>")) == [
+        "Let me check that for you.\n\n"
+        "<tool_call>\n"
+        "<function=get_weather>\n"
+        "<parameter=city>\n"
+        "Beijing\n"
+        "</parameter>\n"
+        "</function>\n"
+        "</tool_call><|im_end|>\n"
+    ]
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
+def test_qwen35_function_formatter_preserves_text_before_json_tool_call():
+    formatter = FunctionFormatter(slots=["{{content}}<|im_end|>\n"], tool_format="qwen3_5")
+    content = (
+        "Let me check that for you.\n\n"
+        '<tool_call>\n{"name": "get_weather", "arguments": {"city": "Beijing"}}\n</tool_call>'
+    )
+    assert formatter.apply(content=content, tool_call_words=("<tool_call>", "</tool_call>")) == [
+        "Let me check that for you.\n\n"
+        "<tool_call>\n"
+        "<function=get_weather>\n"
+        "<parameter=city>\n"
+        "Beijing\n"
+        "</parameter>\n"
+        "</function>\n"
+        "</tool_call><|im_end|>\n"
+    ]
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
 def test_qwen_tool_formatter():
     formatter = ToolFormatter(tool_format="qwen")
     wrapped_tool = {"type": "function", "function": TOOLS[0]}
