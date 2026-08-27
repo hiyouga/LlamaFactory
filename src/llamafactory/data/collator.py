@@ -323,6 +323,23 @@ class MultiModalDataCollatorForSeq2Seq(DataCollatorForSeq2Seq):
                 f"got {features['position_ids'].shape}, expected {expected_position_ids_shape}."
             )
 
+    def _align_position_ids_with_input_ids(self, features: dict[str, "torch.Tensor"]) -> None:
+        r"""Pad position ids to the input length after the tokenizer collator runs."""
+        if "position_ids" not in features:
+            return
+
+        input_seq_len = features["input_ids"].size(-1)
+        position_seq_len = features["position_ids"].size(-1)
+        if position_seq_len > input_seq_len:
+            raise ValueError(f"position_ids length ({position_seq_len}) exceeds input_ids length ({input_seq_len}).")
+
+        pad_len = input_seq_len - position_seq_len
+        if pad_len == 0:
+            return
+
+        padding = (0, pad_len) if self.tokenizer.padding_side == "right" else (pad_len, 0)
+        features["position_ids"] = F.pad(features["position_ids"], padding, value=0)
+
     def __call__(self, features: list[dict[str, Any]]) -> dict[str, "torch.Tensor"]:
         model_type = getattr(getattr(self.model, "config", None), "model_type", None)
         is_moss_vl = model_type == "moss_vl"
@@ -385,10 +402,14 @@ class MultiModalDataCollatorForSeq2Seq(DataCollatorForSeq2Seq):
                 features[0]["input_ids"] = features[0]["input_ids"] + fake_input_ids
                 features[0]["attention_mask"] = features[0]["attention_mask"] + [0] * len(fake_input_ids)
                 features[0]["labels"] = features[0]["labels"] + [IGNORE_INDEX] * len(fake_input_ids)
+                if "position_ids" in features[0]:
+                    features[0]["position_ids"] = features[0]["position_ids"] + [0] * len(fake_input_ids)
             else:
                 features[0]["input_ids"] = fake_input_ids + features[0]["input_ids"]
                 features[0]["attention_mask"] = [0] * len(fake_input_ids) + features[0]["attention_mask"]
                 features[0]["labels"] = [IGNORE_INDEX] * len(fake_input_ids) + features[0]["labels"]
+                if "position_ids" in features[0]:
+                    features[0]["position_ids"] = [0] * len(fake_input_ids) + features[0]["position_ids"]
 
             batch_input_ids[0] = features[0]["input_ids"]
 
@@ -421,6 +442,7 @@ class MultiModalDataCollatorForSeq2Seq(DataCollatorForSeq2Seq):
             mm_inputs["mm_token_type_ids"] = torch.tensor(padded, dtype=torch.long)
 
         features: dict[str, torch.Tensor] = super().__call__(features)
+        self._align_position_ids_with_input_ids(features)
 
         bsz, seq_len = features["input_ids"].shape[:2]
         is_omni = model_type in [

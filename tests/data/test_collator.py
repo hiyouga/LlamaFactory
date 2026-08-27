@@ -137,6 +137,100 @@ def test_multimodal_collator():
         assert batch_input[k].eq(torch.tensor(expected_input[k])).all()
 
 
+@pytest.mark.parametrize(
+    ("padding_side", "expected_position_ids"),
+    [
+        ("right", [[0, 1, 2, 0, 0]]),
+        ("left", [[0, 0, 0, 1, 2]]),
+    ],
+)
+def test_align_position_ids_with_input_ids(padding_side, expected_position_ids):
+    data_collator = object.__new__(MultiModalDataCollatorForSeq2Seq)
+    data_collator.tokenizer = type("Tokenizer", (), {"padding_side": padding_side})()
+    features = {
+        "input_ids": torch.tensor([[10, 11, 12, 13, 14]]),
+        "position_ids": torch.tensor([[0, 1, 2]]),
+    }
+
+    data_collator._align_position_ids_with_input_ids(features)
+
+    assert features["position_ids"].eq(torch.tensor(expected_position_ids)).all()
+
+
+def test_align_position_ids_rejects_longer_sequence():
+    data_collator = object.__new__(MultiModalDataCollatorForSeq2Seq)
+    data_collator.tokenizer = type("Tokenizer", (), {"padding_side": "right"})()
+    features = {
+        "input_ids": torch.tensor([[10, 11]]),
+        "position_ids": torch.tensor([[0, 1, 2]]),
+    }
+
+    with pytest.raises(ValueError, match="position_ids length .* exceeds input_ids length"):
+        data_collator._align_position_ids_with_input_ids(features)
+
+
+def test_multimodal_collator_aligns_packed_position_ids_after_fake_image():
+    class DummyTokenizer:
+        padding_side = "right"
+        pad_token_id = 0
+
+        def encode(self, text, add_special_tokens=False):
+            return [20, 21]
+
+        def pad(self, features, padding, max_length, pad_to_multiple_of, return_tensors):
+            target_length = max(len(feature["input_ids"]) for feature in features)
+            target_length = ((target_length + pad_to_multiple_of - 1) // pad_to_multiple_of) * pad_to_multiple_of
+            batch = {}
+            for key in features[0]:
+                values = []
+                for feature in features:
+                    value = feature[key]
+                    if key == "input_ids":
+                        value = value + [self.pad_token_id] * (target_length - len(value))
+                    elif key == "attention_mask":
+                        value = value + [0] * (target_length - len(value))
+
+                    values.append(value)
+
+                batch[key] = torch.tensor(values)
+
+            return batch
+
+    class DummyMMPlugin:
+        image_token = "<image>"
+        audio_token = None
+
+        def process_messages(self, messages, images, videos, audios, processor):
+            return messages
+
+        def process_token_ids(self, input_ids, labels, images, videos, audios, tokenizer, processor):
+            return input_ids, labels
+
+        def get_mm_inputs(self, images, videos, audios, imglens, vidlens, audlens, input_ids, processor):
+            return {}
+
+    template = type("Template", (), {"mm_plugin": DummyMMPlugin()})()
+    data_collator = MultiModalDataCollatorForSeq2Seq(
+        tokenizer=DummyTokenizer(),
+        template=template,
+        pad_to_multiple_of=8,
+        label_pad_token_id=IGNORE_INDEX,
+    )
+    features = [
+        {
+            "input_ids": [10, 11, 12],
+            "attention_mask": [1, 1, 1],
+            "position_ids": [0, 1, 2],
+            "labels": [10, 11, 12],
+        }
+    ]
+
+    batch = data_collator(features)
+
+    assert batch["input_ids"].shape == batch["position_ids"].shape == (1, 8)
+    assert batch["position_ids"].eq(torch.tensor([[0, 1, 2, 0, 0, 0, 0, 0]])).all()
+
+
 def _make_packed_feature(
     *,
     packing_params: dict,
