@@ -380,3 +380,39 @@ def test_lfm2_tool_round_trip():
     assert len(extracted) == 1
     assert extracted[0][0] == original["name"]
     assert json.loads(extracted[0][1]) == original["arguments"]
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
+def test_glm4_moe_tool_extractor_no_match():
+    formatter = ToolFormatter(tool_format="glm4_moe")
+    result = "This is a regular response without tool calls."
+    extracted = formatter.extract(result)
+    assert extracted == result
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
+def test_glm4_moe_tool_round_trip():
+    formatter = FunctionFormatter(slots=["{{content}}"], tool_format="glm4_moe")
+    tool_formatter = ToolFormatter(tool_format="glm4_moe")
+    original = {"name": "my_func", "arguments": {"arg1": "hello", "arg2": 42, "arg3": True}}
+    formatted = formatter.apply(content=json.dumps(original))
+    extracted = tool_formatter.extract(formatted[0])
+    assert len(extracted) == 1
+    assert extracted[0][0] == original["name"]
+    assert json.loads(extracted[0][1]) == original["arguments"]
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
+def test_glm4_moe_multi_tool_round_trip():
+    formatter = FunctionFormatter(slots=["{{content}}"], tool_format="glm4_moe")
+    tool_formatter = ToolFormatter(tool_format="glm4_moe")
+    originals = [
+        {"name": "my_func", "arguments": {"arg1": "hello", "arg2": 42}},
+        {"name": "other_func", "arguments": {"arg3": "world"}},
+    ]
+    formatted = formatter.apply(content=json.dumps(originals))
+    extracted = tool_formatter.extract(formatted[0])
+    assert len(extracted) == 2
+    for (name, arguments), original in zip(extracted, originals):
+        assert name == original["name"]
+        assert json.loads(arguments) == original["arguments"]

@@ -708,9 +708,30 @@ class GLM4MOEToolUtils(QwenToolUtils):
                 if not isinstance(value, str):
                     value = json.dumps(value, ensure_ascii=False)
                 prompt += "\n<arg_value>" + value + "</arg_value>"
+            prompt += "\n</tool_call>"
             function_texts.append(prompt)
 
         return "\n".join(function_texts)
+
+    @override
+    @staticmethod
+    def tool_extractor(content: str) -> Union[str, list["FunctionCall"]]:
+        regex = re.compile(r"<tool_call>\s*([^\s<>]+)\s*(.*?)\s*</tool_call>", re.DOTALL)
+        results = []
+        for func_name, params_block in re.findall(regex, content):
+            args_dict = {}
+            param_pattern = re.compile(r"<arg_key>(.*?)</arg_key>\s*<arg_value>(.*?)</arg_value>", re.DOTALL)
+            for key, raw_value in re.findall(param_pattern, params_block):
+                value = raw_value.strip()
+                try:
+                    parsed_value = json.loads(value)
+                except json.JSONDecodeError:
+                    parsed_value = raw_value.strip()
+                args_dict[key.strip()] = parsed_value
+
+            results.append(FunctionCall(func_name.strip(), json.dumps(args_dict, ensure_ascii=False)))
+
+        return results if results else content
 
 
 class SeedToolUtils(ToolUtils):
