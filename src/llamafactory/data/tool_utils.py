@@ -798,10 +798,9 @@ class LFM2ToolUtils(ToolUtils):
             args = json.loads(args_json)
             kwargs_parts = []
             for key, value in args.items():
-                if isinstance(value, str):
-                    kwargs_parts.append(f'{key}="{value}"')
-                else:
-                    kwargs_parts.append(f"{key}={json.dumps(value, ensure_ascii=False)}")
+                # json.dumps produces a correctly-escaped, double-quoted literal for strings
+                # too; raw f'{key}="{value}"' interpolation broke on quotes/newlines/backslashes.
+                kwargs_parts.append(f"{key}={json.dumps(value, ensure_ascii=False)}")
 
             calls.append(f"{name}({', '.join(kwargs_parts)})")
 

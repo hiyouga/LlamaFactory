@@ -380,3 +380,17 @@ def test_lfm2_tool_round_trip():
     assert len(extracted) == 1
     assert extracted[0][0] == original["name"]
     assert json.loads(extracted[0][1]) == original["arguments"]
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
+def test_lfm2_tool_round_trip_special_characters():
+    # String arguments with quotes/newlines/backslashes used to be interpolated raw,
+    # producing invalid Python that the extractor then failed to parse.
+    formatter = FunctionFormatter(slots=["{{content}}"], tool_format="lfm2")
+    tool_formatter = ToolFormatter(tool_format="lfm2")
+    original = {"name": "my_func", "arguments": {"text": 'he said "hi"\nnext line', "path": "C:\\tmp"}}
+    formatted = formatter.apply(content=json.dumps(original))
+    extracted = tool_formatter.extract(formatted[0])
+    assert len(extracted) == 1
+    assert extracted[0][0] == original["name"]
+    assert json.loads(extracted[0][1]) == original["arguments"]
