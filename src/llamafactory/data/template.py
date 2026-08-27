@@ -56,6 +56,7 @@ class Template:
     enable_thinking: Optional[bool]
     preserve_thinking: bool
     mm_plugin: "BasePlugin"
+    tools_before_system: bool
 
     def encode_oneturn(
         self,
@@ -150,7 +151,12 @@ class Template:
                 elements += self.format_prefix.apply()
                 if system or tools:
                     tool_text = self.format_tools.apply(content=tools)[0] if tools else ""
-                    elements += self.format_system.apply(content=(system + tool_text))
+                    if self.tools_before_system and tool_text and system:
+                        elements += self.format_system.apply(content=(tool_text.lstrip("\n") + "\n\n" + system))
+                    elif self.tools_before_system and tool_text:
+                        elements += self.format_system.apply(content=tool_text.lstrip("\n"))
+                    else:
+                        elements += self.format_system.apply(content=(system + tool_text))
 
             if message["role"] == Role.USER:
                 elements += self.format_user.apply(content=message["content"], idx=str(i // 2))
@@ -501,7 +507,14 @@ class ReasoningTemplate(Template):
         if discarding_history_cot:
             turn_indices = [len(messages) - 2]
         else:
-            turn_indices = range(0, len(messages), 2)
+            # Find last_query_index: the last prompt that is a real user query (not observation/tool_response)
+            # This matches native jinja's last_query_index mechanism which only adds <think> blocks
+            # to assistant turns after the last real user question.
+            last_query_index = 0
+            for i in range(0, len(messages), 2):
+                if messages[i]["role"] == Role.USER:
+                    last_query_index = i
+            turn_indices = [i for i in range(0, len(messages), 2) if i >= last_query_index]
 
         for i in turn_indices:
             if (
@@ -551,6 +564,7 @@ def register_template(
     preserve_thinking: bool = False,
     mm_plugin: "BasePlugin" = get_mm_plugin(name="base"),
     template_class: type["Template"] = Template,
+    tools_before_system: bool = False,
 ) -> None:
     r"""Register a chat template.
 
@@ -603,6 +617,7 @@ def register_template(
         enable_thinking=enable_thinking,
         preserve_thinking=preserve_thinking,
         mm_plugin=mm_plugin,
+        tools_before_system=tools_before_system,
     )
 
 
@@ -666,6 +681,7 @@ def parse_template(tokenizer: "PreTrainedTokenizer") -> "Template":
         enable_thinking=True,
         preserve_thinking=False,
         mm_plugin=get_mm_plugin(name="base"),
+        tools_before_system=False,
     )
 
 
@@ -2231,6 +2247,7 @@ register_template(
     replace_eos=True,
     mm_plugin=get_mm_plugin(name="qwen3_vl", image_token="<|image_pad|>", video_token="<|video_pad|>"),
     template_class=ReasoningTemplate,
+    tools_before_system=True,
 )
 
 
@@ -2247,6 +2264,7 @@ register_template(
     stop_words=["<|im_end|>"],
     replace_eos=True,
     mm_plugin=get_mm_plugin(name="qwen3_vl", image_token="<|image_pad|>", video_token="<|video_pad|>"),
+    tools_before_system=True,
 )
 
 
@@ -2265,6 +2283,7 @@ register_template(
     replace_eos=True,
     mm_plugin=get_mm_plugin(name="qwen3_vl", image_token="<|image_pad|>", video_token="<|video_pad|>"),
     template_class=ReasoningTemplate,
+    tools_before_system=True,
 )
 
 

@@ -157,6 +157,41 @@ class SharegptDatasetConverter(DatasetConverter):
 
         aligned_messages = []
         broken_data = False
+
+        # Pre-process: merge consecutive observations into single observation (Issue B).
+        # This matches native jinja behavior where multiple tool_responses are merged in one user block.
+        # Reference: OpenAIDatasetConverter (L265-276) already implements this for openai format.
+        preprocessed = []
+        i = 0
+        while i < len(messages):
+            role = messages[i][self.dataset_attr.role_tag]
+            # Content may be None/missing in some tool-call SFT datasets; fall back to "" to avoid TypeError on join.
+            content = messages[i][self.dataset_attr.content_tag] or ""
+
+            # Issue B: merge consecutive observations
+            if role == self.dataset_attr.observation_tag:
+                obs_parts = [content]
+                while (
+                    i + 1 < len(messages)
+                    and messages[i + 1][self.dataset_attr.role_tag] == self.dataset_attr.observation_tag
+                ):
+                    i += 1
+                    obs_parts.append(messages[i][self.dataset_attr.content_tag] or "")
+                merged_obs = "\n</tool_response>\n<tool_response>\n".join(obs_parts)
+                preprocessed.append(
+                    {
+                        self.dataset_attr.role_tag: self.dataset_attr.observation_tag,
+                        self.dataset_attr.content_tag: merged_obs,
+                    }
+                )
+                i += 1
+                continue
+
+            preprocessed.append(messages[i])
+            i += 1
+
+        messages = preprocessed
+
         for turn_idx, message in enumerate(messages):
             if message[self.dataset_attr.role_tag] not in accept_tags[turn_idx % 2]:
                 logger.warning_rank0(f"Invalid role tag in {messages}.")

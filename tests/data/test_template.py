@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import os
 from typing import TYPE_CHECKING
 
@@ -190,11 +191,10 @@ def test_reasoning_encode_multiturn(cot_messages: bool, enable_thinking: bool):
     prompt_str_2 = f"<|im_start|>user\n{MESSAGES[2]['content']}<|im_end|>\n<|im_start|>assistant\n"
     answer_str_2 = f"{messages[3]['content']}<|im_end|>\n"
     if not cot_messages or enable_thinking is False:
+        # last_query_index logic: only the last user turn (turn 2) gets think tokens
         if enable_thinking:
-            answer_str_1 = "<think>\n\n</think>\n\n" + answer_str_1
             answer_str_2 = "<think>\n\n</think>\n\n" + answer_str_2
         else:
-            prompt_str_1 = prompt_str_1 + "<think>\n\n</think>\n\n"
             prompt_str_2 = prompt_str_2 + "<think>\n\n</think>\n\n"
 
     _check_tokenization(
@@ -224,7 +224,7 @@ def test_reasoning_encode_multiturn_discarding_history_cot(enable_thinking: bool
         if discarding_history_cot:
             prompt_str_2 = prompt_str_2 + "<think>\n\n</think>\n\n"
         else:
-            prompt_str_1 = prompt_str_1 + "<think>\n\n</think>\n\n"
+            # last_query_index logic: only the last user turn (turn 2) gets think tokens
             prompt_str_2 = prompt_str_2 + "<think>\n\n</think>\n\n"
     else:
         if discarding_history_cot:
@@ -409,3 +409,247 @@ def test_parse_qwen3_template():
     assert template.format_system.slots == ["<|im_start|>system\n{{content}}<|im_end|>\n"]
     assert template.format_prefix.slots == []
     assert template.default_system == ""
+
+
+# === Tool-call regression tests for qwen3_5/qwen3_6 templates ===
+# Verifies that tools_before_system produces tool_text BEFORE system in the encoded output,
+# matching native jinja chat_template behavior for Qwen3.5/3.6 models.
+
+TOOL_CALL_MESSAGES = [
+    {"role": "user", "content": "What is the weather in Beijing?"},
+    {"role": "function", "content": '{"name": "get_weather", "arguments": {"city": "Beijing"}}'},
+    {"role": "observation", "content": '{"temperature": "25°C", "condition": "sunny"}'},
+    {"role": "assistant", "content": "The weather in Beijing is sunny, 25°C."},
+]
+
+TOOL_CALL_MULTITURN_MESSAGES = [
+    {"role": "user", "content": "What is the weather in Beijing?"},
+    {"role": "function", "content": '{"name": "get_weather", "arguments": {"city": "Beijing"}}'},
+    {"role": "observation", "content": '{"temperature": "25°C", "condition": "sunny"}'},
+    {"role": "assistant", "content": "The weather in Beijing is sunny, 25°C."},
+    {"role": "user", "content": "And in Shanghai?"},
+    {"role": "function", "content": '{"name": "get_weather", "arguments": {"city": "Shanghai"}}'},
+    {"role": "observation", "content": '{"temperature": "30°C", "condition": "cloudy"}'},
+    {"role": "assistant", "content": "Shanghai is cloudy, 30°C."},
+]
+
+TOOLS_JSON = json.dumps([{
+    "name": "get_weather",
+    "description": "Get weather info",
+    "parameters": {
+        "type": "object",
+        "properties": {"city": {"type": "string"}},
+        "required": ["city"],
+    },
+}])
+
+SYSTEM_PROMPT = "You are a helpful assistant."
+
+
+def _build_qwen35_tool_text(tools_json: str) -> str:
+    """Reproduce the tool_text that ToolFormatter(tool_format='qwen3_5') would generate."""
+    tools = json.loads(tools_json)
+    tool_text = ""
+    for tool in tools:
+        tool_text += "\n" + json.dumps(tool, ensure_ascii=False)
+    # QWEN35_TOOL_PROMPT with {tool_text} placeholder
+    return (
+        "\n\n# Tools\n\nYou have access to the following functions:\n\n<tools>" + tool_text
+        + "\n</tools>\n\nIf you choose to call a function ONLY reply in the following format"
+        " with NO suffix:\n\n"
+        "<tool_call>\n<function=example_function_name>\n<parameter=example_parameter_1>\n"
+        "value_1\n</parameter>\n"
+        "<parameter=example_parameter_2>\nThis is the value for the second parameter\n"
+        "that can span\nmultiple lines\n"
+        "</parameter>\n</function>\n</tool_call>\n\n<IMPORTANT>\nReminder:\n"
+        "- Function calls MUST follow the specified format: "
+        "an inner <function=...></function> block must be nested within"
+        " <tool_call></tool_call> XML tags\n"
+        "- Required parameters MUST be specified\n"
+        "- You may provide optional reasoning for your function call in natural language "
+        "BEFORE the function call, but NOT after\n"
+        "- If there is no function call available, answer the question like normal"
+        " with your current knowledge "
+        "and do not tell the user about function calls\n</IMPORTANT>"
+    )
+
+
+def _build_qwen35_function_call(name: str, arguments: dict) -> str:
+    """Reproduce the function_formatter output for qwen3_5."""
+    prompt = f"<tool_call>\n<function={name}>"
+    for key, value in arguments.items():
+        prompt += f"\n<parameter={key}>"
+        if not isinstance(value, str):
+            value = json.dumps(value, ensure_ascii=False)
+        prompt += f"\n{value}\n</parameter>"
+    prompt += "\n</function>\n</tool_call>"
+    return prompt
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
+@pytest.mark.parametrize("template_name", ["qwen3_5_nothink", "qwen3_6"])
+def test_qwen35_toolcall_oneturn(template_name: str):
+    """Regression: tools_before_system puts tool_text before system in system block."""
+    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-8B")
+    # Use enable_thinking=False so <think> tokens go into prompt (not answer),
+    # keeping expected strings simpler while still testing tools_before_system.
+    data_args = DataArguments(template=template_name, enable_thinking=False)
+    template = get_template_and_fix_tokenizer(tokenizer, data_args)
+
+    prompt_ids, answer_ids = template.encode_oneturn(
+        tokenizer, TOOL_CALL_MESSAGES, system=SYSTEM_PROMPT, tools=TOOLS_JSON
+    )
+
+    # Build expected strings matching native jinja: tools BEFORE system
+    tool_text = _build_qwen35_tool_text(TOOLS_JSON)
+    system_content = tool_text.lstrip("\n") + "\n\n" + SYSTEM_PROMPT
+    function_call_str = _build_qwen35_function_call("get_weather", {"city": "Beijing"})
+
+    expected_prompt = (
+        f"<|im_start|>system\n{system_content}<|im_end|>\n"
+        f"<|im_start|>user\n{TOOL_CALL_MESSAGES[0]['content']}<|im_end|>\n"
+        f"<|im_start|>assistant\n{function_call_str}<|im_end|>\n"
+        "<|im_start|>user\n<tool_response>\n"
+        f"{TOOL_CALL_MESSAGES[2]['content']}"
+        "\n</tool_response><|im_end|>\n"
+        "<|im_start|>assistant\n"
+    )
+    # For ReasoningTemplate (qwen3_6), <think>\n\n</think>\n\n is appended to prompt
+    if template_name == "qwen3_6":
+        expected_prompt += "<think>\n\n</think>\n\n"
+
+    expected_answer = f"{TOOL_CALL_MESSAGES[3]['content']}<|im_end|>\n"
+
+    actual_prompt = tokenizer.decode(prompt_ids)
+    actual_answer = tokenizer.decode(answer_ids)
+
+    assert actual_prompt == expected_prompt, (
+        f"Prompt mismatch for {template_name}.\n"
+        f"Expected:\n{expected_prompt}\n\nActual:\n{actual_prompt}"
+    )
+    assert actual_answer == expected_answer, (
+        f"Answer mismatch for {template_name}.\n"
+        f"Expected:\n{expected_answer}\n\nActual:\n{actual_answer}"
+    )
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
+@pytest.mark.parametrize("template_name", ["qwen3_5_nothink", "qwen3_6"])
+def test_qwen35_toolcall_oneturn_no_system(template_name: str):
+    """Regression: tools_before_system=True with empty system must take the
+    `elif self.tools_before_system and tool_text:` branch in template.py
+    (line ~156-157), producing system block = tool_text only (no extra
+    newlines, no leading empty system text).
+    """
+    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-8B")
+    data_args = DataArguments(template=template_name, enable_thinking=False)
+    template = get_template_and_fix_tokenizer(tokenizer, data_args)
+
+    prompt_ids, answer_ids = template.encode_oneturn(
+        tokenizer, TOOL_CALL_MESSAGES, system="", tools=TOOLS_JSON
+    )
+
+    # No user-provided system => system block contains only tool_text (lstripped).
+    tool_text = _build_qwen35_tool_text(TOOLS_JSON)
+    system_content = tool_text.lstrip("\n")
+    function_call_str = _build_qwen35_function_call("get_weather", {"city": "Beijing"})
+
+    expected_prompt = (
+        f"<|im_start|>system\n{system_content}<|im_end|>\n"
+        f"<|im_start|>user\n{TOOL_CALL_MESSAGES[0]['content']}<|im_end|>\n"
+        f"<|im_start|>assistant\n{function_call_str}<|im_end|>\n"
+        "<|im_start|>user\n<tool_response>\n"
+        f"{TOOL_CALL_MESSAGES[2]['content']}"
+        "\n</tool_response><|im_end|>\n"
+        "<|im_start|>assistant\n"
+    )
+    if template_name == "qwen3_6":
+        expected_prompt += "<think>\n\n</think>\n\n"
+
+    expected_answer = f"{TOOL_CALL_MESSAGES[3]['content']}<|im_end|>\n"
+
+    actual_prompt = tokenizer.decode(prompt_ids)
+    actual_answer = tokenizer.decode(answer_ids)
+
+    assert actual_prompt == expected_prompt, (
+        f"Prompt mismatch for {template_name} (no-system branch).\n"
+        f"Expected:\n{expected_prompt}\n\nActual:\n{actual_prompt}"
+    )
+    assert actual_answer == expected_answer
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
+@pytest.mark.parametrize("template_name", ["qwen3_5_nothink", "qwen3_6"])
+def test_qwen35_toolcall_multiturn(template_name: str):
+    """Regression: multi-turn tool-call encoding with tools_before_system."""
+    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-8B")
+    data_args = DataArguments(template=template_name, enable_thinking=False)
+    template = get_template_and_fix_tokenizer(tokenizer, data_args)
+
+    encoded_pairs = template.encode_multiturn(
+        tokenizer, TOOL_CALL_MULTITURN_MESSAGES, system=SYSTEM_PROMPT, tools=TOOLS_JSON
+    )
+
+    tool_text = _build_qwen35_tool_text(TOOLS_JSON)
+    system_content = tool_text.lstrip("\n") + "\n\n" + SYSTEM_PROMPT
+    fc1 = _build_qwen35_function_call("get_weather", {"city": "Beijing"})
+    fc2 = _build_qwen35_function_call("get_weather", {"city": "Shanghai"})
+
+    # For ReasoningTemplate (qwen3_6) with enable_thinking=False:
+    # <think>\n\n</think>\n\n is appended to prompts in turn_indices.
+    # turn_indices are turns >= last_query_index (index 4 = "And in Shanghai?").
+    # So turns 3 and 4 (0-indexed pairs 2 and 3) get think tokens in prompt.
+    think_suffix = "<think>\n\n</think>\n\n" if template_name == "qwen3_6" else ""
+
+    # Turn 1: user question -> function_call
+    expected_prompt_1 = (
+        f"<|im_start|>system\n{system_content}<|im_end|>\n"
+        f"<|im_start|>user\n{TOOL_CALL_MULTITURN_MESSAGES[0]['content']}<|im_end|>\n"
+        "<|im_start|>assistant\n"
+    )
+    expected_answer_1 = f"{fc1}<|im_end|>\n"
+
+    # Turn 2: observation -> assistant reply
+    expected_prompt_2 = (
+        "<|im_start|>user\n<tool_response>\n"
+        f"{TOOL_CALL_MULTITURN_MESSAGES[2]['content']}"
+        "\n</tool_response><|im_end|>\n<|im_start|>assistant\n"
+    )
+    expected_answer_2 = f"{TOOL_CALL_MULTITURN_MESSAGES[3]['content']}<|im_end|>\n"
+
+    # Turn 3: user follow-up -> function_call (in turn_indices for qwen3_6)
+    expected_prompt_3 = (
+        f"<|im_start|>user\n{TOOL_CALL_MULTITURN_MESSAGES[4]['content']}<|im_end|>\n"
+        "<|im_start|>assistant\n" + think_suffix
+    )
+    expected_answer_3 = f"{fc2}<|im_end|>\n"
+
+    # Turn 4: observation -> final reply (in turn_indices for qwen3_6)
+    expected_prompt_4 = (
+        "<|im_start|>user\n<tool_response>\n"
+        f"{TOOL_CALL_MULTITURN_MESSAGES[6]['content']}"
+        "\n</tool_response><|im_end|>\n<|im_start|>assistant\n" + think_suffix
+    )
+    expected_answer_4 = f"{TOOL_CALL_MULTITURN_MESSAGES[7]['content']}<|im_end|>\n"
+
+    expected = [
+        (expected_prompt_1, expected_answer_1),
+        (expected_prompt_2, expected_answer_2),
+        (expected_prompt_3, expected_answer_3),
+        (expected_prompt_4, expected_answer_4),
+    ]
+
+    assert len(encoded_pairs) == 4, f"Expected 4 turn pairs, got {len(encoded_pairs)}"
+    for idx, ((prompt_ids, answer_ids), (exp_prompt, exp_answer)) in enumerate(
+        zip(encoded_pairs, expected)
+    ):
+        actual_prompt = tokenizer.decode(prompt_ids)
+        actual_answer = tokenizer.decode(answer_ids)
+        assert actual_prompt == exp_prompt, (
+            f"Turn {idx + 1} prompt mismatch for {template_name}.\n"
+            f"Expected:\n{exp_prompt}\n\nActual:\n{actual_prompt}"
+        )
+        assert actual_answer == exp_answer, (
+            f"Turn {idx + 1} answer mismatch for {template_name}.\n"
+            f"Expected:\n{exp_answer}\n\nActual:\n{actual_answer}"
+        )
