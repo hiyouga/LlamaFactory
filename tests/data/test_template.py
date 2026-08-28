@@ -12,7 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import os
+from copy import deepcopy
 from typing import TYPE_CHECKING
 
 import pytest
@@ -95,6 +97,58 @@ def _check_template(
     assert content_str == prompt_str + answer_str
     assert content_ids == prompt_ids + answer_ids
     _check_tokenization(tokenizer, (prompt_ids, answer_ids), (prompt_str, answer_str))
+
+
+def test_rendering_refactor_preserves_existing_template_boundaries():
+    class ByteTokenizer:
+        bos_token_id = 1000
+        eos_token_id = 1001
+
+        def encode(self, text: str, add_special_tokens: bool = False) -> list[int]:
+            assert not add_special_tokens
+            return list(text.encode())
+
+        def convert_tokens_to_ids(self, token: str) -> int:
+            raise AssertionError(f"Unexpected direct token conversion: {token}")
+
+    tokenizer = ByteTokenizer()
+    messages = [
+        {"role": "user", "content": "question"},
+        {"role": "assistant", "content": "answer"},
+    ]
+
+    standard = deepcopy(TEMPLATES["falcon_h1"])
+    prompt_ids, response_ids = standard.encode_oneturn(tokenizer, messages, system="system")
+    assert prompt_ids == [tokenizer.bos_token_id] + tokenizer.encode(
+        "<|im_start|>system\nsystem<|im_end|>\n"
+        "<|im_start|>user\nquestion<|im_end|>\n<|im_start|>assistant\n"
+    )
+    assert response_ids == tokenizer.encode("answer<|im_end|>\n")
+
+    tools = json.dumps(
+        [
+            {
+                "name": "search",
+                "description": "Search documents.",
+                "parameters": {"type": "object", "properties": {}, "required": []},
+            }
+        ]
+    )
+    moss_vl = deepcopy(TEMPLATES["moss_vl"])
+    prompt_ids, response_ids = moss_vl.encode_oneturn(tokenizer, messages, tools=tools)
+    tool_text = moss_vl.format_tools.apply(content=tools)[0].lstrip("\n")
+    assert prompt_ids == tokenizer.encode(
+        moss_vl.format_system.apply(content=tool_text)[0]
+        + "<|im_start|>user\nquestion<|im_end|>\n<|im_start|>assistant\n"
+    )
+    assert response_ids == tokenizer.encode("answer<|im_end|>\n")
+
+    llama2 = deepcopy(TEMPLATES["gemma"])
+    prompt_ids, response_ids = llama2.encode_oneturn(tokenizer, messages, system="system")
+    assert prompt_ids == [tokenizer.bos_token_id] + tokenizer.encode(
+        "<start_of_turn>user\nsystem\n\nquestion<end_of_turn>\n<start_of_turn>model\n"
+    )
+    assert response_ids == tokenizer.encode("answer<end_of_turn>\n")
 
 
 def test_moss_vl_registration():
@@ -336,6 +390,106 @@ def test_phi4_template():
     )
     answer_str = f"{MESSAGES[3]['content']}<|im_end|>"
     _check_template("microsoft/phi-4", "phi4", prompt_str, answer_str)
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
+def test_falcon_h1_template_consistency():
+    instruct_models = [
+        "Falcon-H1-0.5B-Instruct",
+        "Falcon-H1-1.5B-Instruct",
+        "Falcon-H1-1.5B-Deep-Instruct",
+        "Falcon-H1-3B-Instruct",
+        "Falcon-H1-7B-Instruct",
+        "Falcon-H1-34B-Instruct",
+    ]
+    base_models = [
+        "Falcon-H1-0.5B-Base",
+        "Falcon-H1-1.5B-Base",
+        "Falcon-H1-1.5B-Deep-Base",
+        "Falcon-H1-3B-Base",
+        "Falcon-H1-7B-Base",
+        "Falcon-H1-34B-Base",
+    ]
+    for model_name in instruct_models:
+        assert DEFAULT_TEMPLATE[model_name] == "falcon_h1"
+    for model_name in base_models:
+        assert model_name not in DEFAULT_TEMPLATE
+
+    assert TEMPLATES["falcon_h1"].__class__.__name__ == "FalconH1Template"
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_temperature",
+                "description": "Get the current temperature for a city.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}},
+                    "required": ["city"],
+                },
+            },
+        }
+    ]
+    system = "You are a helpful weather assistant. Use the available tools when needed."
+    observation = '{"temperature_celsius":21}'
+    function_call = '<tool_call>{"name":"get_current_temperature","arguments":{"city":"Paris"}}</tool_call>'
+    no_tool_messages = [
+        {"role": "user", "content": "What is 17 multiplied by 24?"},
+        {"role": "assistant", "content": "408"},
+    ]
+    tool_messages = [
+        {"role": "user", "content": "What is the current temperature in Paris?"},
+        {"role": "function", "content": function_call},
+        {"role": "observation", "content": observation},
+        {"role": "assistant", "content": "It is 21 degrees Celsius."},
+    ]
+    tool_call_text = '<tool_call>\n{"arguments": {"city": "Paris"}, "name": "get_current_temperature"}\n</tool_call>'
+    cases = [
+        (
+            no_tool_messages,
+            [
+                {"role": "system", "content": system},
+                {"role": "user", "content": "What is 17 multiplied by 24?"},
+            ],
+            None,
+        ),
+        (
+            tool_messages,
+            [
+                {"role": "system", "content": system},
+                {"role": "user", "content": "What is the current temperature in Paris?"},
+                {"role": "assistant", "content": tool_call_text},
+                {"role": "tool", "content": observation},
+            ],
+            tools,
+        ),
+    ]
+
+    tokenizer = AutoTokenizer.from_pretrained("tiiuae/Falcon-H1-0.5B-Instruct")
+    reference_tokenizer = AutoTokenizer.from_pretrained("tiiuae/Falcon-H1-0.5B-Instruct")
+    template = get_template_and_fix_tokenizer(tokenizer, DataArguments(template="falcon_h1"))
+    extracted_calls = template.extract_tool(tool_call_text)
+    assert len(extracted_calls) == 1
+    assert extracted_calls[0].name == "get_current_temperature"
+    assert json.loads(extracted_calls[0].arguments) == {"city": "Paris"}
+    for messages, reference_messages, case_tools in cases:
+        prompt_ids, _ = template.encode_oneturn(
+            tokenizer,
+            messages,
+            system=system,
+            tools=json.dumps(case_tools, ensure_ascii=False) if case_tools else None,
+        )
+        reference_ids = reference_tokenizer.apply_chat_template(
+            reference_messages,
+            tools=case_tools,
+            tokenize=True,
+            add_generation_prompt=True,
+        )
+        if is_transformers_version_greater_than("5.0.0"):
+            reference_ids = reference_ids["input_ids"]
+
+        assert prompt_ids == reference_ids, bool(case_tools)
 
 
 @pytest.mark.runs_on(["cpu", "mps"])

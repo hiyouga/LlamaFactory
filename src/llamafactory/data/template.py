@@ -141,16 +141,43 @@ class Template:
         Turn 0: prefix + system + query        resp
         Turn t: query                          resp.
         """
+        processed_messages = self._process_messages(messages)
+        if processed_messages is not None:
+            messages = processed_messages
+
+        rendered_messages = self._render(messages, system, tools)
+        self._process_rendered_messages(rendered_messages, messages)
+        return [self._convert_elements_to_ids(tokenizer, elements) for elements in rendered_messages]
+
+    def _process_messages(self, messages: list[dict[str, str]]) -> Optional[list[dict[str, str]]]:
+        r"""Return model-specific messages before rendering, or use the original messages."""
+        pass
+
+    def _format_system_and_tools(self, system: str, tools: Optional[str]) -> Optional["SLOTS"]:
+        r"""Return model-specific system and tool elements, or use the default formatter."""
+        pass
+
+    def _render(
+        self,
+        messages: list[dict[str, str]],
+        system: Optional[str],
+        tools: Optional[str],
+    ) -> list["SLOTS"]:
+        r"""Render messages into formatter elements before tokenization."""
         system = system or self.default_system
-        encoded_messages = []
+        rendered_messages = []
         for i, message in enumerate(messages):
             elements = []
 
             if i == 0:
                 elements += self.format_prefix.apply()
                 if system or tools:
-                    tool_text = self.format_tools.apply(content=tools)[0] if tools else ""
-                    elements += self.format_system.apply(content=(system + tool_text))
+                    system_and_tools = self._format_system_and_tools(system, tools)
+                    if system_and_tools is None:
+                        tool_text = self.format_tools.apply(content=tools)[0] if tools else ""
+                        system_and_tools = self.format_system.apply(content=(system + tool_text))
+
+                    elements += system_and_tools
 
             if message["role"] == Role.USER:
                 elements += self.format_user.apply(content=message["content"], idx=str(i // 2))
@@ -165,9 +192,15 @@ class Template:
             else:
                 raise NotImplementedError("Unexpected role: {}".format(message["role"]))
 
-            encoded_messages.append(self._convert_elements_to_ids(tokenizer, elements))
+            rendered_messages.append(elements)
 
-        return encoded_messages
+        return rendered_messages
+
+    def _process_rendered_messages(
+        self, rendered_messages: list["SLOTS"], messages: list[dict[str, str]]
+    ) -> None:
+        r"""Apply model-specific changes to formatter output before tokenization."""
+        pass
 
     @staticmethod
     def _add_or_replace_eos_token(tokenizer: "PreTrainedTokenizer", eos_token: str) -> None:
@@ -336,45 +369,12 @@ class Template:
 @dataclass
 class MossVLTemplate(Template):
     @override
-    def _encode(
-        self,
-        tokenizer: "PreTrainedTokenizer",
-        messages: list[dict[str, str]],
-        system: Optional[str],
-        tools: Optional[str],
-    ) -> list[list[int]]:
-        system = system or self.default_system
-        encoded_messages = []
-        for i, message in enumerate(messages):
-            elements = []
+    def _format_system_and_tools(self, system: str, tools: Optional[str]) -> "SLOTS":
+        tool_text = self.format_tools.apply(content=tools)[0] if tools else ""
+        if tools and not system:
+            tool_text = tool_text.lstrip("\n")
 
-            if i == 0:
-                elements += self.format_prefix.apply()
-                if system or tools:
-                    tool_text = self.format_tools.apply(content=tools)[0] if tools else ""
-                    if tools and not system:
-                        tool_text = tool_text.lstrip("\n")
-
-                    elements += self.format_system.apply(content=(system + tool_text))
-
-            if message["role"] == Role.USER:
-                elements += self.format_user.apply(content=message["content"], idx=str(i // 2))
-            elif message["role"] == Role.ASSISTANT:
-                elements += self.format_assistant.apply(content=message["content"])
-            elif message["role"] == Role.OBSERVATION:
-                elements += self.format_observation.apply(content=message["content"])
-            elif message["role"] == Role.FUNCTION:
-                elements += self.format_function.apply(
-                    content=message["content"],
-                    thought_words=self.thought_words,
-                    tool_call_words=self.tool_call_words,
-                )
-            else:
-                raise NotImplementedError("Unexpected role: {}".format(message["role"]))
-
-            encoded_messages.append(self._convert_elements_to_ids(tokenizer, elements))
-
-        return encoded_messages
+        return self.format_system.apply(content=(system + tool_text))
 
 
 @dataclass
@@ -382,15 +382,14 @@ class Llama2Template(Template):
     r"""A template that fuse the system message to first user message."""
 
     @override
-    def _encode(
+    def _render(
         self,
-        tokenizer: "PreTrainedTokenizer",
         messages: list[dict[str, str]],
         system: str,
         tools: str,
-    ) -> list[list[int]]:
+    ) -> list["SLOTS"]:
         system = system or self.default_system
-        encoded_messages = []
+        rendered_messages = []
         for i, message in enumerate(messages):
             elements = []
 
@@ -412,9 +411,9 @@ class Llama2Template(Template):
             else:
                 raise NotImplementedError("Unexpected role: {}".format(message["role"]))
 
-            encoded_messages.append(self._convert_elements_to_ids(tokenizer, elements))
+            rendered_messages.append(elements)
 
-        return encoded_messages
+        return rendered_messages
 
     def _get_jinja_template(self, tokenizer: "PreTrainedTokenizer") -> str:
         prefix = self._convert_slots_to_jinja(self.format_prefix.apply(), tokenizer)
@@ -448,8 +447,30 @@ class Llama2Template(Template):
 
 
 @dataclass
+class FalconH1Template(Template):
+    r"""Falcon-H1 keeps tool instructions in an unterminated system turn."""
+
+    @override
+    def _format_system_and_tools(self, system: str, tools: Optional[str]) -> Optional["SLOTS"]:
+        if not tools:
+            return None
+
+        tool_text = self.format_tools.apply(content=tools)[0]
+        elements = ["<|im_start|>system\n"]
+        if system:
+            elements.append(system + "\n\n")
+
+        elements.append(tool_text)
+        return elements
+
+
+@dataclass
 class ReasoningTemplate(Template):
     r"""A template that add thought to assistant message."""
+
+    def _process_history_thoughts(self, messages: list[dict[str, str]], is_inference: bool) -> bool:
+        r"""Process model-specific historical reasoning and return whether it was handled."""
+        pass
 
     @override
     def encode_oneturn(
@@ -460,7 +481,7 @@ class ReasoningTemplate(Template):
         tools: Optional[str] = None,
     ) -> tuple[list[int], list[int]]:
         messages = deepcopy(messages)
-        if not self.preserve_thinking:
+        if not self.preserve_thinking and not self._process_history_thoughts(messages, is_inference=True):
             for i in range(1, len(messages) - 2, 2):
                 messages[i]["content"] = self.remove_thought(messages[i]["content"])
 
@@ -493,7 +514,7 @@ class ReasoningTemplate(Template):
             for i in range(1, len(messages), 2):
                 messages[i]["content"] = self.remove_thought(messages[i]["content"])
 
-        if discarding_history_cot:
+        if discarding_history_cot and not self._process_history_thoughts(messages, is_inference=False):
             for i in range(1, len(messages) - 2, 2):  # preserve the last cot
                 messages[i]["content"] = self.remove_thought(messages[i]["content"])
 
@@ -995,9 +1016,12 @@ register_template(
     format_user=StringFormatter(slots=["<|im_start|>user\n{{content}}<|im_end|>\n<|im_start|>assistant\n"]),
     format_assistant=StringFormatter(slots=["{{content}}<|im_end|>\n"]),
     format_system=StringFormatter(slots=["<|im_start|>system\n{{content}}<|im_end|>\n"]),
+    format_function=FunctionFormatter(slots=["{{content}}<|im_end|>\n"], tool_format="falcon_h1"),
     format_observation=StringFormatter(slots=["<|im_start|>tool\n{{content}}<|im_end|>\n<|im_start|>assistant\n"]),
+    format_tools=ToolFormatter(tool_format="falcon_h1"),
     format_prefix=EmptyFormatter(slots=[{"bos_token"}]),
     stop_words=["<|im_end|>", "<|end_of_text|>"],
+    template_class=FalconH1Template,
 )
 
 
