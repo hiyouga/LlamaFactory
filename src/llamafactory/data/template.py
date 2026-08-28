@@ -141,16 +141,43 @@ class Template:
         Turn 0: prefix + system + query        resp
         Turn t: query                          resp.
         """
+        processed_messages = self._process_messages(messages)
+        if processed_messages is not None:
+            messages = processed_messages
+
+        rendered_messages = self._render(messages, system, tools)
+        self._process_rendered_messages(rendered_messages, messages)
+        return [self._convert_elements_to_ids(tokenizer, elements) for elements in rendered_messages]
+
+    def _process_messages(self, messages: list[dict[str, str]]) -> Optional[list[dict[str, str]]]:
+        r"""Return model-specific messages before rendering, or use the original messages."""
+        pass
+
+    def _format_system_and_tools(self, system: str, tools: Optional[str]) -> Optional["SLOTS"]:
+        r"""Return model-specific system and tool elements, or use the default formatter."""
+        pass
+
+    def _render(
+        self,
+        messages: list[dict[str, str]],
+        system: Optional[str],
+        tools: Optional[str],
+    ) -> list["SLOTS"]:
+        r"""Render messages into formatter elements before tokenization."""
         system = system or self.default_system
-        encoded_messages = []
+        rendered_messages = []
         for i, message in enumerate(messages):
             elements = []
 
             if i == 0:
                 elements += self.format_prefix.apply()
                 if system or tools:
-                    tool_text = self.format_tools.apply(content=tools)[0] if tools else ""
-                    elements += self.format_system.apply(content=(system + tool_text))
+                    system_and_tools = self._format_system_and_tools(system, tools)
+                    if system_and_tools is None:
+                        tool_text = self.format_tools.apply(content=tools)[0] if tools else ""
+                        system_and_tools = self.format_system.apply(content=(system + tool_text))
+
+                    elements += system_and_tools
 
             if message["role"] == Role.USER:
                 elements += self.format_user.apply(content=message["content"], idx=str(i // 2))
@@ -165,9 +192,15 @@ class Template:
             else:
                 raise NotImplementedError("Unexpected role: {}".format(message["role"]))
 
-            encoded_messages.append(self._convert_elements_to_ids(tokenizer, elements))
+            rendered_messages.append(elements)
 
-        return encoded_messages
+        return rendered_messages
+
+    def _process_rendered_messages(
+        self, rendered_messages: list["SLOTS"], messages: list[dict[str, str]]
+    ) -> None:
+        r"""Apply model-specific changes to formatter output before tokenization."""
+        pass
 
     @staticmethod
     def _add_or_replace_eos_token(tokenizer: "PreTrainedTokenizer", eos_token: str) -> None:
@@ -336,45 +369,12 @@ class Template:
 @dataclass
 class MossVLTemplate(Template):
     @override
-    def _encode(
-        self,
-        tokenizer: "PreTrainedTokenizer",
-        messages: list[dict[str, str]],
-        system: Optional[str],
-        tools: Optional[str],
-    ) -> list[list[int]]:
-        system = system or self.default_system
-        encoded_messages = []
-        for i, message in enumerate(messages):
-            elements = []
+    def _format_system_and_tools(self, system: str, tools: Optional[str]) -> "SLOTS":
+        tool_text = self.format_tools.apply(content=tools)[0] if tools else ""
+        if tools and not system:
+            tool_text = tool_text.lstrip("\n")
 
-            if i == 0:
-                elements += self.format_prefix.apply()
-                if system or tools:
-                    tool_text = self.format_tools.apply(content=tools)[0] if tools else ""
-                    if tools and not system:
-                        tool_text = tool_text.lstrip("\n")
-
-                    elements += self.format_system.apply(content=(system + tool_text))
-
-            if message["role"] == Role.USER:
-                elements += self.format_user.apply(content=message["content"], idx=str(i // 2))
-            elif message["role"] == Role.ASSISTANT:
-                elements += self.format_assistant.apply(content=message["content"])
-            elif message["role"] == Role.OBSERVATION:
-                elements += self.format_observation.apply(content=message["content"])
-            elif message["role"] == Role.FUNCTION:
-                elements += self.format_function.apply(
-                    content=message["content"],
-                    thought_words=self.thought_words,
-                    tool_call_words=self.tool_call_words,
-                )
-            else:
-                raise NotImplementedError("Unexpected role: {}".format(message["role"]))
-
-            encoded_messages.append(self._convert_elements_to_ids(tokenizer, elements))
-
-        return encoded_messages
+        return self.format_system.apply(content=(system + tool_text))
 
 
 @dataclass
@@ -382,15 +382,14 @@ class Llama2Template(Template):
     r"""A template that fuse the system message to first user message."""
 
     @override
-    def _encode(
+    def _render(
         self,
-        tokenizer: "PreTrainedTokenizer",
         messages: list[dict[str, str]],
         system: str,
         tools: str,
-    ) -> list[list[int]]:
+    ) -> list["SLOTS"]:
         system = system or self.default_system
-        encoded_messages = []
+        rendered_messages = []
         for i, message in enumerate(messages):
             elements = []
 
@@ -412,9 +411,9 @@ class Llama2Template(Template):
             else:
                 raise NotImplementedError("Unexpected role: {}".format(message["role"]))
 
-            encoded_messages.append(self._convert_elements_to_ids(tokenizer, elements))
+            rendered_messages.append(elements)
 
-        return encoded_messages
+        return rendered_messages
 
     def _get_jinja_template(self, tokenizer: "PreTrainedTokenizer") -> str:
         prefix = self._convert_slots_to_jinja(self.format_prefix.apply(), tokenizer)
@@ -451,6 +450,10 @@ class Llama2Template(Template):
 class ReasoningTemplate(Template):
     r"""A template that add thought to assistant message."""
 
+    def _process_history_thoughts(self, messages: list[dict[str, str]], is_inference: bool) -> bool:
+        r"""Process model-specific historical reasoning and return whether it was handled."""
+        pass
+
     @override
     def encode_oneturn(
         self,
@@ -460,7 +463,7 @@ class ReasoningTemplate(Template):
         tools: Optional[str] = None,
     ) -> tuple[list[int], list[int]]:
         messages = deepcopy(messages)
-        if not self.preserve_thinking:
+        if not self.preserve_thinking and not self._process_history_thoughts(messages, is_inference=True):
             for i in range(1, len(messages) - 2, 2):
                 messages[i]["content"] = self.remove_thought(messages[i]["content"])
 
@@ -493,7 +496,7 @@ class ReasoningTemplate(Template):
             for i in range(1, len(messages), 2):
                 messages[i]["content"] = self.remove_thought(messages[i]["content"])
 
-        if discarding_history_cot:
+        if discarding_history_cot and not self._process_history_thoughts(messages, is_inference=False):
             for i in range(1, len(messages) - 2, 2):  # preserve the last cot
                 messages[i]["content"] = self.remove_thought(messages[i]["content"])
 
@@ -514,6 +517,115 @@ class ReasoningTemplate(Template):
                     encoded_messages[i + 1] = self.get_thought_word_ids(tokenizer) + encoded_messages[i + 1]
 
         return [(encoded_messages[i], encoded_messages[i + 1]) for i in range(0, len(encoded_messages), 2)]
+
+
+class Glm4ToolSystemMixin:
+    r"""Place tool instructions and the user system prompt in separate system turns."""
+
+    @override
+    def _format_system_and_tools(self, system: str, tools: Optional[str]) -> "SLOTS":
+        elements = []
+        if tools:
+            tool_text = self.format_tools.apply(content=tools)[0].strip("\n")
+            elements += self.format_system.apply(content=tool_text)
+        if system:
+            elements += self.format_system.apply(content=system)
+
+        return elements
+
+
+@dataclass
+class Glm40414Template(Glm4ToolSystemMixin, Template):
+    r"""GLM-4-0414 template with tokenizer-defined tool system turns."""
+
+
+@dataclass
+class Glm45Template(Glm4ToolSystemMixin, ReasoningTemplate):
+    r"""Render GLM-4.5 reasoning and tool turns."""
+
+    @override
+    def add_thought(self, content: str = "") -> str:
+        return f"\n{self.thought_words[0]}{self.thought_words[1]}" + content
+
+    @override
+    def _process_messages(self, messages: list[dict[str, str]]) -> Optional[list[dict[str, str]]]:
+        if self.enable_thinking is not False:
+            return None
+
+        messages = deepcopy(messages)
+        for message in messages:
+            if message["role"] == Role.USER and not message["content"].endswith("/nothink"):
+                message["content"] += "/nothink"
+
+        return messages
+
+    @override
+    def _process_history_thoughts(self, messages: list[dict[str, str]], is_inference: bool) -> bool:
+        last_user_index = max(
+            (index for index, message in enumerate(messages[:-1]) if message["role"] == Role.USER),
+            default=-1,
+        )
+        for index, message in enumerate(messages[:-1]):
+            if message["role"] not in {Role.ASSISTANT, Role.FUNCTION}:
+                continue
+
+            content = message["content"]
+            if self.thought_words[1] in content:
+                reasoning_content = content.split(self.thought_words[1])[0]
+                reasoning_content = reasoning_content.rstrip("\n").split(self.thought_words[0])[-1].lstrip("\n")
+                visible_content = content.split(self.thought_words[1])[-1].lstrip("\n")
+            else:
+                reasoning_content = ""
+                visible_content = content
+
+            if index <= last_user_index:
+                reasoning_content = ""
+
+            message["content"] = self.thought_words[0] + reasoning_content.strip() + self.thought_words[1]
+            if visible_content.strip():
+                message["content"] += "\n" + visible_content.strip()
+
+        return True
+
+
+@dataclass
+class GlmZ1Template(Glm4ToolSystemMixin, ReasoningTemplate):
+    r"""Render GLM-Z1's visible history and thinking prefill."""
+
+    thought_prefill = "\n<think>"
+
+    @override
+    def add_thought(self, content: str = "") -> str:
+        return content
+
+    @override
+    def _process_history_thoughts(self, messages: list[dict[str, str]], is_inference: bool) -> bool:
+        for message in messages[:-1]:
+            message["content"] = message["content"].split("</think>")[-1].strip()
+
+        return True
+
+    @override
+    def _process_rendered_messages(self, rendered_messages: list["SLOTS"], messages: list[dict[str, str]]) -> None:
+        response_index = len(rendered_messages) - 1
+        if messages[response_index]["role"] != Role.ASSISTANT:
+            return
+
+        response_elements = rendered_messages[response_index]
+        if not response_elements or not isinstance(response_elements[0], str):
+            return
+
+        response_content = response_elements[0]
+        if messages[response_index]["content"] == "" and response_content == "\n":
+            response_elements[0] = ""
+        elif response_content.startswith(self.thought_prefill):
+            response_elements[0] = response_content[len(self.thought_prefill) :]
+
+        prompt_elements = rendered_messages[response_index - 1]
+        if prompt_elements and isinstance(prompt_elements[-1], str):
+            prompt_elements[-1] += self.thought_prefill
+        else:
+            prompt_elements.append(self.thought_prefill)
 
 
 @dataclass
@@ -1140,17 +1252,36 @@ register_template(
 
 # copied from glm4 template
 register_template(
+    name="glm4_0414",
+    format_user=StringFormatter(slots=["<|user|>\n{{content}}<|assistant|>"]),
+    format_assistant=StringFormatter(slots=["\n{{content}}"]),
+    format_system=StringFormatter(slots=["<|system|>\n{{content}}"]),
+    format_function=FunctionFormatter(slots=["{{content}}"], tool_format="glm4_0414"),
+    format_observation=StringFormatter(slots=["<|observation|>\n{{content}}<|assistant|>"]),
+    format_tools=ToolFormatter(tool_format="glm4_0414"),
+    format_prefix=EmptyFormatter(slots=["[gMASK]<sop>"]),
+    stop_words=["<|user|>", "<|observation|>"],
+    efficient_eos=True,
+    template_class=Glm40414Template,
+)
+
+
+# copied from glm4 template
+register_template(
     name="glm4_moe",
     format_user=StringFormatter(slots=["<|user|>\n{{content}}<|assistant|>"]),
     format_assistant=StringFormatter(slots=["\n{{content}}"]),
     format_system=StringFormatter(slots=["<|system|>\n{{content}}"]),
-    format_function=FunctionFormatter(slots=["{{content}}"], tool_format="glm4_moe"),
-    format_observation=StringFormatter(slots=["<|observation|>\n{{content}}<|assistant|>"]),
+    format_function=FunctionFormatter(slots=["\n{{content}}"], tool_format="glm4_moe"),
+    format_observation=StringFormatter(
+        slots=["<|observation|>\n<tool_response>\n{{content}}\n</tool_response><|assistant|>"]
+    ),
     format_tools=ToolFormatter(tool_format="glm4_moe"),
     format_prefix=EmptyFormatter(slots=["[gMASK]<sop>"]),
     stop_words=["<|user|>", "<|observation|>"],
+    thought_words=("<think>", "</think>"),
     efficient_eos=True,
-    template_class=ReasoningTemplate,
+    template_class=Glm45Template,
 )
 
 
@@ -1227,13 +1358,13 @@ register_template(
     format_user=StringFormatter(slots=["<|user|>\n{{content}}<|assistant|>"]),
     format_assistant=StringFormatter(slots=["\n{{content}}"]),
     format_system=StringFormatter(slots=["<|system|>\n{{content}}"]),
-    format_function=FunctionFormatter(slots=["{{content}}"], tool_format="glm4"),
+    format_function=FunctionFormatter(slots=["{{content}}"], tool_format="glmz1"),
     format_observation=StringFormatter(slots=["<|observation|>\n{{content}}<|assistant|>"]),
-    format_tools=ToolFormatter(tool_format="glm4"),
+    format_tools=ToolFormatter(tool_format="glmz1"),
     format_prefix=EmptyFormatter(slots=["[gMASK]<sop>"]),
     stop_words=["<|user|>", "<|observation|>"],
     efficient_eos=True,
-    template_class=ReasoningTemplate,
+    template_class=GlmZ1Template,
 )
 
 

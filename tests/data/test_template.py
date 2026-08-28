@@ -12,7 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import os
+from copy import deepcopy
 from typing import TYPE_CHECKING
 
 import pytest
@@ -95,6 +97,58 @@ def _check_template(
     assert content_str == prompt_str + answer_str
     assert content_ids == prompt_ids + answer_ids
     _check_tokenization(tokenizer, (prompt_ids, answer_ids), (prompt_str, answer_str))
+
+
+def test_rendering_refactor_preserves_existing_template_boundaries():
+    class ByteTokenizer:
+        bos_token_id = 1000
+        eos_token_id = 1001
+
+        def encode(self, text: str, add_special_tokens: bool = False) -> list[int]:
+            assert not add_special_tokens
+            return list(text.encode())
+
+        def convert_tokens_to_ids(self, token: str) -> int:
+            raise AssertionError(f"Unexpected direct token conversion: {token}")
+
+    tokenizer = ByteTokenizer()
+    messages = [
+        {"role": "user", "content": "question"},
+        {"role": "assistant", "content": "answer"},
+    ]
+
+    standard = deepcopy(TEMPLATES["falcon_h1"])
+    prompt_ids, response_ids = standard.encode_oneturn(tokenizer, messages, system="system")
+    assert prompt_ids == [tokenizer.bos_token_id] + tokenizer.encode(
+        "<|im_start|>system\nsystem<|im_end|>\n"
+        "<|im_start|>user\nquestion<|im_end|>\n<|im_start|>assistant\n"
+    )
+    assert response_ids == tokenizer.encode("answer<|im_end|>\n")
+
+    tools = json.dumps(
+        [
+            {
+                "name": "search",
+                "description": "Search documents.",
+                "parameters": {"type": "object", "properties": {}, "required": []},
+            }
+        ]
+    )
+    moss_vl = deepcopy(TEMPLATES["moss_vl"])
+    prompt_ids, response_ids = moss_vl.encode_oneturn(tokenizer, messages, tools=tools)
+    tool_text = moss_vl.format_tools.apply(content=tools)[0].lstrip("\n")
+    assert prompt_ids == tokenizer.encode(
+        moss_vl.format_system.apply(content=tool_text)[0]
+        + "<|im_start|>user\nquestion<|im_end|>\n<|im_start|>assistant\n"
+    )
+    assert response_ids == tokenizer.encode("answer<|im_end|>\n")
+
+    llama2 = deepcopy(TEMPLATES["gemma"])
+    prompt_ids, response_ids = llama2.encode_oneturn(tokenizer, messages, system="system")
+    assert prompt_ids == [tokenizer.bos_token_id] + tokenizer.encode(
+        "<start_of_turn>user\nsystem\n\nquestion<end_of_turn>\n<start_of_turn>model\n"
+    )
+    assert response_ids == tokenizer.encode("answer<end_of_turn>\n")
 
 
 def test_moss_vl_registration():
@@ -369,6 +423,162 @@ def test_qwen3_template(cot_messages: bool):
         messages = MESSAGES_WITH_THOUGHT
 
     _check_template("Qwen/Qwen3-8B", "qwen3", prompt_str, answer_str, messages=messages)
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
+def test_glm_template_consistency():
+    system = "You are a helpful weather assistant. Use the available tools when needed."
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_temperature",
+                "description": "Get the current temperature for a city.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}},
+                    "required": ["city"],
+                },
+            },
+        }
+    ]
+    function_call = '{"name":"get_current_temperature","arguments":{"city":"Paris"}}'
+    function_arguments = '{"city": "Paris"}'
+    observation = '{"temperature_celsius":21}'
+    thought = "<think>\nI should use the weather tool.\n</think>\n\n"
+
+    assert DEFAULT_TEMPLATE["GLM-4-0414-9B-Chat"] == "glm4_0414"
+    assert DEFAULT_TEMPLATE["GLM-4-0414-32B-Chat"] == "glm4_0414"
+    assert DEFAULT_TEMPLATE.get("GLM-4.5-Base") is None
+    assert DEFAULT_TEMPLATE.get("GLM-4.5-Air-Base") is None
+    assert DEFAULT_TEMPLATE["GLM-4.5-Thinking"] == "glm4_moe"
+    assert DEFAULT_TEMPLATE["GLM-4.5-Air-Thinking"] == "glm4_moe"
+    assert DEFAULT_TEMPLATE["GLM-Z1-0414-9B-Chat"] == "glmz1"
+    assert DEFAULT_TEMPLATE["GLM-Z1-0414-32B-Chat"] == "glmz1"
+
+    glm4_moe = TEMPLATES["glm4_moe"]
+    assert glm4_moe.__class__.__name__ == "Glm45Template"
+    assert glm4_moe.format_function.slots == ["\n{{content}}"]
+    assert glm4_moe.format_observation.slots == [
+        "<|observation|>\n<tool_response>\n{{content}}\n</tool_response><|assistant|>"
+    ]
+    assert glm4_moe.thought_words == ("<think>", "</think>")
+    tool_call = glm4_moe.format_function.apply(content=function_call)[0]
+    assert tool_call.endswith("\n</tool_call>")
+
+    cases = [
+        {
+            "model_id": "zai-org/GLM-4-9B-0414",
+            "template": "glm4_0414",
+            "enable_thinking": False,
+            "messages": [
+                {"role": "user", "content": "What is the current temperature in Paris?"},
+                {"role": "function", "content": function_call},
+                {"role": "observation", "content": observation},
+                {"role": "assistant", "content": "It is 21 degrees Celsius."},
+            ],
+            "official_messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": "What is the current temperature in Paris?"},
+                {"role": "assistant", "content": function_arguments, "metadata": "get_current_temperature"},
+                {"role": "observation", "content": observation},
+            ],
+        },
+    ]
+    for enable_thinking in (True, False):
+        cases.append(
+            {
+                "model_id": "zai-org/GLM-Z1-9B-0414",
+                "template": "glmz1",
+                "enable_thinking": enable_thinking,
+                "messages": [
+                    {"role": "user", "content": "What is the current temperature in Paris?"},
+                    {"role": "function", "content": thought + function_call},
+                    {"role": "observation", "content": observation},
+                    {"role": "assistant", "content": thought + "It is 21 degrees Celsius."},
+                ],
+                "official_messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": "What is the current temperature in Paris?"},
+                    {
+                        "role": "assistant",
+                        "content": thought + function_arguments,
+                        "metadata": "get_current_temperature",
+                    },
+                    {"role": "observation", "content": observation},
+                ],
+            }
+        )
+    for enable_thinking in (True, False):
+        visible_answer = "There are 20 markers."
+        history_answer = f"<think>\n12 + 8 = 20.\n</think>\n\n{visible_answer}"
+        function_content = thought + function_call if enable_thinking else function_call
+        final_answer = thought + "It is 21 degrees Celsius." if enable_thinking else "It is 21 degrees Celsius."
+        cases.append(
+            {
+                "model_id": "zai-org/GLM-4.5",
+                "template": "glm4_moe",
+                "enable_thinking": enable_thinking,
+                "preserve_thinking": False,
+                "messages": [
+                    {"role": "user", "content": "How many markers are in the box?"},
+                    {"role": "assistant", "content": history_answer if enable_thinking else visible_answer},
+                    {"role": "user", "content": "What is the current temperature in Paris?"},
+                    {"role": "function", "content": function_content},
+                    {"role": "observation", "content": observation},
+                    {"role": "assistant", "content": final_answer},
+                ],
+                "official_messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": "How many markers are in the box?"},
+                    {"role": "assistant", "content": history_answer if enable_thinking else visible_answer},
+                    {"role": "user", "content": "What is the current temperature in Paris?"},
+                    {
+                        "role": "assistant",
+                        "content": thought.rstrip() if enable_thinking else "",
+                        "tool_calls": [
+                            {
+                                "type": "function",
+                                "function": {
+                                    "name": "get_current_temperature",
+                                    "arguments": {"city": "Paris"},
+                                },
+                            }
+                        ],
+                    },
+                    {"role": "tool", "name": "get_current_temperature", "content": observation},
+                ],
+            }
+        )
+
+    for case in cases:
+        tokenizer = AutoTokenizer.from_pretrained(case["model_id"])
+        reference_tokenizer = AutoTokenizer.from_pretrained(case["model_id"])
+        template = get_template_and_fix_tokenizer(
+            tokenizer,
+            DataArguments(
+                template=case["template"],
+                enable_thinking=case["enable_thinking"],
+                preserve_thinking=case.get("preserve_thinking", False),
+            ),
+        )
+        prompt_ids, _ = template.encode_oneturn(
+            tokenizer,
+            case["messages"],
+            system=system,
+            tools=json.dumps(tools, ensure_ascii=False),
+        )
+        reference_ids = reference_tokenizer.apply_chat_template(
+            case["official_messages"],
+            tools=tools,
+            tokenize=True,
+            add_generation_prompt=True,
+            enable_thinking=case["enable_thinking"],
+        )
+        if is_transformers_version_greater_than("5.0.0"):
+            reference_ids = reference_ids["input_ids"]
+
+        assert prompt_ids == reference_ids, case["model_id"]
 
 
 @pytest.mark.runs_on(["cpu", "mps"])
