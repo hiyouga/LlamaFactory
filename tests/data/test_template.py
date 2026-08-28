@@ -12,7 +12,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import os
+from copy import deepcopy
 from typing import TYPE_CHECKING
 
 import pytest
@@ -95,6 +97,58 @@ def _check_template(
     assert content_str == prompt_str + answer_str
     assert content_ids == prompt_ids + answer_ids
     _check_tokenization(tokenizer, (prompt_ids, answer_ids), (prompt_str, answer_str))
+
+
+def test_rendering_refactor_preserves_existing_template_boundaries():
+    class ByteTokenizer:
+        bos_token_id = 1000
+        eos_token_id = 1001
+
+        def encode(self, text: str, add_special_tokens: bool = False) -> list[int]:
+            assert not add_special_tokens
+            return list(text.encode())
+
+        def convert_tokens_to_ids(self, token: str) -> int:
+            raise AssertionError(f"Unexpected direct token conversion: {token}")
+
+    tokenizer = ByteTokenizer()
+    messages = [
+        {"role": "user", "content": "question"},
+        {"role": "assistant", "content": "answer"},
+    ]
+
+    standard = deepcopy(TEMPLATES["falcon_h1"])
+    prompt_ids, response_ids = standard.encode_oneturn(tokenizer, messages, system="system")
+    assert prompt_ids == [tokenizer.bos_token_id] + tokenizer.encode(
+        "<|im_start|>system\nsystem<|im_end|>\n"
+        "<|im_start|>user\nquestion<|im_end|>\n<|im_start|>assistant\n"
+    )
+    assert response_ids == tokenizer.encode("answer<|im_end|>\n")
+
+    tools = json.dumps(
+        [
+            {
+                "name": "search",
+                "description": "Search documents.",
+                "parameters": {"type": "object", "properties": {}, "required": []},
+            }
+        ]
+    )
+    moss_vl = deepcopy(TEMPLATES["moss_vl"])
+    prompt_ids, response_ids = moss_vl.encode_oneturn(tokenizer, messages, tools=tools)
+    tool_text = moss_vl.format_tools.apply(content=tools)[0].lstrip("\n")
+    assert prompt_ids == tokenizer.encode(
+        moss_vl.format_system.apply(content=tool_text)[0]
+        + "<|im_start|>user\nquestion<|im_end|>\n<|im_start|>assistant\n"
+    )
+    assert response_ids == tokenizer.encode("answer<|im_end|>\n")
+
+    llama2 = deepcopy(TEMPLATES["gemma"])
+    prompt_ids, response_ids = llama2.encode_oneturn(tokenizer, messages, system="system")
+    assert prompt_ids == [tokenizer.bos_token_id] + tokenizer.encode(
+        "<start_of_turn>user\nsystem\n\nquestion<end_of_turn>\n<start_of_turn>model\n"
+    )
+    assert response_ids == tokenizer.encode("answer<end_of_turn>\n")
 
 
 def test_moss_vl_registration():
@@ -336,6 +390,118 @@ def test_phi4_template():
     )
     answer_str = f"{MESSAGES[3]['content']}<|im_end|>"
     _check_template("microsoft/phi-4", "phi4", prompt_str, answer_str)
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
+def test_yi_legacy_template_consistency():
+    target_models = {
+        "Yi-6B-Chat": "01-ai/Yi-6B-Chat",
+        "Yi-34B-Chat": "01-ai/Yi-34B-Chat",
+    }
+    for model_name in target_models:
+        assert DEFAULT_TEMPLATE[model_name] == "yi_legacy"
+
+    unaffected_models = [
+        "Yi-6B-Chat-4bits",
+        "Yi-34B-Chat-8bits",
+        "Yi-1.5-6B-Chat",
+        "Yi-1.5-34B-Chat",
+        "Yi-Coder-1.5B-Chat",
+        "Yi-Coder-9B-Chat",
+    ]
+    for model_name in unaffected_models:
+        assert DEFAULT_TEMPLATE[model_name] == "yi"
+
+    assert TEMPLATES["yi_legacy"].__class__.__name__ == "YiLegacyTemplate"
+    assert TEMPLATES["yi"].__class__.__name__ == "Template"
+
+    test_cases = [
+        (
+            [
+                {"role": "user", "content": "A box contains 12 red markers and 8 blue markers."},
+                {"role": "assistant", "content": "There are 20 markers."},
+            ],
+            None,
+        ),
+        (
+            [
+                {"role": "user", "content": "盒子里有 12 支红笔和 8 支蓝笔，共有多少支？"},
+                {"role": "assistant", "content": "一共有 20 支。"},
+            ],
+            "你是一名简洁的数学助手。",
+        ),
+        (
+            [
+                {"role": "user", "content": "A box contains 20 markers."},
+                {"role": "assistant", "content": "Understood."},
+                {"role": "user", "content": "移除 5 支后还剩多少支？"},
+                {"role": "assistant", "content": "还剩 15 支。"},
+            ],
+            None,
+        ),
+    ]
+    for model_id in target_models.values():
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        template = get_template_and_fix_tokenizer(tokenizer, DataArguments(template="yi_legacy"))
+        for messages, system in test_cases:
+            prompt_ids, response_ids = template.encode_oneturn(tokenizer, messages, system, tools=None)
+            reference_prefix = ([{"role": "system", "content": system}] if system else []) + messages[:-1]
+            reference_prompt_ids = tokenizer.apply_chat_template(
+                reference_prefix,
+                tokenize=True,
+                add_generation_prompt=True,
+            )
+            reference_messages = ([{"role": "system", "content": system}] if system else []) + messages
+            reference_full_ids = tokenizer.apply_chat_template(
+                reference_messages,
+                tokenize=True,
+                add_generation_prompt=False,
+            )
+            if hasattr(reference_prompt_ids, "input_ids"):
+                reference_prompt_ids = reference_prompt_ids.input_ids
+            if hasattr(reference_full_ids, "input_ids"):
+                reference_full_ids = reference_full_ids.input_ids
+
+            inference_messages = messages[:-1] + [{"role": "assistant", "content": ""}]
+            inference_prompt_ids, _ = template.encode_oneturn(tokenizer, inference_messages, system, tools=None)
+            assert prompt_ids == inference_prompt_ids == reference_prompt_ids
+            assert prompt_ids + response_ids == reference_full_ids
+
+
+def test_yi_legacy_template_boundary_merge():
+    class BoundaryMergingTokenizer:
+        bos_token = None
+        eos_token = None
+
+        @staticmethod
+        def encode(text: str, add_special_tokens: bool = False) -> list[int]:
+            assert not add_special_tokens
+            token_ids = []
+            index = 0
+            while index < len(text):
+                if text.startswith("\nT", index):
+                    token_ids.append(0x110000)
+                    index += 2
+                else:
+                    token_ids.append(ord(text[index]))
+                    index += 1
+
+            return token_ids
+
+    tokenizer = BoundaryMergingTokenizer()
+    template = TEMPLATES["yi_legacy"]
+    messages = [
+        {"role": "user", "content": "Count the markers."},
+        {"role": "assistant", "content": "There are 20 markers."},
+    ]
+    rendered_messages = template._render(messages, system=None, tools=None)
+    source_text = template._convert_elements_to_text(tokenizer, rendered_messages[0])
+    target_text = template._convert_elements_to_text(tokenizer, rendered_messages[1])
+    source_ids, target_ids = template._encode(tokenizer, messages, system=None, tools=None)
+
+    assert source_ids == tokenizer.encode(source_text)[:-1]
+    assert target_ids[0] == 0x110000
+    assert source_ids + target_ids == tokenizer.encode(source_text + target_text)
 
 
 @pytest.mark.runs_on(["cpu", "mps"])
