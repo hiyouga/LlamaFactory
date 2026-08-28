@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import os
 from typing import TYPE_CHECKING
 
@@ -369,6 +370,131 @@ def test_qwen3_template(cot_messages: bool):
         messages = MESSAGES_WITH_THOUGHT
 
     _check_template("Qwen/Qwen3-8B", "qwen3", prompt_str, answer_str, messages=messages)
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
+def test_hunyuan_template_consistency():
+    expected_templates = {
+        "Hunyuan-0.5B-Instruct": "hy3",
+        "Hunyuan-1.8B-Instruct": "hy3",
+        "Hunyuan-4B-Instruct": "hy3",
+        "Hunyuan-7B-Instruct": "hy_dense_7b",
+        "Hunyuan-A13B-Instruct": "hy_dense_7b",
+        "Hunyuan-MT-7B-Instruct": "hy_dense_7b",
+        "HY-MT1.5-1.8B-Instruct": "hy_dense_1_8b",
+        "HY-MT1.5-7B-Instruct": "hy_dense_7b",
+        "Hy-MT2-1.8B-Instruct": "hy_dense_1_8b",
+        "Hy-MT2-7B-Instruct": "hy_dense_7b",
+    }
+    for model_name, template_name in expected_templates.items():
+        assert DEFAULT_TEMPLATE[model_name] == template_name
+
+    extracted_calls = TEMPLATES["hy3"].extract_tool(
+        '<tool_calls><tool_call>get_current_temperature\n```json\n{"city":"Paris"}\n```</tool_call></tool_calls>'
+    )
+    assert not isinstance(extracted_calls, str)
+    assert len(extracted_calls) == 1
+    assert extracted_calls[0].name == "get_current_temperature"
+    assert json.loads(extracted_calls[0].arguments) == {"city": "Paris"}
+
+    system = "You are a helpful weather assistant. Use the available tools when needed."
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_temperature",
+                "description": "Get the current temperature for a city.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}},
+                    "required": ["city"],
+                },
+            },
+        }
+    ]
+    function_call = '{"name":"get_current_temperature","arguments":{"city":"Paris"}}'
+    observation = '{"temperature_celsius":21}'
+    thought = "<think>\nI should use the weather tool.\n</think>"
+    common_messages = [
+        {"role": "user", "content": "How many markers are in the box?"},
+        {"role": "assistant", "content": "There are 20 markers."},
+        {"role": "user", "content": "How many remain after removing 5 markers?"},
+        {"role": "assistant", "content": "15 markers remain."},
+    ]
+    common_official_messages = [{"role": "system", "content": system}, *common_messages[:-1]]
+    cases = [
+        {
+            "model_id": "tencent/Hunyuan-0.5B-Instruct",
+            "template": "hy3",
+            "enable_thinking": True,
+            "system": system,
+            "tools": tools,
+            "messages": [
+                {"role": "user", "content": "What is the current temperature in Paris?"},
+                {"role": "function", "content": thought + "\n\n" + function_call},
+                {"role": "observation", "content": observation},
+                {"role": "assistant", "content": thought + "\n\nIt is 21 degrees Celsius."},
+            ],
+            "official_messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": "What is the current temperature in Paris?"},
+                {
+                    "role": "assistant",
+                    "content": thought,
+                    "tool_calls": [
+                        {
+                            "type": "function",
+                            "function": {
+                                "name": "get_current_temperature",
+                                "arguments": '{"city": "Paris"}',
+                            },
+                        }
+                    ],
+                },
+                {"role": "tool", "name": "get_current_temperature", "content": observation},
+            ],
+        },
+        {
+            "model_id": "tencent/HY-MT1.5-1.8B",
+            "template": "hy_dense_1_8b",
+            "enable_thinking": False,
+            "system": system,
+            "messages": common_messages,
+            "official_messages": common_official_messages,
+        },
+        {
+            "model_id": "tencent/Hunyuan-A13B-Instruct",
+            "template": "hy_dense_7b",
+            "enable_thinking": False,
+            "system": system,
+            "messages": common_messages,
+            "official_messages": common_official_messages,
+        },
+    ]
+    for case in cases:
+        tokenizer = AutoTokenizer.from_pretrained(case["model_id"])
+        reference_tokenizer = AutoTokenizer.from_pretrained(case["model_id"])
+        template = get_template_and_fix_tokenizer(
+            tokenizer,
+            DataArguments(template=case["template"], enable_thinking=case["enable_thinking"]),
+        )
+        prompt_ids, _ = template.encode_oneturn(
+            tokenizer,
+            case["messages"],
+            system=case["system"],
+            tools=json.dumps(case.get("tools"), ensure_ascii=False) if case.get("tools") else None,
+        )
+        reference_ids = reference_tokenizer.apply_chat_template(
+            case["official_messages"],
+            tools=case.get("tools"),
+            tokenize=True,
+            add_generation_prompt=True,
+            enable_thinking=case["enable_thinking"],
+        )
+        if is_transformers_version_greater_than("5.0.0"):
+            reference_ids = reference_ids["input_ids"]
+
+        assert prompt_ids == reference_ids, case["model_id"]
 
 
 @pytest.mark.runs_on(["cpu", "mps"])

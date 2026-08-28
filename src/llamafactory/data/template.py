@@ -21,7 +21,7 @@ from typing_extensions import override
 
 from ..extras import logging
 from .data_utils import Role
-from .formatter import EmptyFormatter, FunctionFormatter, StringFormatter, ToolFormatter
+from .formatter import EmptyFormatter, FunctionFormatter, HunyuanFunctionFormatter, StringFormatter, ToolFormatter
 from .mm_plugin import get_mm_plugin
 
 
@@ -129,6 +129,13 @@ class Template:
 
         return token_ids
 
+    def _format_system_and_tools(self, system: str, tools: Optional[str]) -> "SLOTS":
+        tool_text = self.format_tools.apply(content=tools)[0] if tools else ""
+        return self.format_system.apply(content=(system + tool_text))
+
+    def _format_message_prefix(self, message: dict[str, str], index: int) -> "SLOTS":
+        return []
+
     def _encode(
         self,
         tokenizer: "PreTrainedTokenizer",
@@ -149,8 +156,9 @@ class Template:
             if i == 0:
                 elements += self.format_prefix.apply()
                 if system or tools:
-                    tool_text = self.format_tools.apply(content=tools)[0] if tools else ""
-                    elements += self.format_system.apply(content=(system + tool_text))
+                    elements += self._format_system_and_tools(system, tools)
+
+            elements += self._format_message_prefix(message, i)
 
             if message["role"] == Role.USER:
                 elements += self.format_user.apply(content=message["content"], idx=str(i // 2))
@@ -451,6 +459,13 @@ class Llama2Template(Template):
 class ReasoningTemplate(Template):
     r"""A template that add thought to assistant message."""
 
+    def _process_history_thoughts(self, messages: list[dict[str, str]]) -> None:
+        for i in range(1, len(messages) - 2, 2):
+            messages[i]["content"] = self.remove_thought(messages[i]["content"])
+
+    def _process_inference_history_thoughts(self, messages: list[dict[str, str]]) -> None:
+        self._process_history_thoughts(messages)
+
     @override
     def encode_oneturn(
         self,
@@ -461,8 +476,7 @@ class ReasoningTemplate(Template):
     ) -> tuple[list[int], list[int]]:
         messages = deepcopy(messages)
         if not self.preserve_thinking:
-            for i in range(1, len(messages) - 2, 2):
-                messages[i]["content"] = self.remove_thought(messages[i]["content"])
+            self._process_inference_history_thoughts(messages)
 
         if self.enable_thinking is False:  # remove all cot
             messages[-1]["content"] = self.remove_thought(messages[-1]["content"])
@@ -494,8 +508,7 @@ class ReasoningTemplate(Template):
                 messages[i]["content"] = self.remove_thought(messages[i]["content"])
 
         if discarding_history_cot:
-            for i in range(1, len(messages) - 2, 2):  # preserve the last cot
-                messages[i]["content"] = self.remove_thought(messages[i]["content"])
+            self._process_history_thoughts(messages)
 
         encoded_messages = self._encode(tokenizer, messages, system, tools)
         if discarding_history_cot:
@@ -514,6 +527,37 @@ class ReasoningTemplate(Template):
                     encoded_messages[i + 1] = self.get_thought_word_ids(tokenizer) + encoded_messages[i + 1]
 
         return [(encoded_messages[i], encoded_messages[i + 1]) for i in range(0, len(encoded_messages), 2)]
+
+
+@dataclass
+class HunyuanReasoningTemplate(ReasoningTemplate):
+    r"""Format Hunyuan system and tool instructions with the official separator."""
+
+    @override
+    def _process_inference_history_thoughts(self, messages: list[dict[str, str]]) -> None:
+        return
+
+    @override
+    def _format_system_and_tools(self, system: str, tools: Optional[str]) -> "SLOTS":
+        tool_text = self.format_tools.apply(content=tools)[0] if tools else ""
+        if system and tool_text:
+            content = system + "\n\n" + tool_text
+        else:
+            content = system or tool_text
+
+        return self.format_system.apply(content=content)
+
+
+@dataclass
+class HunyuanMT7BTemplate(Template):
+    r"""Start every Hunyuan MT user turn with the tokenizer BOS token."""
+
+    @override
+    def _format_message_prefix(self, message: dict[str, str], index: int) -> "SLOTS":
+        if index > 0 and message["role"] == Role.USER:
+            return [{"bos_token"}]
+
+        return []
 
 
 @dataclass
@@ -882,13 +926,25 @@ register_template(
 register_template(
     name="hy3",
     format_user=StringFormatter(slots=["<｜hy_User｜>{{content}}<｜hy_Assistant｜>"]),
-    format_assistant=StringFormatter(slots=["{{content}}<｜hy_eos｜>"]),
-    format_system=StringFormatter(slots=["{{content}}"]),
+    format_assistant=StringFormatter(slots=["{{content}}<｜hy_place▁holder▁no▁2｜>"]),
+    format_system=StringFormatter(slots=["{{content}}<｜hy_place▁holder▁no▁3｜>"]),
+    format_function=HunyuanFunctionFormatter(
+        slots=["{{content}}<｜hy_place▁holder▁no▁2｜>"],
+        tool_format="hunyuan",
+    ),
+    format_observation=StringFormatter(
+        slots=[
+            "<｜hy_User｜><tool_responses><tool_response>{{content}}</tool_response></tool_responses>"
+            "<｜hy_Assistant｜>"
+        ]
+    ),
+    format_tools=ToolFormatter(tool_format="hunyuan"),
     format_prefix=EmptyFormatter(slots=[{"bos_token"}]),
-    stop_words=["<｜hy_eos｜>"],
+    stop_words=["<｜hy_place▁holder▁no▁2｜>"],
     replace_eos=True,
-    thought_words=("<think>", "</think>"),
-    template_class=ReasoningTemplate,
+    thought_words=("<think>\n", "\n</think>\n"),
+    preserve_thinking=True,
+    template_class=HunyuanReasoningTemplate,
 )
 
 
@@ -1312,7 +1368,7 @@ register_template(
 
 register_template(
     name="hunyuan_small",
-    format_user=StringFormatter(slots=["<｜hy_User｜>{{content}}<｜hy_place▁holder▁no▁8｜>"]),
+    format_user=StringFormatter(slots=["<｜hy_User｜>{{content}}<｜hy_Assistant｜>"]),
     format_assistant=StringFormatter(slots=["{{content}}<｜hy_place▁holder▁no▁2｜>"]),
     format_system=StringFormatter(slots=["{{content}}<｜hy_place▁holder▁no▁3｜>"]),
     format_prefix=EmptyFormatter(slots=["<｜hy_begin▁of▁sentence｜>"]),
@@ -1324,23 +1380,22 @@ register_template(
 # https://github.com/Tencent-Hunyuan/Hy-MT2/blob/main/train/llama_factory_support/hy_dense_template.py
 register_template(
     name="hy_dense_1_8b",
-    format_user=StringFormatter(slots=["<｜hy_User｜>{{content}}"]),
-    format_assistant=StringFormatter(slots=["<｜hy_Assistant｜>{{content}}"]),
+    format_user=StringFormatter(slots=["<｜hy_User｜>{{content}}<｜hy_Assistant｜>"]),
+    format_assistant=StringFormatter(slots=["{{content}}<｜hy_place▁holder▁no▁2｜>"]),
     format_system=StringFormatter(slots=["{{content}}<｜hy_place▁holder▁no▁3｜>"]),
     format_prefix=EmptyFormatter(slots=[{"bos_token"}]),
     stop_words=["<｜hy_place▁holder▁no▁2｜>"],
-    efficient_eos=True,
 )
 
 
 register_template(
     name="hy_dense_7b",
     format_user=StringFormatter(slots=["{{content}}<|extra_0|>"]),
-    format_assistant=StringFormatter(slots=["{{content}}"]),
+    format_assistant=StringFormatter(slots=["{{content}}<|eos|>"]),
     format_system=StringFormatter(slots=["{{content}}<|extra_4|>"]),
     format_prefix=EmptyFormatter(slots=[{"bos_token"}]),
     stop_words=["<|eos|>"],
-    efficient_eos=True,
+    template_class=HunyuanMT7BTemplate,
 )
 
 
