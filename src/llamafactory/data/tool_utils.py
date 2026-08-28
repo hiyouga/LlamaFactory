@@ -408,6 +408,46 @@ class GLM4ToolUtils(ToolUtils):
         return [FunctionCall(tool_name, json.dumps(arguments, ensure_ascii=False))]
 
 
+class Granite3ToolUtils(ToolUtils):
+    r"""Granite 3.0 tool format using its tokenizer-defined message roles."""
+
+    @override
+    @staticmethod
+    def tool_formatter(tools: list[dict[str, Any]]) -> str:
+        tool_text = "\n\n".join(json.dumps(tool, indent=4, ensure_ascii=False) for tool in tools)
+        return f"<|start_of_role|>available_tools<|end_of_role|>\n{tool_text}<|end_of_text|>\n"
+
+    @override
+    @staticmethod
+    def function_formatter(functions: list["FunctionCall"]) -> str:
+        if len(functions) != 1:
+            raise ValueError("Granite 3.0 only supports one function call per message.")
+
+        name, arguments = functions[0]
+        return json.dumps(
+            {"name": name, "arguments": json.loads(arguments)},
+            ensure_ascii=False,
+        )
+
+    @override
+    @staticmethod
+    def tool_extractor(content: str) -> Union[str, list["FunctionCall"]]:
+        marker = "<|tool_call|>"
+        if marker not in content:
+            return content
+
+        try:
+            tool_call = json.loads(content.split(marker, maxsplit=1)[1].strip())
+            return [
+                FunctionCall(
+                    tool_call["name"],
+                    json.dumps(tool_call["arguments"], ensure_ascii=False),
+                )
+            ]
+        except (json.JSONDecodeError, KeyError, TypeError):
+            return content
+
+
 class Llama3ToolUtils(ToolUtils):
     r"""Llama 3.x tool using template with `tools_in_user_message=False`.
 
@@ -885,6 +925,7 @@ TOOLS = {
     "default": DefaultToolUtils(),
     "gemma4": Gemma4ToolUtils(),
     "glm4": GLM4ToolUtils(),
+    "granite3_0": Granite3ToolUtils(),
     "llama3": Llama3ToolUtils(),
     "lfm2": LFM2ToolUtils(),
     "minimax1": MiniMaxM1ToolUtils(),
