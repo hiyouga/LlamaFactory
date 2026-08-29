@@ -21,7 +21,7 @@ import pytest
 from transformers import AutoTokenizer
 
 from llamafactory.data import get_template_and_fix_tokenizer
-from llamafactory.data.template import TEMPLATES, parse_template
+from llamafactory.data.template import TEMPLATES, ReasoningTemplate, parse_template
 from llamafactory.extras.constants import (
     DEFAULT_TEMPLATE,
     MULTIMODAL_SUPPORTED_MODELS,
@@ -149,6 +149,42 @@ def test_rendering_refactor_preserves_existing_template_boundaries():
         "<start_of_turn>user\nsystem\n\nquestion<end_of_turn>\n<start_of_turn>model\n"
     )
     assert response_ids == tokenizer.encode("answer<end_of_turn>\n")
+
+
+def test_thought_boundary_hook_reports_handled_responses():
+    class ByteTokenizer:
+        bos_token_id = 1000
+        eos_token_id = 1001
+
+        def encode(self, text: str, add_special_tokens: bool = False) -> list[int]:
+            assert not add_special_tokens
+            return list(text.encode())
+
+        def convert_tokens_to_ids(self, token: str) -> int:
+            raise AssertionError(f"Unexpected direct token conversion: {token}")
+
+    class HookedReasoningTemplate(ReasoningTemplate):
+        def _process_thought_boundaries(self, rendered_messages, messages) -> set[int]:
+            response_index = len(rendered_messages) - 1
+            rendered_messages[response_index][0] = self.add_thought() + rendered_messages[response_index][0]
+            return {response_index}
+
+    template = HookedReasoningTemplate(**vars(deepcopy(TEMPLATES["qwen3"])))
+    template.enable_thinking = True
+    messages = [
+        {"role": "user", "content": "question 1"},
+        {"role": "assistant", "content": "answer 1"},
+        {"role": "user", "content": "question 2"},
+        {"role": "assistant", "content": "answer 2"},
+    ]
+
+    tokenizer = ByteTokenizer()
+    response_ids = template.encode_oneturn(tokenizer, messages)[1]
+    assert response_ids == list((template.add_thought() + "answer 2<|im_end|>\n").encode())
+
+    encoded_pairs = template.encode_multiturn(tokenizer, messages)
+    assert encoded_pairs[0][1] == list((template.add_thought() + "answer 1<|im_end|>\n").encode())
+    assert encoded_pairs[1][1] == list((template.add_thought() + "answer 2<|im_end|>\n").encode())
 
 
 def test_moss_vl_registration():
