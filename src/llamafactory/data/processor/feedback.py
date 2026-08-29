@@ -15,12 +15,16 @@
 from collections import defaultdict
 from typing import TYPE_CHECKING, Any, Optional
 
+from datasets import Sequence, Value
+
 from ...extras import logging
 from ...extras.constants import IGNORE_INDEX
-from .processor_utils import DatasetProcessor, infer_seqlen
+from .processor_utils import DatasetProcessor, build_dataset_features, infer_seqlen
 
 
 if TYPE_CHECKING:
+    from datasets import Dataset, Features
+
     from ..mm_plugin import AudioInput, ImageInput, VideoInput
 
 
@@ -28,6 +32,22 @@ logger = logging.get_logger(__name__)
 
 
 class FeedbackDatasetProcessor(DatasetProcessor):
+    @staticmethod
+    def get_dataset_features(dataset: "Dataset") -> "Features":
+        r"""Return the schema for the fields emitted by ``preprocess_dataset``."""
+        return build_dataset_features(
+            dataset,
+            {
+                "input_ids": Sequence(Value("int32")),
+                "attention_mask": Sequence(Value("int8")),
+                "labels": Sequence(Value("int64")),
+                "kl_input_ids": Sequence(Value("int32")),
+                "kl_attention_mask": Sequence(Value("int8")),
+                "kl_labels": Sequence(Value("int64")),
+                "kto_tags": Value("bool"),
+            },
+        )
+
     def _encode_data_example(
         self,
         prompt: list[dict[str, str]],
@@ -83,6 +103,7 @@ class FeedbackDatasetProcessor(DatasetProcessor):
         return input_ids, labels, kl_input_ids, kl_labels, kto_tag
 
     def preprocess_dataset(self, examples: dict[str, list[Any]]) -> dict[str, list[Any]]:
+        # Keep these output keys in sync with ``get_dataset_features`` above.
         # Creates mismatched pairs of prompts and completions for the KL dataset by adding a +1 offset to the order of completions.
         kl_response = [examples["_response"][-1]] + examples["_response"][:-1]
         model_inputs = defaultdict(list)

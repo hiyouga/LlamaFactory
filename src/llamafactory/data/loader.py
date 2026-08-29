@@ -16,7 +16,7 @@ import os
 from typing import TYPE_CHECKING, Literal, Optional, Union
 
 import numpy as np
-from datasets import Dataset, DatasetDict, Features, Sequence, Value, load_dataset, load_from_disk
+from datasets import Dataset, DatasetDict, load_dataset, load_from_disk
 
 from ..extras import logging
 from ..extras.constants import FILEEXT2TYPE
@@ -226,20 +226,6 @@ def _get_dataset_processor(
     return dataset_processor_class(template=template, tokenizer=tokenizer, processor=processor, data_args=data_args)
 
 
-def _get_sft_dataset_features(dataset: "Dataset") -> Features:
-    r"""Return stable output features for non-packed supervised preprocessing."""
-    return Features(
-        {
-            "input_ids": Sequence(Value("int32")),
-            "attention_mask": Sequence(Value("int8")),
-            "labels": Sequence(Value("int64")),
-            "images": dataset.features["_images"],
-            "videos": dataset.features["_videos"],
-            "audios": dataset.features["_audios"],
-        }
-    )
-
-
 def _get_preprocessed_dataset(
     dataset: Union["Dataset", "IterableDataset"] | None,
     data_args: "DataArguments",
@@ -265,8 +251,9 @@ def _get_preprocessed_dataset(
             load_from_cache_file=(not data_args.overwrite_cache) or (training_args.local_process_index != 0),
             desc="Running tokenizer on dataset",
         )
-        if stage == "sft" and not data_args.packing and not (training_args.predict_with_generate and is_eval):
-            kwargs["features"] = _get_sft_dataset_features(dataset)
+        features = dataset_processor.get_dataset_features(dataset)
+        if features is not None:
+            kwargs["features"] = features
 
     dataset = dataset.map(
         dataset_processor.preprocess_dataset,

@@ -17,7 +17,7 @@ import os
 import pytest
 from datasets import Dataset, Features, Sequence, Value
 
-from llamafactory.data.loader import _get_sft_dataset_features
+from llamafactory.data.processor.supervised import SupervisedDatasetProcessor
 from llamafactory.train.test_utils import load_dataset_module
 
 
@@ -77,7 +77,7 @@ def test_sft_features_stabilize_mixed_modality_batches():
         batched=True,
         batch_size=2,
         remove_columns=dataset.column_names,
-        features=_get_sft_dataset_features(dataset),
+        features=SupervisedDatasetProcessor.get_dataset_features(dataset),
     )
 
     assert processed_dataset.features["images"] == source_features["_images"]
@@ -87,6 +87,13 @@ def test_sft_features_stabilize_mixed_modality_batches():
     assert processed_dataset["videos"][0] is None
     assert processed_dataset["images"][2] == ["image.png"]
     assert processed_dataset["videos"][3] == ["video.mp4"]
+
+
+def test_sft_features_require_aligned_media_columns():
+    dataset = Dataset.from_dict({"_prompt": ["text"]})
+
+    with pytest.raises(ValueError, match="_images, _videos, _audios"):
+        SupervisedDatasetProcessor.get_dataset_features(dataset)
 
 
 @pytest.mark.runs_on(["cpu", "mps"])
