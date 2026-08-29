@@ -65,7 +65,7 @@ class Template:
         tools: Optional[str] = None,
     ) -> tuple[list[int], list[int]]:
         r"""Return a single pair of token ids representing prompt and response respectively."""
-        encoded_messages = self._encode(tokenizer, messages, system, tools)
+        encoded_messages, _ = self._encode(tokenizer, messages, system, tools)
         prompt_ids = []
         for encoded_ids in encoded_messages[:-1]:
             prompt_ids += encoded_ids
@@ -82,7 +82,7 @@ class Template:
         discarding_history_cot: bool = False,  # only effect reasoning template
     ) -> list[tuple[list[int], list[int]]]:
         r"""Return multiple pairs of token ids representing prompts and responses respectively."""
-        encoded_messages = self._encode(tokenizer, messages, system, tools)
+        encoded_messages, _ = self._encode(tokenizer, messages, system, tools)
         return [(encoded_messages[i], encoded_messages[i + 1]) for i in range(0, len(encoded_messages), 2)]
 
     def extract_tool(self, content: str) -> Union[str, list["FunctionCall"]]:
@@ -135,7 +135,7 @@ class Template:
         messages: list[dict[str, str]],
         system: Optional[str],
         tools: Optional[str],
-    ) -> list[list[int]]:
+    ) -> tuple[list[list[int]], set[int]]:
         r"""Encode formatted inputs to pairs of token ids.
 
         Turn 0: prefix + system + query        resp
@@ -147,15 +147,17 @@ class Template:
 
         rendered_messages = self._render(messages, system, tools)
         self._process_rendered_messages(rendered_messages, messages)
-        return [self._convert_elements_to_ids(tokenizer, elements) for elements in rendered_messages]
+        processed_response_indices = self._process_thought_boundaries(rendered_messages, messages)
+        encoded_messages = [self._convert_elements_to_ids(tokenizer, elements) for elements in rendered_messages]
+        return encoded_messages, processed_response_indices
 
     def _process_messages(self, messages: list[dict[str, str]]) -> Optional[list[dict[str, str]]]:
         r"""Return model-specific messages before rendering, or use the original messages."""
-        pass
+        return None
 
     def _format_system_and_tools(self, system: str, tools: Optional[str]) -> Optional["SLOTS"]:
         r"""Return model-specific system and tool elements, or use the default formatter."""
-        pass
+        return None
 
     def _render(
         self,
@@ -206,7 +208,13 @@ class Template:
         self, rendered_messages: list["SLOTS"], messages: list[dict[str, str]]
     ) -> None:
         r"""Apply model-specific changes to formatter output before tokenization."""
-        pass
+        return None
+
+    def _process_thought_boundaries(
+        self, rendered_messages: list["SLOTS"], messages: list[dict[str, str]]
+    ) -> set[int]:
+        r"""Process model-specific thought boundaries and return the handled response indices."""
+        return set()
 
     @staticmethod
     def _add_or_replace_eos_token(tokenizer: "PreTrainedTokenizer", eos_token: str) -> None:
@@ -458,7 +466,7 @@ class ReasoningTemplate(Template):
 
     def _process_history_thoughts(self, messages: list[dict[str, str]], is_inference: bool) -> bool:
         r"""Process model-specific historical reasoning and return whether it was handled."""
-        pass
+        return False
 
     @override
     def encode_oneturn(
@@ -476,8 +484,14 @@ class ReasoningTemplate(Template):
         if self.enable_thinking is False:  # remove all cot
             messages[-1]["content"] = self.remove_thought(messages[-1]["content"])
 
-        prompt_ids, response_ids = super().encode_oneturn(tokenizer, messages, system, tools)
-        if (
+        encoded_messages, processed_response_indices = self._encode(tokenizer, messages, system, tools)
+        prompt_ids = []
+        for encoded_ids in encoded_messages[:-1]:
+            prompt_ids += encoded_ids
+
+        response_index = len(encoded_messages) - 1
+        response_ids = encoded_messages[response_index]
+        if response_index not in processed_response_indices and (
             self.thought_words[0].strip() not in messages[-1]["content"]
             and self.thought_words[1].strip() not in messages[-1]["content"]
         ):  # add empty cot
@@ -506,14 +520,14 @@ class ReasoningTemplate(Template):
             for i in range(1, len(messages) - 2, 2):  # preserve the last cot
                 messages[i]["content"] = self.remove_thought(messages[i]["content"])
 
-        encoded_messages = self._encode(tokenizer, messages, system, tools)
+        encoded_messages, processed_response_indices = self._encode(tokenizer, messages, system, tools)
         if discarding_history_cot:
             turn_indices = [len(messages) - 2]
         else:
             turn_indices = range(0, len(messages), 2)
 
         for i in turn_indices:
-            if (
+            if i + 1 not in processed_response_indices and (
                 self.thought_words[0].strip() not in messages[i + 1]["content"]
                 and self.thought_words[1].strip() not in messages[i + 1]["content"]
             ):  # add empty cot
