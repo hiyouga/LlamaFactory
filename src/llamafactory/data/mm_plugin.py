@@ -87,6 +87,17 @@ if TYPE_CHECKING:
             pass
 
 
+# Processor-only metadata that must not be passed to model.forward or model.generate.
+_PROCESSOR_ONLY_MM_INPUT_KEYS = (
+    "num_soft_tokens_per_image",
+    "num_soft_tokens_per_video",
+    "video_metadata",
+    "_gemma4_fps_per_video",
+    "_gemma4_frames_indices",
+    "_gemma4_num_audio_soft_tokens",
+)
+
+
 def _get_paligemma_token_type_ids(imglens: list[int], seqlens: list[int], processor: "MMProcessor") -> list[list[int]]:
     r"""Get paligemma token type ids for computing loss.
 
@@ -1160,14 +1171,7 @@ class Gemma4Plugin(BasePlugin):
         self._validate_input(processor, images, videos, audios)
         mm_inputs = self._get_mm_inputs(images, videos, audios, processor)
         # Pop metadata keys that must not be passed to the model.
-        for key in (
-            "num_soft_tokens_per_image",
-            "num_soft_tokens_per_video",
-            "video_metadata",
-            "_gemma4_fps_per_video",
-            "_gemma4_frames_indices",
-            "_gemma4_num_audio_soft_tokens",
-        ):
+        for key in _PROCESSOR_ONLY_MM_INPUT_KEYS:
             mm_inputs.pop(key, None)
 
         mm_inputs["mm_token_type_ids"] = processor.create_mm_token_type_ids(batch_ids)
@@ -2699,6 +2703,26 @@ class Qwen3VLPlugin(Qwen2VLPlugin):
             temporal_patch_size: int = getattr(image_processor, "temporal_patch_size", 2)
             if "second_per_grid_ts" in processor.model_input_names:
                 mm_inputs["second_per_grid_ts"] = [temporal_patch_size / fps for fps in videos["fps_per_video"]]
+
+        return mm_inputs
+
+    @override
+    def get_mm_inputs(
+        self,
+        images: list["ImageInput"],
+        videos: list["VideoInput"],
+        audios: list["AudioInput"],
+        imglens: list[int],
+        vidlens: list[int],
+        audlens: list[int],
+        batch_ids: list[list[int]],
+        processor: Optional["MMProcessor"],
+    ) -> dict[str, Union[list[int], "torch.Tensor"]]:
+        self._validate_input(processor, images, videos, audios)
+        mm_inputs = self._get_mm_inputs(images, videos, audios, processor)
+        # Pop metadata keys that must not be passed to the model.
+        for key in _PROCESSOR_ONLY_MM_INPUT_KEYS:
+            mm_inputs.pop(key, None)
 
         return mm_inputs
 
