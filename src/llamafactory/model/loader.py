@@ -151,7 +151,9 @@ def load_model(
     if model is None:
         init_kwargs["config"] = config
         init_kwargs["pretrained_model_name_or_path"] = model_args.model_name_or_path
-        init_kwargs["torch_dtype"] = "auto"
+        init_kwargs["torch_dtype"] = (
+            model_args.compute_dtype if is_trainable and model_args.compute_dtype == torch.float32 else "auto"
+        )
 
         if model_args.mixture_of_depths == "load":
             model = load_mod_pretrained_model(**init_kwargs)
