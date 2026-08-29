@@ -380,3 +380,79 @@ def test_lfm2_tool_round_trip():
     assert len(extracted) == 1
     assert extracted[0][0] == original["name"]
     assert json.loads(extracted[0][1]) == original["arguments"]
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
+def test_minicpm5_function_formatter():
+    formatter = FunctionFormatter(slots=["{{content}}<|im_end|>\n"], tool_format="minicpm5")
+    tool_calls = json.dumps(FUNCTION)
+    assert formatter.apply(content=tool_calls) == [
+        '<function name="tool_name"><param name="foo">bar</param><param name="size">10</param></function><|im_end|>\n'
+    ]
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
+def test_minicpm5_multi_function_formatter():
+    formatter = FunctionFormatter(slots=["{{content}}<|im_end|>\n"], tool_format="minicpm5")
+    tool_calls = json.dumps([FUNCTION] * 2)
+    assert formatter.apply(content=tool_calls) == [
+        '<function name="tool_name"><param name="foo">bar</param>'
+        '<param name="size">10</param></function>\n'
+        '<function name="tool_name"><param name="foo">bar</param>'
+        '<param name="size">10</param></function><|im_end|>\n'
+    ]
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
+def test_minicpm5_tool_formatter():
+    formatter = ToolFormatter(tool_format="minicpm5")
+    wrapped = json.dumps({"type": "function", "function": TOOLS[0]}, ensure_ascii=False)
+    assert formatter.apply(content=json.dumps(TOOLS)) == [
+        "\n\n# Tools\n\nYou are provided with function signatures within <tools></tools> XML tags:\n"
+        f"<tools>\n{wrapped}\n</tools>\n\nTool usage guidelines:\n"
+        "- You may call zero or more functions. If no function calls are needed, just answer "
+        "normally and do not include any <function ... </function>.\n"
+        "- When calling a function, return an XML object within <function ... </function> using:\n"
+        '<function name="function-name"><param name="param-name">param-value</param></function>\n'
+        "- param-value may be multi-line. If it contains <, & or newline characters, wrap it in a "
+        'CDATA block: <param name="param-name"><![CDATA[...multi-line value...]]></param>'
+    ]
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
+def test_minicpm5_tool_extractor():
+    formatter = ToolFormatter(tool_format="minicpm5")
+    result = '<function name="test_tool"><param name="foo">bar</param><param name="size">10</param></function>'
+    assert formatter.extract(result) == [("test_tool", """{"foo": "bar", "size": 10}""")]
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
+def test_minicpm5_tool_extractor_cdata():
+    formatter = ToolFormatter(tool_format="minicpm5")
+    result = '<function name="test_tool"><param name="foo"><![CDATA[a < b\nsecond line]]></param></function>'
+    assert formatter.extract(result) == [("test_tool", json.dumps({"foo": "a < b\nsecond line"}))]
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
+def test_minicpm5_tool_extractor_malformed_value():
+    formatter = ToolFormatter(tool_format="minicpm5")
+    result = '<function name="test_tool"><param name="foo">{[1, 2], [3, 4]}</param></function>'
+    assert formatter.extract(result) == [("test_tool", json.dumps({"foo": "{[1, 2], [3, 4]}"}))]
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"foo": "x </param> y"},
+        {"foo": "see </function> here"},
+        {"foo": "  padded  "},
+        {"foo": "a < b", "bar": "tom & jerry"},
+        {"foo": True, "bar": [1, 2], "baz": {"k": "v"}},
+    ],
+)
+def test_minicpm5_tool_round_trip(arguments):
+    formatter = ToolFormatter(tool_format="minicpm5")
+    function_formatter = FunctionFormatter(slots=["{{content}}"], tool_format="minicpm5")
+    rendered = function_formatter.apply(content=json.dumps({"name": "test_tool", "arguments": arguments}))[0]
+    assert formatter.extract(rendered) == [("test_tool", json.dumps(arguments, ensure_ascii=False))]

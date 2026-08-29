@@ -119,6 +119,17 @@ LING_TOOL_PROMPT = (
 
 LFM2_TOOL_PROMPT = "List of tools: <|tool_list_start|>{tool_text}<|tool_list_end|>"
 
+MINICPM5_TOOL_PROMPT = (
+    "\n\n# Tools\n\nYou are provided with function signatures within <tools></tools> XML tags:\n"
+    "<tools>{tool_text}\n</tools>\n\nTool usage guidelines:\n"
+    "- You may call zero or more functions. If no function calls are needed, just answer normally "
+    "and do not include any <function ... </function>.\n"
+    "- When calling a function, return an XML object within <function ... </function> using:\n"
+    '<function name="function-name"><param name="param-name">param-value</param></function>\n'
+    "- param-value may be multi-line. If it contains <, & or newline characters, wrap it in a "
+    'CDATA block: <param name="param-name"><![CDATA[...multi-line value...]]></param>'
+)
+
 
 @dataclass
 class ToolUtils(ABC):
@@ -551,6 +562,72 @@ class MiniMaxM2ToolUtils(ToolUtils):
         return results
 
 
+class MiniCPM5ToolUtils(ToolUtils):
+    r"""MiniCPM-5 tool using template."""
+
+    @override
+    @staticmethod
+    def tool_formatter(tools: list[dict[str, Any]]) -> str:
+        tool_text = ""
+        for tool in tools:
+            if tool.get("type") != "function":
+                tool = {"type": "function", "function": tool}
+
+            tool_text += "\n" + json.dumps(tool, ensure_ascii=False)
+
+        return MINICPM5_TOOL_PROMPT.format(tool_text=tool_text)
+
+    @override
+    @staticmethod
+    def function_formatter(functions: list["FunctionCall"]) -> str:
+        function_texts = []
+        for name, arguments in functions:
+            prompt = f'<function name="{name}">'
+            for key, value in json.loads(arguments).items():
+                prompt += f'<param name="{key}">'
+                if isinstance(value, str):
+                    if "<" in value or "&" in value or "\n" in value:
+                        prompt += f"<![CDATA[{value}]]>"
+                    else:
+                        prompt += value
+                else:
+                    prompt += str(value)
+
+                prompt += "</param>"
+
+            prompt += "</function>"
+            function_texts.append(prompt)
+
+        return "\n".join(function_texts)
+
+    @override
+    @staticmethod
+    def tool_extractor(content: str) -> Union[str, list["FunctionCall"]]:
+        results = []
+        regex = re.compile(r'<function name="(.*?)">((?:<!\[CDATA\[.*?\]\]>|.)*?)</function>', re.DOTALL)
+        for func_name, params_block in re.findall(regex, content):
+            args_dict = {}
+            param_pattern = re.compile(r'<param name="(.*?)">(<!\[CDATA\[.*?\]\]>|.*?)</param>', re.DOTALL)
+            for key, raw_value in re.findall(param_pattern, params_block):
+                cdata = re.fullmatch(r"<!\[CDATA\[(.*?)\]\]>", raw_value, re.DOTALL)
+                if cdata:
+                    args_dict[key] = cdata.group(1)
+                    continue
+
+                value = raw_value.strip()
+                try:
+                    args_dict[key] = json.loads(value)
+                except json.JSONDecodeError:
+                    try:
+                        args_dict[key] = ast.literal_eval(value)
+                    except Exception:
+                        args_dict[key] = raw_value
+
+            results.append(FunctionCall(func_name, json.dumps(args_dict, ensure_ascii=False)))
+
+        return results if results else content
+
+
 class MistralToolUtils(ToolUtils):
     r"""Mistral v0.3 tool using template."""
 
@@ -887,6 +964,7 @@ TOOLS = {
     "glm4": GLM4ToolUtils(),
     "llama3": Llama3ToolUtils(),
     "lfm2": LFM2ToolUtils(),
+    "minicpm5": MiniCPM5ToolUtils(),
     "minimax1": MiniMaxM1ToolUtils(),
     "minimax2": MiniMaxM2ToolUtils(),
     "mistral": MistralToolUtils(),

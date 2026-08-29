@@ -1961,7 +1961,7 @@ register_model_group(
             DownloadSource.MODELSCOPE: "OpenBMB/MiniCPM5-1B",
         },
     },
-    template="empty",
+    template="minicpm5",
 )
 
 
