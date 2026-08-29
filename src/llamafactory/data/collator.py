@@ -227,13 +227,6 @@ class MultiModalDataCollatorForSeq2Seq(DataCollatorForSeq2Seq):
             # for [0, seq_len] = [0, unpadded_length + right_padding_length + fake_input_ids_len + collator_padding_length]
             unpadded_length = int(features["attention_mask"][0].bool().sum().item())
             right_padding_length = int((packing_params_list[0] or {}).get("right_padding_length") or 0)
-            if not 0 <= unpadded_length <= seq_len:
-                raise ValueError(
-                    "Invalid packing metadata: "
-                    f"seq_len={seq_len}, unpadded_length={unpadded_length}, "
-                    f"right_padding_length={right_padding_length}."
-                )
-
             max_valid_right_padding = seq_len - unpadded_length
             if right_padding_length < 0:
                 raise ValueError(
