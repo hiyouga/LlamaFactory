@@ -12,13 +12,23 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import fsspec
+from fsspec.implementations.memory import MemoryFileSystem
 
 from llamafactory.data import data_utils
 
 
+class GCSLikeMemoryFileSystem(MemoryFileSystem):
+    protocol = "gs"
+    store = {}
+    pseudo_dirs = [""]
+
+    @classmethod
+    def _strip_protocol(cls, path):
+        return str(path).removeprefix("gs://").strip("/")
+
+
 def test_read_cloud_json_from_gcs_directory(monkeypatch):
-    fs = fsspec.filesystem("memory", skip_instance_cache=True)
+    fs = GCSLikeMemoryFileSystem(skip_instance_cache=True)
     cloud_dir = "gs://llamafactory-test/dataset"
     with fs.open(f"{cloud_dir}/train.json", "w") as f:
         f.write('[{"id": 1}]')
@@ -28,6 +38,12 @@ def test_read_cloud_json_from_gcs_directory(monkeypatch):
 
     with fs.open(f"{cloud_dir}/README.txt", "w") as f:
         f.write("not a dataset")
+
+    assert fs.ls(cloud_dir, detail=False) == [
+        "llamafactory-test/dataset/README.txt",
+        "llamafactory-test/dataset/eval.jsonl",
+        "llamafactory-test/dataset/train.json",
+    ]
 
     monkeypatch.setattr(data_utils, "setup_fs", lambda path, anon=False: fs)
 
