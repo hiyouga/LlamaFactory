@@ -360,13 +360,22 @@ def test_multimodal_packing_accepts_max_right_padding_length():
     assert features["attention_mask"].shape == (1, 4)
 
 
-@pytest.mark.parametrize("right_padding_length", [-1, 3])
-def test_multimodal_packing_rejects_invalid_right_padding_length(right_padding_length):
+def test_multimodal_packing_rejects_negative_right_padding_length():
     with pytest.raises(
         ValueError,
-        match=rf"seq_len=4, unpadded_length=2, right_padding_length={right_padding_length}",
+        match=r"seq_len=4, unpadded_length=2, right_padding_length=-1",
     ):
-        _compute_dummy_image_packing_positions(right_padding_length)
+        _compute_dummy_image_packing_positions(-1)
+
+
+def test_multimodal_packing_warns_and_clamps_excessive_right_padding_length(caplog):
+    with caplog.at_level("WARNING", logger="llamafactory.data.collator"):
+        features = _compute_dummy_image_packing_positions(right_padding_length=3)
+
+    assert "seq_len=4, unpadded_length=2, right_padding_length=3" in caplog.text
+    assert "Clamping dummy-image padding to zero" in caplog.text
+    assert features["position_ids"].shape == (3, 1, 4)
+    assert features["attention_mask"].shape == (1, 4)
 
 
 @pytest.mark.runs_on(["cpu"])
