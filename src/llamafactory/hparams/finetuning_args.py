@@ -569,7 +569,12 @@ class FinetuningArguments(
     )
     early_stopping_threshold: float = field(
         default=0.0,
-        metadata={"help": "How much the `metric_for_best_model` must improve to not trigger early stopping."},
+        metadata={
+            "help": (
+                "How much the `metric_for_best_model` must improve to not trigger early stopping. "
+                "Requires `early_stopping_steps`."
+            )
+        },
     )
     plot_loss: bool = field(
         default=False,
