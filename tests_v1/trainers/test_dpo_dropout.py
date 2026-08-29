@@ -19,6 +19,7 @@ import torch
 import torch.nn.functional as F
 from transformers import PretrainedConfig
 
+from llamafactory.v1.config import get_args
 from llamafactory.v1.trainers.dpo_trainer import DPOTrainer
 from llamafactory.v1.trainers.rm_trainer import RMTrainer
 
@@ -45,9 +46,10 @@ class _DropoutModel(torch.nn.Module):
         return self.functional_dropout(self.module_dropout(self.linear(inputs)))
 
 
-def _get_args():
+def _get_args(disable_dropout: bool = True):
     return SimpleNamespace(
         cp_size=1,
+        disable_dropout=disable_dropout,
         pref_loss="orpo",
         pref_beta=0.1,
         pref_ftx=0.0,
@@ -67,8 +69,8 @@ def test_dpo_trainer_disables_dropout():
     assert model.training
     assert model.module_dropout.p == 0.0
     assert model.functional_dropout.attention_dropout == 0.0
-    assert model.config.attention_dropout == 0.0
-    assert model.config.text_config.hidden_dropout == 0.0
+    assert model.config.attention_dropout == 0.5
+    assert model.config.text_config.hidden_dropout == 0.25
     inputs = torch.ones(2, 4)
     torch.manual_seed(1)
     first = model(inputs)
@@ -95,10 +97,15 @@ def test_preference_trainers_can_keep_dropout_enabled():
         patch("llamafactory.v1.trainers.dpo_trainer.BaseTrainer.__init__", return_value=None),
         patch("llamafactory.v1.trainers.rm_trainer.BaseTrainer.__init__", return_value=None),
     ):
-        DPOTrainer(_get_args(), dpo_model, renderer=None, train_dataset=None, disable_dropout=False)
-        RMTrainer(_get_args(), rm_model, renderer=None, train_dataset=None, disable_dropout=False)
+        DPOTrainer(_get_args(disable_dropout=False), dpo_model, renderer=None, train_dataset=None)
+        RMTrainer(_get_args(disable_dropout=False), rm_model, renderer=None, train_dataset=None)
 
     assert dpo_model.module_dropout.p == 0.75
     assert dpo_model.functional_dropout.attention_dropout == 0.5
     assert rm_model.module_dropout.p == 0.75
     assert rm_model.functional_dropout.attention_dropout == 0.5
+
+
+def test_training_arguments_parser_exposes_dropout_control():
+    assert get_args({})[2].disable_dropout
+    assert not get_args({"disable_dropout": False})[2].disable_dropout

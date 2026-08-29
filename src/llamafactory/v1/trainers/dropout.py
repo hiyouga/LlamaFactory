@@ -14,7 +14,6 @@
 
 
 import torch
-from transformers import PretrainedConfig
 
 from ..utils.types import HFModel
 
@@ -52,24 +51,8 @@ def _zero_dropout_attributes(obj) -> None:
 
 def disable_dropout_in_model(model: HFModel) -> None:
     r"""Disable module and functional dropout paths used by Transformers models."""
-    configs = []
     for module in model.modules():
         if isinstance(module, _DROPOUT_MODULES):
             module.p = 0.0
 
-        # Llama/Qwen-style attention applies dropout with a float stored on the
-        # attention module rather than an ``nn.Dropout`` child.
         _zero_dropout_attributes(module)
-        config = getattr(module, "config", None)
-        if isinstance(config, PretrainedConfig):
-            configs.append(config)
-
-    seen = set()
-    while configs:
-        config = configs.pop()
-        if id(config) in seen:
-            continue
-
-        seen.add(id(config))
-        _zero_dropout_attributes(config)
-        configs.extend(value for value in vars(config).values() if isinstance(value, PretrainedConfig))

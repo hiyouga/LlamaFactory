@@ -144,6 +144,10 @@ class TrainingArguments:
         default=1,
         metadata={"help": "Log metrics every N optimizer steps."},
     )
+    disable_dropout: bool = field(
+        default=True,
+        metadata={"help": "Disable model dropout during DPO and reward model training."},
+    )
     pref_loss: Literal["sigmoid", "orpo", "simpo"] = field(
         default="sigmoid",
         metadata={"help": "The type of DPO loss to use."},

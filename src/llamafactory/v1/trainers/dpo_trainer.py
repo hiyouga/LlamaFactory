@@ -94,12 +94,11 @@ class DPOTrainer(BaseTrainer):
         renderer,
         train_dataset,
         callbacks=None,
-        disable_dropout: bool = True,
     ) -> None:
         if args.cp_size > 1:
             raise NotImplementedError("DPO trainer currently only supports cp_size == 1.")
 
-        if disable_dropout:
+        if args.disable_dropout:
             # DPO compares policy and reference log-probabilities for the same sequence. Keeping
             # dropout active makes both estimates stochastic (including the LoRA reference path,
             # which reuses this model with adapters disabled) and injects noise into the objective.

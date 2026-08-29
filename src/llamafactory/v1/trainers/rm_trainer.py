@@ -76,12 +76,11 @@ class RMTrainer(BaseTrainer):
         renderer,
         train_dataset,
         callbacks=None,
-        disable_dropout: bool = True,
     ) -> None:
         if args.cp_size > 1:
             raise NotImplementedError("RM trainer currently only supports cp_size == 1.")
 
-        if disable_dropout:
+        if args.disable_dropout:
             disable_dropout_in_model(model)
 
         super().__init__(args, model, renderer, train_dataset, callbacks)
