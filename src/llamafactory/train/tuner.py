@@ -78,10 +78,10 @@ def _training_function(config: dict[str, Any]) -> None:
     if finetuning_args.use_swanlab:
         callbacks.append(get_swanlab_callback(finetuning_args))
 
-    if finetuning_args.early_stopping_steps is not None:
+    if finetuning_args.early_stopping_patience is not None:
         callbacks.append(
             EarlyStoppingCallback(
-                early_stopping_patience=finetuning_args.early_stopping_steps,
+                early_stopping_patience=finetuning_args.early_stopping_patience,
                 early_stopping_threshold=finetuning_args.early_stopping_threshold,
             )
         )
