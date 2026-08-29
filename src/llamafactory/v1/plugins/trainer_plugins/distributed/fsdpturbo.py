@@ -271,7 +271,7 @@ class FSDPTurboFSDP2Engine(FSDP2Engine):
 
     Design:
     - FSDPTurbo owns EP / EFSDP only.
-    - LlamaFactory owns FSDP / CP / init-load lifecycle.
+    - LlamaFactory owns PEFT / FSDP / CP / init-load / checkpoint lifecycle.
     """
 
     def __init__(self, dist_config: dict, bf16: bool = False):
@@ -361,14 +361,27 @@ class FSDPTurboFSDP2Engine(FSDP2Engine):
         from fsdp_turbo.fsdp_turbo_config import EPPlanConfig, FSDPPlanConfig
         from fsdp_turbo.utils.str_match import module_name_match
 
-        spec = FSDPTurboEPModelSpec.get(model)
-        if spec is None:
-            raise ValueError(f"No FSDPTurbo EP spec is registered for model_type={_get_model_type(model)}.")
+        # Resolve FSDPTurbo plans on the PEFT base model while preserving
+        # the outer PeftModel for LoRA training and checkpointing.
+        ep_target_model = model
+        if self.is_lora_module_wrap(model):
+            get_base_model = getattr(model, "get_base_model", None)
+            if get_base_model is None:
+                raise RuntimeError("FSDPTurbo could not access the base model from the LoRA-wrapped model.")
 
-        ep_modules = spec.ep_modules
-        model = spec.prepare(model)
+            ep_target_model = get_base_model()
+            logger.info_rank0("Resolving FSDPTurbo EP/FSDP plans against the PEFT base model.")
 
+        ep_modules = []
         if self.ep_size > 1:
+            spec = FSDPTurboEPModelSpec.get(ep_target_model)
+            if spec is None:
+                raise ValueError(
+                    f"No FSDPTurbo EP spec is registered for model_type={_get_model_type(ep_target_model)}."
+                )
+
+            ep_modules = spec.ep_modules
+            ep_target_model = spec.prepare(ep_target_model)
             ep_plan = EPPlanConfig(
                 apply_modules=ep_modules,
                 dispatcher=self.dist_config.get("ep_dispatcher", "eager"),
@@ -394,13 +407,13 @@ class FSDPTurboFSDP2Engine(FSDP2Engine):
                 logger.info(f"FSDPTurbo EP device mesh: {ep_mesh}")
                 logger.info(f"FSDPTurbo EP gradient divide factor: {ep_plan.gradient_divide_factor}")
 
-            model = expert_parallelize_modules(model, ep_mesh, ep_plan)
+            ep_target_model = expert_parallelize_modules(ep_target_model, ep_mesh, ep_plan)
 
             if self.ep_fsdp_size > 1:
                 if self.rank == 0:
                     logger.info(f"FSDPTurbo EFSDP apply patterns: {ep_plan.apply_efsdp_modules}")
                     logger.info(f"FSDPTurbo EFSDP device mesh: {efsdp_mesh}")
-                model = expert_fully_shard_modules(model, efsdp_mesh, ep_plan, fsdp_plan)
+                ep_target_model = expert_fully_shard_modules(ep_target_model, efsdp_mesh, ep_plan, fsdp_plan)
 
         # Collect ignored params for the outer FSDP wrap
         fsdp_ignored_modules = list(self.dist_config.get("fsdp_ignored_modules", []))
@@ -409,7 +422,10 @@ class FSDPTurboFSDP2Engine(FSDP2Engine):
 
         ignored_params = set()
         if fsdp_ignored_modules:
-            for name, module in model.named_modules():
+            # Resolve patterns against the same unwrapped model used by the EP
+            # plan. The collected Parameter objects are shared with the outer
+            # PeftModel, so they can be passed directly to its FSDP2 wrapper.
+            for name, module in ep_target_model.named_modules():
                 for pattern in fsdp_ignored_modules:
                     if module_name_match(pattern, name):
                         ignored_params.update(list(module.parameters(recurse=True)))

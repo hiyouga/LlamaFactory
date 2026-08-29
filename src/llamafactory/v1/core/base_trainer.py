@@ -307,6 +307,11 @@ class BaseTrainer:
                             self.model.parameters(), self.args.max_grad_norm, total_norm
                         )
                         grad_norm = total_norm.item()
+                        # Do not retain a full generation of gradient tensors across optimizer
+                        # steps. ``zero_grad(set_to_none=True)`` clears ``param.grad``, but this
+                        # local list would otherwise keep every old gradient alive until the next
+                        # assignment, doubling gradient memory during the following backward.
+                        del grads
 
                     if not torch.isfinite(torch.tensor(grad_norm)):  # type: ignore # pyright: ignore [reportUnknownReturnType]
                         logger.warning_rank0(f"Gradient norm is not finite: {grad_norm}")
