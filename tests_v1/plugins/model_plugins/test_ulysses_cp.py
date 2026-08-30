@@ -76,6 +76,53 @@ def test_gdn_receives_position_ids_from_the_decoder_layer():
     assert layer.linear_attn.cp_position_ids is position_ids
 
 
+def test_gdn_position_ids_prefer_the_keyword():
+    # A caller that does pass the keyword is authoritative; the bound value is a stale
+    # leftover from whichever forward ran last.
+    module = torch.nn.Identity()
+    module.cp_position_ids = torch.tensor([[9, 9, 9]])
+    passed = torch.tensor([[0, 1, 2]])
+
+    assert gdn_attention.resolve_position_ids(module, {"position_ids": passed}) is passed
+
+
+def test_gdn_position_ids_fall_back_to_the_bound_value():
+    # This is the live path: transformers calls the GDN module without position_ids.
+    module = torch.nn.Identity()
+    bound = torch.tensor([[0, 1, 0, 1]])
+    module.cp_position_ids = bound
+
+    assert gdn_attention.resolve_position_ids(module, {}) is bound
+
+
+def test_gdn_position_ids_fall_back_when_the_keyword_is_none():
+    # A decoder-layer signature that defaults position_ids to None and forwards it anyway
+    # would otherwise mask the bound value.
+    module = torch.nn.Identity()
+    bound = torch.tensor([[0, 1, 0, 1]])
+    module.cp_position_ids = bound
+
+    assert gdn_attention.resolve_position_ids(module, {"position_ids": None}) is bound
+
+
+def test_gdn_position_ids_are_none_when_nothing_bound():
+    assert gdn_attention.resolve_position_ids(torch.nn.Identity(), {}) is None
+
+
+def test_gdn_missing_boundaries_warns_once(monkeypatch: pytest.MonkeyPatch):
+    # Losing the boundaries is silent otherwise, but this sits in a per-layer forward, so
+    # warning every call would bury the log it is supposed to surface.
+    messages = []
+    monkeypatch.setattr(gdn_attention, "_warned_missing_boundaries", False)
+    monkeypatch.setattr(gdn_attention.logger, "warning_rank0", messages.append)
+
+    gdn_attention._warn_missing_boundaries("position_ids did not reach the module")
+    gdn_attention._warn_missing_boundaries("this transformers has no prepare_fa_kwargs_from_position_ids")
+
+    assert len(messages) == 1
+    assert "position_ids did not reach the module" in messages[0]
+
+
 def test_gdn_cu_seqlens_marks_packed_document_boundaries(monkeypatch: pytest.MonkeyPatch):
     local_position_ids = torch.tensor([[0, 1, 2, 3]])
     remote_position_ids = torch.tensor([[0, 1, 2, 3]])
