@@ -66,14 +66,15 @@ def load_unsloth_pretrained_model(
     return model
 
 
-def _coerce_unsloth_target_modules(model: "PreTrainedModel", target_modules: list[str]) -> list[str]:
-    r"""Convert expanded VLM target modules back to leaf names for unsloth.
+def _coerce_unsloth_target_modules(model: "PreTrainedModel", target_modules: list[str] | set[str] | str) -> list[str]:
+    r"""Convert expanded language-model target paths back to leaf names for unsloth.
 
     For composite VLMs, `patch_target_modules` expands short target names (e.g. `out_proj`) into
     full module paths (e.g. `model.language_model.layers.0.linear_attn.out_proj`) so that standard
     PEFT can exclude frozen submodules like the vision tower. Unsloth's `get_peft_regex`, however,
     treats every entry in `target_modules` as a leaf name and matches modules ending in it, so a full
-    path never matches and no layers get adapters. Reduce back to unique leaf names in that case.
+    path never matches and no layers get adapters. Keep only language-model paths before reducing
+    them to unique leaf names, preserving already-leaf target names such as `lm_head`.
     """
     if isinstance(target_modules, str):
         target_modules = [target_modules]
@@ -87,6 +88,16 @@ def _coerce_unsloth_target_modules(model: "PreTrainedModel", target_modules: lis
     if all("." not in name for name in target_modules):
         return target_modules
 
+    language_model_keys = COMPOSITE_MODELS[model_type].language_model_keys
+    target_modules = [
+        name
+        for name in target_modules
+        if "." not in name
+        or any(
+            name == key or name.startswith(f"{key}.") or f".{key}." in name or name.endswith(f".{key}")
+            for key in language_model_keys
+        )
+    ]
     return sorted({name.rsplit(".", 1)[-1] for name in target_modules})
 
 

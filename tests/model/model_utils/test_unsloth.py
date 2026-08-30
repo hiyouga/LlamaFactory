@@ -28,6 +28,44 @@ def test_coerce_unsloth_target_modules_composite_model():
     assert _coerce_unsloth_target_modules(model, target_modules) == ["k_proj", "q_proj"]
 
 
+def test_coerce_unsloth_target_modules_excludes_vision_leaves():
+    model = MagicMock()
+    model.config.model_type = "qwen2_vl"
+    target_modules = [
+        "model.language_model.layers.0.self_attn.q_proj",
+        "lm_head",
+        "model.visual.blocks.0.attn.vision_only_proj",
+    ]
+    assert _coerce_unsloth_target_modules(model, target_modules) == ["lm_head", "q_proj"]
+
+
+def test_coerce_unsloth_target_modules_uses_model_specific_language_root():
+    model = MagicMock()
+    model.config.model_type = "dots_ocr"
+    target_modules = [
+        "model.layers.0.self_attn.q_proj",
+        "vision_tower.blocks.0.attn.vision_only_proj",
+    ]
+    assert _coerce_unsloth_target_modules(model, target_modules) == ["q_proj"]
+
+
+def test_coerce_unsloth_target_modules_coerces_string():
+    model = MagicMock()
+    model.config.model_type = "qwen2_vl"
+    target_modules = "model.language_model.layers.0.self_attn.q_proj"
+    assert _coerce_unsloth_target_modules(model, target_modules) == ["q_proj"]
+
+
+def test_coerce_unsloth_target_modules_coerces_set():
+    model = MagicMock()
+    model.config.model_type = "qwen2_vl"
+    target_modules = {
+        "model.language_model.layers.0.self_attn.q_proj",
+        "model.language_model.layers.0.self_attn.k_proj",
+    }
+    assert _coerce_unsloth_target_modules(model, target_modules) == ["k_proj", "q_proj"]
+
+
 def test_coerce_unsloth_target_modules_non_composite_model():
     model = MagicMock()
     model.config.model_type = "qwen2"
