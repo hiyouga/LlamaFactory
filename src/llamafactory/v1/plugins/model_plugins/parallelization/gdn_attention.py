@@ -13,12 +13,14 @@
 # limitations under the License.
 
 
+import functools
 import sys
 
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
 from transformers.activations import ACT2FN
+from transformers.utils.import_utils import is_causal_conv1d_available
 
 from .seq_comm import SeqAllToAll4D
 from .ulysses import (
@@ -88,6 +90,49 @@ def resolve_gdn_kernel(module, attribute: str, module_level: str):
         return kernel
 
     return getattr(sys.modules[type(module).__module__], module_level, None)
+
+
+def require_packed_conv1d_support(cu_seqlens) -> None:
+    """Refuse a packed run when nothing will honour the document boundaries.
+
+    Up to transformers 5.14 `self.causal_conv1d_fn` was None exactly when the kernel package
+    was missing, so the caller's `is not None` check doubled as this guard. 5.15 exposes a
+    module-level `causal_conv1d_fn` whether or not any kernel is installed, and with none its
+    decorator resolves to a plain F.conv1d body that filters `cu_seqlens` out of **kwargs. The
+    boundaries would then be dropped with no error at all, so ask the original question here.
+    """
+    if cu_seqlens is None or is_causal_conv1d_available():
+        return
+
+    raise RuntimeError(
+        "cu_seqlens requires causal_conv1d (FLA) but it is not available. "
+        "Please install flash-linear-attention for pack support."
+    )
+
+
+@functools.cache
+def _build_activation(name: str):
+    """One activation module per name, not one per call.
+
+    `ACT2FN` is a `ClassInstantier`: every lookup runs `cls(**kwargs)` and hands back a fresh
+    `nn.Module`. The call site below is in the per-layer forward, so looking up directly would
+    allocate once per layer per step. These modules are stateless, so one per name is enough.
+    """
+    return ACT2FN[name]
+
+
+def resolve_activation(module):
+    """The module's activation module.
+
+    transformers 5.8 builds `self.act` in `__init__`; 5.15 dropped the attribute and kept only
+    `self.activation`, the name. Prefer the instance so a module that defines its own is
+    honoured, exactly like the kernel lookups above.
+    """
+    act = getattr(module, "act", None)
+    if act is not None:
+        return act
+
+    return _build_activation(module.activation)
 
 
 def gdn_forward_with_cp(self, hidden_states, attention_mask=None, **kwargs):
@@ -184,6 +229,8 @@ def gdn_forward_with_cp(self, hidden_states, attention_mask=None, **kwargs):
         )
 
     causal_conv1d_fn = resolve_gdn_kernel(self, "causal_conv1d_fn", "causal_conv1d_fn")
+    require_packed_conv1d_support(cu_seqlens)
+
     if causal_conv1d_fn is not None:
         # The tensor goes in positionally: FLA names it `x`, the transformers 5.15 fallback
         # names it `hidden_states`. Every other argument is keyword in both.
@@ -195,11 +242,6 @@ def gdn_forward_with_cp(self, hidden_states, attention_mask=None, **kwargs):
             seq_idx=None,
             **({"cu_seqlens": cu_seqlens} if cu_seqlens is not None else {}),
         )
-    elif cu_seqlens is not None:
-        raise RuntimeError(
-            "cu_seqlens requires causal_conv1d_fn (FLA) but it is not available. "
-            "Please install flash-linear-attention for pack support."
-        )
     else:
         conv_out = F.conv1d(
             input=mixed_qkv,
@@ -210,7 +252,7 @@ def gdn_forward_with_cp(self, hidden_states, attention_mask=None, **kwargs):
             dilation=self.conv1d.dilation,
             groups=self.conv_dim // cp_size,
         )
-        mixed_qkv = ACT2FN[self.activation](conv_out[..., :full_seq_len])
+        mixed_qkv = resolve_activation(self)(conv_out[..., :full_seq_len])
     mixed_qkv = mixed_qkv.transpose(1, 2).contiguous()  # [B, S, conv_dim/cp]
 
     query, key, value = torch.split(

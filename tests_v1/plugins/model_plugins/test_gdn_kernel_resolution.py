@@ -13,12 +13,22 @@
 # limitations under the License.
 
 import sys
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 
 import pytest
+import torch
 
-from llamafactory.model.patcher import _install_npu_gdn_kernel
-from llamafactory.v1.plugins.model_plugins.parallelization.gdn_attention import resolve_gdn_kernel
+from llamafactory.model.patcher import (
+    _install_npu_gdn_kernel_on_layer,
+    _install_npu_gdn_kernel_on_modeling,
+    _replace_gdn_kernel_for_npu,
+)
+from llamafactory.v1.plugins.model_plugins.parallelization import gdn_attention
+from llamafactory.v1.plugins.model_plugins.parallelization.gdn_attention import (
+    require_packed_conv1d_support,
+    resolve_activation,
+    resolve_gdn_kernel,
+)
 
 
 def _fake_gdn(module_name: str, **attributes):
@@ -80,10 +90,10 @@ def test_npu_kernel_installs_on_the_layer_when_the_forward_reads_it(modeling_mod
     layer, modeling = modeling_module(chunk_gated_delta_rule=lambda *_: "default")
     modeling.torch_chunk_gated_delta_rule = lambda *_: "default"
 
-    installed_at = _install_npu_gdn_kernel(layer, "npu kernel")
-
-    assert installed_at == "layer attribute"
+    assert _install_npu_gdn_kernel_on_layer(layer, "npu kernel") is True
     assert layer.chunk_gated_delta_rule == "npu kernel"
+    # The per-layer write is the narrow one, so the shared module is left alone.
+    assert modeling.torch_chunk_gated_delta_rule != "npu kernel"
 
 
 def test_npu_kernel_installs_on_the_module_when_the_layer_has_no_attribute(modeling_module):
@@ -92,7 +102,7 @@ def test_npu_kernel_installs_on_the_module_when_the_layer_has_no_attribute(model
     layer, modeling = modeling_module()
     modeling.torch_chunk_gated_delta_rule = lambda *_: "default"
 
-    installed_at = _install_npu_gdn_kernel(layer, "npu kernel")
+    installed_at = _install_npu_gdn_kernel_on_modeling(layer, "npu kernel")
 
     assert installed_at.endswith(".torch_chunk_gated_delta_rule")
     assert modeling.torch_chunk_gated_delta_rule == "npu kernel"
@@ -102,4 +112,75 @@ def test_npu_kernel_installs_on_the_module_when_the_layer_has_no_attribute(model
 def test_npu_kernel_reports_when_it_finds_nowhere_to_install(modeling_module):
     layer, _ = modeling_module()
 
-    assert _install_npu_gdn_kernel(layer, "npu kernel") == ""
+    assert _install_npu_gdn_kernel_on_layer(layer, "npu kernel") is False
+    assert _install_npu_gdn_kernel_on_modeling(layer, "npu kernel") == ""
+
+
+def test_npu_module_level_kernel_is_written_once_not_once_per_layer(modeling_module):
+    # One write covers every layer, and it mutates state shared by the whole process, so
+    # doing it per layer is repeated global mutation for no gain.
+    layer, modeling = modeling_module()
+    modeling.torch_chunk_gated_delta_rule = lambda *_: "default"
+
+    writes = []
+    original_setattr = type(modeling).__setattr__
+
+    def counting_setattr(self, name, value):
+        if name == "torch_chunk_gated_delta_rule":
+            writes.append(value)
+
+        original_setattr(self, name, value)
+
+    object.__setattr__(
+        modeling, "__class__", type("CountingModule", (type(modeling),), {"__setattr__": counting_setattr})
+    )
+
+    layers = [SimpleNamespace(linear_attn=layer) for _ in range(4)]
+    _replace_gdn_kernel_for_npu(layers, "npu kernel", "fake model")
+
+    assert writes == ["npu kernel"]
+
+
+def test_packed_run_without_causal_conv1d_is_refused(monkeypatch):
+    # transformers 5.15 always exposes a module-level causal_conv1d_fn, and with no kernel
+    # package installed its decorator resolves to an F.conv1d body that filters cu_seqlens
+    # out of **kwargs. Without this the boundaries would be dropped and nothing would say so.
+    monkeypatch.setattr(gdn_attention, "is_causal_conv1d_available", lambda: False)
+
+    with pytest.raises(RuntimeError, match="cu_seqlens requires causal_conv1d"):
+        require_packed_conv1d_support(cu_seqlens=torch.tensor([0, 4, 8]))
+
+
+def test_unpacked_run_without_causal_conv1d_is_allowed(monkeypatch):
+    # No boundaries to lose, so an unpacked run must not start demanding the kernels.
+    monkeypatch.setattr(gdn_attention, "is_causal_conv1d_available", lambda: False)
+
+    assert require_packed_conv1d_support(cu_seqlens=None) is None
+
+
+def test_packed_run_with_causal_conv1d_is_allowed(monkeypatch):
+    monkeypatch.setattr(gdn_attention, "is_causal_conv1d_available", lambda: True)
+
+    assert require_packed_conv1d_support(cu_seqlens=torch.tensor([0, 4, 8])) is None
+
+
+def test_activation_prefers_the_module_that_defines_its_own():
+    # transformers <= 5.8 builds self.act in __init__, and a module that overrides it should
+    # keep winning.
+    own = torch.nn.Tanh()
+
+    assert resolve_activation(SimpleNamespace(act=own, activation="silu")) is own
+
+
+def test_activation_falls_back_to_the_name_and_is_not_rebuilt(monkeypatch):
+    # 5.15 dropped self.act. ACT2FN is a ClassInstantier, so a direct lookup constructs a new
+    # nn.Module every time, and this sits in the per-layer forward.
+    module = SimpleNamespace(activation="silu")
+
+    first = resolve_activation(module)
+    second = resolve_activation(SimpleNamespace(activation="silu"))
+
+    # Not asserting the concrete class: transformers has moved silu between its own
+    # SiLUActivation and torch.nn.SiLU across the supported range. The point is the identity.
+    assert isinstance(first, torch.nn.Module)
+    assert first is second
