@@ -102,7 +102,7 @@ def apply_sequence_parallel(model, cp_size: int):
 
     assert num_attention_heads % cp_size == 0, "num_attention_heads must be divisible by cp_size"
     assert num_key_value_heads % cp_size == 0 or cp_size % num_key_value_heads == 0, (
-        "num_key_value_heads must be divisible by cp_size"
+        "one of num_key_value_heads and cp_size must be divisible by the other"
     )
 
     origin_attn = transformers.modeling_flash_attention_utils._flash_attention_forward
