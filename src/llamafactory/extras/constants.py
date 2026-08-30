@@ -1244,10 +1244,24 @@ register_model_group(
             DownloadSource.DEFAULT: "tencent/Hunyuan-4B-Instruct",
             DownloadSource.MODELSCOPE: "Tencent-Hunyuan/Hunyuan-4B-Instruct",
         },
+    },
+    template="hunyuan_instruct",
+)
+
+
+register_model_group(
+    models={
         "Hunyuan-7B-Instruct": {
             DownloadSource.DEFAULT: "tencent/Hunyuan-7B-Instruct",
             DownloadSource.MODELSCOPE: "Tencent-Hunyuan/Hunyuan-7B-Instruct",
         },
+    },
+    template="hy_mt_7b",
+)
+
+
+register_model_group(
+    models={
         "Hunyuan-MT-7B-Instruct": {
             DownloadSource.DEFAULT: "tencent/Hunyuan-MT-7B",
             DownloadSource.MODELSCOPE: "Tencent-Hunyuan/Hunyuan-MT-7B",
@@ -1256,12 +1270,19 @@ register_model_group(
             DownloadSource.DEFAULT: "tencent/HY-MT1.5-7B",
             DownloadSource.MODELSCOPE: "Tencent-Hunyuan/HY-MT1.5-7B",
         },
+    },
+    template="hy_mt_7b",
+)
+
+
+register_model_group(
+    models={
         "Hunyuan-A13B-Instruct": {
             DownloadSource.DEFAULT: "tencent/Hunyuan-A13B-Instruct",
             DownloadSource.MODELSCOPE: "Tencent-Hunyuan/Hunyuan-A13B-Instruct",
         },
     },
-    template="hunyuan",
+    template="hy_mt_7b",
 )
 
 
@@ -1272,7 +1293,7 @@ register_model_group(
             DownloadSource.MODELSCOPE: "Tencent-Hunyuan/Hy-MT2-1.8B",
         },
     },
-    template="hy_dense_1_8b",
+    template="hy_mt_1_8b",
 )
 
 
@@ -1283,7 +1304,7 @@ register_model_group(
             DownloadSource.MODELSCOPE: "Tencent-Hunyuan/Hy-MT2-7B",
         },
     },
-    template="hy_dense_7b",
+    template="hy_mt_7b",
 )
 
 
@@ -1294,7 +1315,7 @@ register_model_group(
             DownloadSource.MODELSCOPE: "Tencent-Hunyuan/HY-MT1.5-1.8B",
         },
     },
-    template="hunyuan_small",
+    template="hy_mt_1_8b",
 )
 
 

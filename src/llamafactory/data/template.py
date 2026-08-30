@@ -21,7 +21,7 @@ from typing_extensions import override
 
 from ..extras import logging
 from .data_utils import Role
-from .formatter import EmptyFormatter, FunctionFormatter, StringFormatter, ToolFormatter
+from .formatter import EmptyFormatter, FunctionFormatter, HunyuanFunctionFormatter, StringFormatter, ToolFormatter
 from .mm_plugin import get_mm_plugin
 
 
@@ -129,6 +129,10 @@ class Template:
 
         return token_ids
 
+    def _format_message_prefix(self, message: dict[str, str], index: int) -> "SLOTS":
+        r"""Return model-specific elements inserted before an individual message."""
+        return []
+
     def _encode(
         self,
         tokenizer: "PreTrainedTokenizer",
@@ -180,6 +184,8 @@ class Template:
                         system_and_tools = self.format_system.apply(content=(system + tool_text))
 
                     elements += system_and_tools
+
+            elements += self._format_message_prefix(message, i)
 
             if message["role"] == Role.USER:
                 elements += self.format_user.apply(content=message["content"], idx=str(i // 2))
@@ -529,6 +535,46 @@ class ReasoningTemplate(Template):
                     encoded_messages[i + 1] = self.get_thought_word_ids(tokenizer) + encoded_messages[i + 1]
 
         return [(encoded_messages[i], encoded_messages[i + 1]) for i in range(0, len(encoded_messages), 2)]
+
+
+@dataclass
+class HunyuanReasoningTemplate(ReasoningTemplate):
+    r"""Format Hunyuan system and tool instructions with the official separator."""
+
+    @override
+    def add_thought(self, content: str = "") -> str:
+        return f"{self.thought_words[0]}\n{content}\n{self.thought_words[1]}\n"
+
+    @override
+    def _process_history_thoughts(self, messages: list[dict[str, str]], is_inference: bool) -> bool:
+        for message in messages[:-1]:
+            if message["role"] == Role.ASSISTANT and "<answer>" in message["content"]:
+                answer = message["content"].split("<answer>", maxsplit=1)[-1]
+                message["content"] = answer.split("</answer>", maxsplit=1)[0].strip()
+
+        return True
+
+    @override
+    def _format_system_and_tools(self, system: str, tools: Optional[str]) -> "SLOTS":
+        tool_text = self.format_tools.apply(content=tools)[0] if tools else ""
+        if system and tool_text:
+            content = system + "\n\n" + tool_text
+        else:
+            content = system or tool_text
+
+        return self.format_system.apply(content=content)
+
+
+@dataclass
+class HunyuanMT7BTemplate(Template):
+    r"""Start every Hunyuan MT user turn with the tokenizer BOS token."""
+
+    @override
+    def _format_message_prefix(self, message: dict[str, str], index: int) -> "SLOTS":
+        if index > 0 and message["role"] == Role.USER:
+            return [{"bos_token"}]
+
+        return []
 
 
 @dataclass
@@ -904,6 +950,30 @@ register_template(
     replace_eos=True,
     thought_words=("<think>", "</think>"),
     template_class=ReasoningTemplate,
+)
+
+
+register_template(
+    name="hunyuan_instruct",
+    format_user=StringFormatter(slots=["<｜hy_User｜>{{content}}<｜hy_Assistant｜>"]),
+    format_assistant=StringFormatter(slots=["{{content}}<｜hy_place▁holder▁no▁2｜>"]),
+    format_system=StringFormatter(slots=["{{content}}<｜hy_place▁holder▁no▁3｜>"]),
+    format_function=HunyuanFunctionFormatter(
+        slots=["{{content}}<｜hy_place▁holder▁no▁2｜>"],
+        tool_format="hunyuan",
+    ),
+    format_observation=StringFormatter(
+        slots=[
+            "<｜hy_User｜><tool_responses><tool_response>{{content}}</tool_response></tool_responses>"
+            "<｜hy_Assistant｜>"
+        ]
+    ),
+    format_tools=ToolFormatter(tool_format="hunyuan"),
+    format_prefix=EmptyFormatter(slots=[{"bos_token"}]),
+    stop_words=["<｜hy_place▁holder▁no▁2｜>"],
+    replace_eos=True,
+    thought_words=("<think>", "</think>"),
+    template_class=HunyuanReasoningTemplate,
 )
 
 
@@ -1335,8 +1405,16 @@ register_template(
 )
 
 
-# The following two templates are copied from the official Hy-MT2 chat templates:
-# https://github.com/Tencent-Hunyuan/Hy-MT2/blob/main/train/llama_factory_support/hy_dense_template.py
+register_template(
+    name="hy_mt_1_8b",
+    format_user=StringFormatter(slots=["<｜hy_User｜>{{content}}<｜hy_Assistant｜>"]),
+    format_assistant=StringFormatter(slots=["{{content}}<｜hy_place▁holder▁no▁2｜>"]),
+    format_system=StringFormatter(slots=["{{content}}<｜hy_place▁holder▁no▁3｜>"]),
+    format_prefix=EmptyFormatter(slots=["<｜hy_begin▁of▁sentence｜>"]),
+    stop_words=["<｜hy_place▁holder▁no▁2｜>"],
+)
+
+
 register_template(
     name="hy_dense_1_8b",
     format_user=StringFormatter(slots=["<｜hy_User｜>{{content}}"]),
@@ -1356,6 +1434,18 @@ register_template(
     format_prefix=EmptyFormatter(slots=[{"bos_token"}]),
     stop_words=["<|eos|>"],
     efficient_eos=True,
+)
+
+
+# These slots preserve the tokenizer-defined prompt/response boundary for current Hunyuan 7B tokenizers.
+register_template(
+    name="hy_mt_7b",
+    format_user=StringFormatter(slots=["{{content}}<|extra_0|>"]),
+    format_assistant=StringFormatter(slots=["{{content}}<|eos|>"]),
+    format_system=StringFormatter(slots=["{{content}}<|extra_4|>"]),
+    format_prefix=EmptyFormatter(slots=[{"bos_token"}]),
+    stop_words=["<|eos|>"],
+    template_class=HunyuanMT7BTemplate,
 )
 
 

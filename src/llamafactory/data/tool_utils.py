@@ -55,6 +55,15 @@ GLM4_MOE_TOOL_PROMPT = (
     "\n...\n</tool_call>\n"
 )
 
+HUNYUAN_TOOL_PROMPT = (
+    "# Tools\n\nYou may call one or more functions to assist with the user query.\n\n"
+    "You are provided with function signatures within <tools></tools> XML tags:\n<tools>\n{tool_text}"
+    "\n</tools>\n\nFor function call returns, you should first print <tool_calls>"
+    "For each function call, you should return object like:\n<tool_call>function_name"
+    "\n```json\nfunction_arguments_in_json_format\n```</tool_call>"
+    "At the end of function call returns, you should print </tool_calls>"
+)
+
 LLAMA3_TOOL_PROMPT = (
     "Cutting Knowledge Date: December 2023\nToday Date: {date}\n\n"
     "You have access to the following functions. To call a function, please respond with JSON for a function call. "
@@ -630,6 +639,49 @@ class QwenToolUtils(ToolUtils):
         return results
 
 
+class HunyuanToolUtils(ToolUtils):
+    r"""Hunyuan tool format used by its official chat template."""
+
+    @override
+    @staticmethod
+    def tool_formatter(tools: list[dict[str, Any]]) -> str:
+        tool_texts = []
+        for tool in tools:
+            wrapped_tool = tool if tool.get("type") == "function" else {"type": "function", "function": tool}
+            tool_texts.append(json.dumps(wrapped_tool, ensure_ascii=False))
+
+        return HUNYUAN_TOOL_PROMPT.format(tool_text="\n".join(tool_texts))
+
+    @override
+    @staticmethod
+    def function_formatter(functions: list["FunctionCall"]) -> str:
+        function_texts = []
+        for name, arguments in functions:
+            arguments = json.dumps(json.loads(arguments), ensure_ascii=False)
+            function_texts.append(f"<tool_call>{name}\n```json\n{arguments}\n```</tool_call>")
+
+        return "<tool_calls>" + "\n".join(function_texts) + "</tool_calls>"
+
+    @override
+    @staticmethod
+    def tool_extractor(content: str) -> Union[str, list["FunctionCall"]]:
+        wrapper = re.search(r"<tool_calls>(.*?)</tool_calls>", content, re.DOTALL)
+        if wrapper is None:
+            return content
+
+        pattern = re.compile(r"<tool_call>(.*?)\n```json\n(.*?)\n```</tool_call>", re.DOTALL)
+        results = []
+        for name, arguments in re.findall(pattern, wrapper.group(1)):
+            try:
+                parsed_arguments = json.loads(arguments)
+            except json.JSONDecodeError:
+                return content
+
+            results.append(FunctionCall(name.strip(), json.dumps(parsed_arguments, ensure_ascii=False)))
+
+        return results if results else content
+
+
 class Qwen35ToolUtils(ToolUtils):
     r"""Qwen 3.5 tool using template."""
 
@@ -885,6 +937,7 @@ TOOLS = {
     "default": DefaultToolUtils(),
     "gemma4": Gemma4ToolUtils(),
     "glm4": GLM4ToolUtils(),
+    "hunyuan": HunyuanToolUtils(),
     "llama3": Llama3ToolUtils(),
     "lfm2": LFM2ToolUtils(),
     "minimax1": MiniMaxM1ToolUtils(),

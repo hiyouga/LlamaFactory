@@ -21,9 +21,11 @@ import pytest
 from transformers import AutoTokenizer
 
 from llamafactory.data import get_template_and_fix_tokenizer
+from llamafactory.data.processor.supervised import SupervisedDatasetProcessor
 from llamafactory.data.template import TEMPLATES, ReasoningTemplate, parse_template
 from llamafactory.extras.constants import (
     DEFAULT_TEMPLATE,
+    IGNORE_INDEX,
     MULTIMODAL_SUPPORTED_MODELS,
     SUPPORTED_MODELS,
     DownloadSource,
@@ -458,6 +460,221 @@ def test_qwen3_template(cot_messages: bool):
         messages = MESSAGES_WITH_THOUGHT
 
     _check_template("Qwen/Qwen3-8B", "qwen3", prompt_str, answer_str, messages=messages)
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
+def test_hunyuan_template_consistency():
+    expected_templates = {
+        "Hunyuan-0.5B-Instruct": "hunyuan_instruct",
+        "Hunyuan-1.8B-Instruct": "hunyuan_instruct",
+        "Hunyuan-4B-Instruct": "hunyuan_instruct",
+        "Hunyuan-7B-Instruct": "hy_mt_7b",
+        "Hunyuan-A13B-Instruct": "hy_mt_7b",
+        "Hunyuan-MT-7B-Instruct": "hy_mt_7b",
+        "HY-MT1.5-1.8B-Instruct": "hy_mt_1_8b",
+        "HY-MT1.5-7B-Instruct": "hy_mt_7b",
+        "Hy-MT2-1.8B-Instruct": "hy_mt_1_8b",
+        "Hy-MT2-7B-Instruct": "hy_mt_7b",
+    }
+    for model_name, template_name in expected_templates.items():
+        assert DEFAULT_TEMPLATE[model_name] == template_name
+
+    assert TEMPLATES["hy3"].format_assistant.slots == ["{{content}}<｜hy_eos｜>"]
+    assert TEMPLATES["hunyuan_small"].format_user.slots == ["<｜hy_User｜>{{content}}<｜hy_place▁holder▁no▁8｜>"]
+    assert TEMPLATES["hy_dense_1_8b"].efficient_eos
+    assert TEMPLATES["hy_dense_7b"].efficient_eos
+
+    hunyuan_template = TEMPLATES["hunyuan_instruct"]
+    assert hunyuan_template.thought_words == ("<think>", "</think>")
+    assert hunyuan_template.remove_thought("<think>foo</think>answer") == "answer"
+    extracted_calls = hunyuan_template.extract_tool(
+        '<tool_calls><tool_call>get_current_temperature\n```json\n{"city":"Paris"}\n```</tool_call></tool_calls>'
+    )
+    assert not isinstance(extracted_calls, str)
+    assert len(extracted_calls) == 1
+    assert extracted_calls[0].name == "get_current_temperature"
+    assert json.loads(extracted_calls[0].arguments) == {"city": "Paris"}
+
+    system = "You are a helpful weather assistant. Use the available tools when needed."
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_temperature",
+                "description": "Get the current temperature for a city.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}},
+                    "required": ["city"],
+                },
+            },
+        }
+    ]
+    function_call = '{"name":"get_current_temperature","arguments":{"city":"Paris"}}'
+    observation = '{"temperature_celsius":21}'
+    thought = "<think>\nI should use the weather tool.\n</think>"
+    history_messages = [
+        {"role": "user", "content": "A box has 12 red and 8 blue markers. How many markers are there?"},
+        {
+            "role": "assistant",
+            "content": "<think>\n12 + 8 = 20.\n</think>\n<answer>There are 20 markers.</answer>",
+        },
+        {"role": "user", "content": "If 5 markers are removed, how many remain?"},
+        {
+            "role": "assistant",
+            "content": "<think>\n20 - 5 = 15.\n</think>\n<answer>15 markers remain.</answer>",
+        },
+    ]
+    common_messages = [
+        {"role": "user", "content": "How many markers are in the box?"},
+        {"role": "assistant", "content": "There are 20 markers."},
+        {"role": "user", "content": "How many remain after removing 5 markers?"},
+        {"role": "assistant", "content": "15 markers remain."},
+    ]
+    common_official_messages = [{"role": "system", "content": system}, *common_messages[:-1]]
+    cases = [
+        {
+            "model_id": "tencent/Hunyuan-0.5B-Instruct",
+            "template": "hunyuan_instruct",
+            "enable_thinking": True,
+            "system": system,
+            "tools": tools,
+            "messages": [
+                {"role": "user", "content": "What is the current temperature in Paris?"},
+                {"role": "function", "content": thought + "\n\n" + function_call},
+                {"role": "observation", "content": observation},
+                {"role": "assistant", "content": thought + "\n\nIt is 21 degrees Celsius."},
+            ],
+            "official_messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": "What is the current temperature in Paris?"},
+                {
+                    "role": "assistant",
+                    "content": thought,
+                    "tool_calls": [
+                        {
+                            "type": "function",
+                            "function": {
+                                "name": "get_current_temperature",
+                                "arguments": '{"city": "Paris"}',
+                            },
+                        }
+                    ],
+                },
+                {"role": "tool", "name": "get_current_temperature", "content": observation},
+            ],
+        },
+        {
+            "model_id": "tencent/Hunyuan-0.5B-Instruct",
+            "template": "hunyuan_instruct",
+            "enable_thinking": True,
+            "system": system,
+            "messages": history_messages,
+            "official_messages": [{"role": "system", "content": system}, *history_messages[:-1]],
+        },
+        {
+            "model_id": "tencent/HY-MT1.5-1.8B",
+            "template": "hy_mt_1_8b",
+            "enable_thinking": False,
+            "system": system,
+            "messages": common_messages,
+            "official_messages": common_official_messages,
+        },
+        {
+            "model_id": "tencent/Hunyuan-A13B-Instruct",
+            "template": "hy_mt_7b",
+            "enable_thinking": False,
+            "system": system,
+            "messages": common_messages,
+            "official_messages": common_official_messages,
+        },
+    ]
+    for case in cases:
+        tokenizer = AutoTokenizer.from_pretrained(case["model_id"])
+        reference_tokenizer = AutoTokenizer.from_pretrained(case["model_id"])
+        data_args = DataArguments(template=case["template"], enable_thinking=case["enable_thinking"])
+        template = get_template_and_fix_tokenizer(
+            tokenizer,
+            data_args,
+        )
+        prompt_ids, _ = template.encode_oneturn(
+            tokenizer,
+            case["messages"],
+            system=case["system"],
+            tools=json.dumps(case.get("tools"), ensure_ascii=False) if case.get("tools") else None,
+        )
+        reference_ids = reference_tokenizer.apply_chat_template(
+            case["official_messages"],
+            tools=case.get("tools"),
+            tokenize=True,
+            add_generation_prompt=True,
+            enable_thinking=case["enable_thinking"],
+        )
+        if is_transformers_version_greater_than("5.0.0"):
+            reference_ids = reference_ids["input_ids"]
+
+        assert prompt_ids == reference_ids, case["model_id"]
+
+        if case["template"].startswith("hy_mt_"):
+            encoded_pairs = template.encode_multiturn(tokenizer, case["messages"], system=case["system"])
+            processor = SupervisedDatasetProcessor(template, tokenizer, None, data_args)
+            input_ids, labels = processor._encode_data_example(
+                prompt=case["messages"][:-1],
+                response=case["messages"][-1:],
+                system=case["system"],
+                tools=None,
+                images=[],
+                videos=[],
+                audios=[],
+            )
+            assert input_ids == [token_id for pair in encoded_pairs for token_ids in pair for token_id in token_ids]
+
+            offset = 0
+            for turn_index, (source_ids, target_ids) in enumerate(encoded_pairs):
+                assert labels[offset : offset + len(source_ids)] == [IGNORE_INDEX] * len(source_ids)
+                offset += len(source_ids)
+                assert labels[offset : offset + len(target_ids)] == target_ids
+                assert target_ids[-1] == tokenizer.eos_token_id
+                offset += len(target_ids)
+                if case["template"] == "hy_mt_7b" and turn_index > 0:
+                    assert source_ids[0] == tokenizer.bos_token_id
+
+            train_on_prompt_args = DataArguments(
+                template=case["template"], enable_thinking=case["enable_thinking"], train_on_prompt=True
+            )
+            train_on_prompt_template = get_template_and_fix_tokenizer(tokenizer, train_on_prompt_args)
+            train_on_prompt_processor = SupervisedDatasetProcessor(
+                train_on_prompt_template, tokenizer, None, train_on_prompt_args
+            )
+            train_on_prompt_ids, train_on_prompt_labels = train_on_prompt_processor._encode_data_example(
+                prompt=case["messages"][:-1],
+                response=case["messages"][-1:],
+                system=case["system"],
+                tools=None,
+                images=[],
+                videos=[],
+                audios=[],
+            )
+            assert train_on_prompt_labels == train_on_prompt_ids
+
+    history_prompts = {}
+    for preserve_thinking in (False, True):
+        tokenizer = AutoTokenizer.from_pretrained("tencent/Hunyuan-0.5B-Instruct")
+        template = get_template_and_fix_tokenizer(
+            tokenizer,
+            DataArguments(
+                template="hunyuan_instruct",
+                enable_thinking=True,
+                preserve_thinking=preserve_thinking,
+            ),
+        )
+        prompt_ids, _ = template.encode_oneturn(tokenizer, history_messages, system=system)
+        history_prompts[preserve_thinking] = tokenizer.decode(prompt_ids, skip_special_tokens=False)
+
+    assert "12 + 8 = 20." not in history_prompts[False]
+    assert "<answer>" not in history_prompts[False]
+    assert "12 + 8 = 20." in history_prompts[True]
+    assert "<answer>There are 20 markers.</answer>" in history_prompts[True]
 
 
 @pytest.mark.runs_on(["cpu", "mps"])
