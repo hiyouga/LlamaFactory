@@ -33,14 +33,6 @@ def test_report_to_swanlab_selects_the_native_callback():
     assert finetuning_args.use_swanlab is True
 
 
-def test_report_to_swanlab_as_a_bare_string_is_recognised():
-    finetuning_args, training_args = _args("swanlab")
-
-    _route_swanlab_reporting(finetuning_args, training_args)
-
-    assert finetuning_args.use_swanlab is True
-
-
 def test_swanlab_alongside_another_logger_still_selects_it():
     finetuning_args, training_args = _args(["tensorboard", "swanlab"])
 

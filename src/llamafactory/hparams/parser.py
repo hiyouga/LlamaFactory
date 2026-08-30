@@ -172,15 +172,11 @@ def _route_swanlab_reporting(finetuning_args: "FinetuningArguments", training_ar
     ``RuntimeError: No active Run`` instead of returning None, which ends training in
     ``on_train_begin``. Ours also skips the setup off rank zero, which the transformers
     callback does not.
+
+    ``TrainingArguments.__post_init__`` has already normalized ``report_to`` to a list
+    by the time ``get_train_args`` runs, so a bare string never reaches this.
     """
-    report_to = training_args.report_to
-    if not report_to:
-        return
-
-    if isinstance(report_to, str):
-        report_to = [report_to]
-
-    if "swanlab" in report_to:
+    if "swanlab" in (training_args.report_to or []):
         finetuning_args.use_swanlab = True
 
 
