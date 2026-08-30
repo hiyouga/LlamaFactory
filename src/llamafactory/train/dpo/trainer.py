@@ -35,7 +35,7 @@ from ..callbacks import SaveProcessorCallback
 from ..trainer_utils import create_custom_optimizer, create_custom_scheduler, get_batch_logps, nested_detach
 
 
-_LOGPS_CHUNK_ELEMENTS = 2**24  # ~64 MB of float32 temporaries per chunk
+_LOGPS_CHUNK_ELEMENTS = 2**24  # ~64 MB of float32 temporaries per chunk, summed over the batch dim
 
 
 def get_batch_logps_memory_efficient(
@@ -48,14 +48,15 @@ def get_batch_logps_memory_efficient(
 
     The sequence dimension is processed in chunks so that only ``chunk_size`` positions of
     float32 logit copies are allocated at a time. When ``chunk_size`` is None, it is derived
-    from the vocabulary size to bound each chunk near ``_LOGPS_CHUNK_ELEMENTS`` elements.
+    from the vocabulary size and the batch size to bound each chunk's total element count
+    (batch positions times vocabulary) near ``_LOGPS_CHUNK_ELEMENTS``.
     """
     labels = labels[:, 1:].clone()
     logits = logits[:, :-1, :]
     loss_mask = labels != label_pad_token_id
     labels[~loss_mask] = 0
     if chunk_size is None:
-        chunk_size = max(1, _LOGPS_CHUNK_ELEMENTS // logits.size(-1))
+        chunk_size = max(1, _LOGPS_CHUNK_ELEMENTS // (logits.size(-1) * logits.size(0)))
 
     logps = []
     for start in range(0, logits.size(1), chunk_size):
