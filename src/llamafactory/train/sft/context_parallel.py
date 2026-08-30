@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 from collections.abc import Iterator
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -24,6 +25,8 @@ from ...extras.constants import IGNORE_INDEX
 
 if TYPE_CHECKING:
     from torch.utils.data import Sampler
+
+    from ...hparams import DataArguments, FinetuningArguments, TrainingArguments
 
 
 SEQUENCE_INPUT_NAMES = {
@@ -44,6 +47,53 @@ UNSUPPORTED_MULTIMODAL_INPUT_NAMES = {
     "pixel_values_videos",
     "video_position_ids",
 }
+
+
+def validate_context_parallel_sft_args(
+    data_args: "DataArguments",
+    training_args: "TrainingArguments",
+    finetuning_args: "FinetuningArguments",
+    world_size: Optional[int] = None,
+) -> None:
+    """Validate the constraints of the current Ulysses SFT implementation.
+
+    For Gemma 4 context parallelism currently. Raises ValueError if any constraints are violated.
+    """
+    cp_size = training_args.ulysses_context_parallel_size
+    if cp_size <= 1:
+        return
+
+    world_size = int(os.environ.get("WORLD_SIZE", "1")) if world_size is None else world_size
+    if world_size % cp_size != 0:
+        raise ValueError(
+            f"WORLD_SIZE ({world_size}) must be divisible by ulysses_context_parallel_size ({cp_size})."
+        )
+    if training_args.deepspeed is None:
+        raise ValueError("`ulysses_context_parallel_size > 1` currently requires DeepSpeed.")
+    if not training_args.bf16:
+        raise ValueError("`ulysses_context_parallel_size > 1` currently requires BF16 training.")
+    if training_args.per_device_train_batch_size != 1:
+        raise ValueError("Context parallelism currently requires `per_device_train_batch_size: 1`.")
+    if not training_args.dataloader_drop_last:
+        raise ValueError("Context parallelism currently requires `dataloader_drop_last: true`.")
+    if data_args.packing or data_args.neat_packing:
+        raise ValueError("Context parallelism does not support packed SFT data yet.")
+    if (
+        getattr(training_args.eval_strategy, "value", training_args.eval_strategy) != "no"
+        or training_args.do_eval
+        or training_args.do_predict
+    ):
+        raise ValueError("Evaluation and prediction are not supported with context parallelism yet.")
+    if training_args.predict_with_generate:
+        raise ValueError("`predict_with_generate` is not supported with context parallelism.")
+    if training_args.label_smoothing_factor != 0.0:
+        raise ValueError("Label smoothing is not supported with context parallelism.")
+    if not training_args.average_tokens_across_devices:
+        raise ValueError("Context parallelism requires `average_tokens_across_devices: true`.")
+    if training_args.parallelism_config is not None:
+        raise ValueError("Do not combine LLaMA Factory context parallelism with Transformers native parallelism.")
+    if finetuning_args.use_dft_loss or finetuning_args.use_eaft_loss or finetuning_args.use_asft_loss:
+        raise ValueError("Custom SFT losses are not supported with context parallelism yet.")
 
 
 class ContextParallelSampler(torch.utils.data.Sampler):

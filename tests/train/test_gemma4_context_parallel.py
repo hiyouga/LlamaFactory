@@ -16,19 +16,25 @@ from types import SimpleNamespace
 
 import pytest
 import torch
+from transformers import HfArgumentParser
 
-from llamafactory.extras.constants import IGNORE_INDEX, AttentionFunction
-from llamafactory.hparams.parser import _validate_context_parallel_args
+from llamafactory.extras.constants import IGNORE_INDEX
+from llamafactory.hparams import TrainingArguments
+from llamafactory.hparams.megatron_bridge_args import MegatronBridgeArguments
 from llamafactory.train.sft.context_parallel import (
     ContextParallelSampler,
     context_parallel_cross_entropy,
     make_shift_labels,
     split_sequence_inputs,
+    validate_context_parallel_sft_args,
 )
+from llamafactory.train.sft.context_parallel_trainer import ContextParallelSeq2SeqTrainer
+from llamafactory.train.sft.trainer import CustomSeq2SeqTrainer
+from llamafactory.train.sft.workflow import _get_sft_trainer_class
 
 
 @pytest.mark.parametrize("cp_size", [2, 4, 8])
-def test_context_parallel_sampler_matches_contiguous_rank_groups(cp_size: int) -> None:
+def test_gemma4_context_parallel_sampler_matches_contiguous_rank_groups(cp_size: int) -> None:
     world_size = 8
     sampler = ContextParallelSampler(range(16), cp_size)
     rank_samples = [list(sampler)[rank::world_size] for rank in range(world_size)]
@@ -40,7 +46,48 @@ def test_context_parallel_sampler_matches_contiguous_rank_groups(cp_size: int) -
     assert len({tuple(samples) for samples in distinct_group_samples}) == world_size // cp_size
 
 
-def test_shift_labels_is_exact_across_cp_boundary() -> None:
+def test_gemma4_context_parallel_wraps_existing_sampler(monkeypatch: pytest.MonkeyPatch) -> None:
+    base_sampler = torch.utils.data.SequentialSampler(range(4))
+    monkeypatch.setattr(CustomSeq2SeqTrainer, "_get_train_sampler", lambda *_args, **_kwargs: base_sampler)
+    trainer = object.__new__(ContextParallelSeq2SeqTrainer)
+    trainer.context_parallel_size = 2
+
+    sampler = trainer._get_train_sampler()
+
+    assert sampler.sampler is base_sampler
+    assert list(sampler) == [0, 0, 1, 1, 2, 2, 3, 3]
+
+
+def test_gemma4_context_parallel_trainer_selection_is_opt_in() -> None:
+    assert _get_sft_trainer_class(SimpleNamespace(ulysses_context_parallel_size=1)) is CustomSeq2SeqTrainer
+    assert _get_sft_trainer_class(SimpleNamespace(ulysses_context_parallel_size=2)) is ContextParallelSeq2SeqTrainer
+    assert _get_sft_trainer_class(SimpleNamespace(context_parallel_size=2)) is CustomSeq2SeqTrainer
+    assert _get_sft_trainer_class(SimpleNamespace()) is CustomSeq2SeqTrainer
+
+
+def test_ulysses_context_parallel_argument_coexists_with_megatron_bridge(tmp_path) -> None:
+    native_parser = HfArgumentParser(TrainingArguments)
+    (native_args,) = native_parser.parse_args_into_dataclasses(
+        ["--output_dir", str(tmp_path / "native"), "--ulysses_context_parallel_size", "4"]
+    )
+    assert native_args.ulysses_context_parallel_size == 4
+
+    megatron_parser = HfArgumentParser((TrainingArguments, MegatronBridgeArguments))
+    training_args, megatron_args = megatron_parser.parse_args_into_dataclasses(
+        [
+            "--output_dir",
+            str(tmp_path / "megatron"),
+            "--ulysses_context_parallel_size",
+            "2",
+            "--context_parallel_size",
+            "4",
+        ]
+    )
+    assert training_args.ulysses_context_parallel_size == 2
+    assert megatron_args.context_parallel_size == 4
+
+
+def test_gemma4_shift_labels_is_exact_across_cp_boundary() -> None:
     labels = torch.tensor([[10, 11, 12, 13]])
     shifted = make_shift_labels(labels)
 
@@ -53,7 +100,7 @@ def test_shift_labels_is_exact_across_cp_boundary() -> None:
     ]
 
 
-def test_context_parallel_loss_matches_full_sequence_mean() -> None:
+def test_gemma4_context_parallel_loss_matches_full_sequence_mean() -> None:
     logits = torch.tensor(
         [[[4.0, 1.0], [1.0, 3.0], [2.0, 0.0], [0.0, 5.0]]],
         requires_grad=True,
@@ -73,7 +120,7 @@ def test_context_parallel_loss_matches_full_sequence_mean() -> None:
     assert torch.testing.assert_close(torch.stack(shard_losses).mean(), reference) is None
 
 
-def test_split_sequence_inputs_pads_to_cp_size() -> None:
+def test_gemma4_split_sequence_inputs_pads_to_cp_size() -> None:
     inputs = {
         "input_ids": torch.tensor([[1, 2, 3, 4, 5]]),
         "attention_mask": torch.ones(1, 5, dtype=torch.long),
@@ -86,7 +133,7 @@ def test_split_sequence_inputs_pads_to_cp_size() -> None:
     assert shard["labels"].tolist() == [[IGNORE_INDEX, IGNORE_INDEX]]
 
 
-def test_split_sequence_inputs_rejects_multimodal_batch() -> None:
+def test_gemma4_split_sequence_inputs_rejects_multimodal_batch() -> None:
     with pytest.raises(NotImplementedError, match="text-only"):
         split_sequence_inputs(
             {
@@ -98,7 +145,7 @@ def test_split_sequence_inputs_rejects_multimodal_batch() -> None:
         )
 
 
-def test_split_sequence_inputs_discards_empty_multimodal_placeholders() -> None:
+def test_gemma4_split_sequence_inputs_discards_empty_multimodal_placeholders() -> None:
     shard = split_sequence_inputs(
         {
             "input_ids": torch.ones(1, 8, dtype=torch.long),
@@ -113,7 +160,7 @@ def test_split_sequence_inputs_discards_empty_multimodal_placeholders() -> None:
     assert "input_features" not in shard
 
 
-def test_split_sequence_inputs_discards_masked_dummy_multimodal_inputs() -> None:
+def test_gemma4_split_sequence_inputs_discards_masked_dummy_multimodal_inputs() -> None:
     shard = split_sequence_inputs(
         {
             "input_ids": torch.tensor([[10, 11, 12, 99, 99]]),
@@ -134,7 +181,7 @@ def test_split_sequence_inputs_discards_masked_dummy_multimodal_inputs() -> None
     assert "image_position_ids" not in shard
 
 
-def test_split_sequence_inputs_aligns_shorter_multimodal_token_types() -> None:
+def test_gemma4_split_sequence_inputs_aligns_shorter_multimodal_token_types() -> None:
     shard = split_sequence_inputs(
         {
             "input_ids": torch.tensor([[0, 10, 11, 99, 99]]),
@@ -153,9 +200,9 @@ def test_split_sequence_inputs_aligns_shorter_multimodal_token_types() -> None:
 
 def _cp_arguments(**overrides):
     arguments = {
-        "model_args": SimpleNamespace(flash_attn=AttentionFunction.TRITON_GQA),
         "data_args": SimpleNamespace(packing=False, neat_packing=False),
         "training_args": SimpleNamespace(
+            ulysses_context_parallel_size=4,
             deepspeed="ds_z3.json",
             bf16=True,
             per_device_train_batch_size=1,
@@ -169,13 +216,9 @@ def _cp_arguments(**overrides):
             parallelism_config=None,
         ),
         "finetuning_args": SimpleNamespace(
-            context_parallel_size=4,
-            stage="sft",
             use_dft_loss=False,
             use_eaft_loss=False,
             use_asft_loss=False,
-            freeze_vision_tower=True,
-            freeze_multi_modal_projector=True,
         ),
     }
     for argument_name, values in overrides.items():
@@ -184,9 +227,25 @@ def _cp_arguments(**overrides):
     return arguments
 
 
-def test_validate_context_parallel_args() -> None:
+def test_validate_gemma4_context_parallel_sft_args() -> None:
     arguments = _cp_arguments()
-    _validate_context_parallel_args(**arguments, world_size=8)
+    validate_context_parallel_sft_args(**arguments, world_size=8)
+
+
+def test_reject_gemma4_context_parallel_world_size_one() -> None:
+    arguments = _cp_arguments()
+    with pytest.raises(ValueError, match="WORLD_SIZE"):
+        validate_context_parallel_sft_args(**arguments, world_size=1)
+
+
+@pytest.mark.parametrize("finetuning_type", ["full", "lora"])
+def test_gemma4_context_parallel_accepts_training_feature_overlap(finetuning_type: str) -> None:
+    arguments = _cp_arguments(
+        training_args={"gradient_checkpointing": True, "gradient_accumulation_steps": 4},
+        finetuning_args={"finetuning_type": finetuning_type, "disable_shuffling": True},
+    )
+
+    validate_context_parallel_sft_args(**arguments, world_size=8)
 
 
 @pytest.mark.parametrize(
@@ -196,11 +255,16 @@ def test_validate_context_parallel_args() -> None:
         ({"training_args": {"bf16": False}}, "requires BF16"),
         ({"training_args": {"per_device_train_batch_size": 2}}, "batch_size: 1"),
         ({"data_args": {"packing": True}}, "packed SFT"),
-        ({"model_args": {"flash_attn": AttentionFunction.FA2}}, "triton_gqa"),
-        ({"finetuning_args": {"freeze_vision_tower": False}}, "freeze_vision_tower"),
+        ({"data_args": {"neat_packing": True}}, "packed SFT"),
+        ({"training_args": {"do_eval": True}}, "Evaluation and prediction"),
+        ({"training_args": {"predict_with_generate": True}}, "predict_with_generate"),
+        ({"training_args": {"label_smoothing_factor": 0.1}}, "Label smoothing"),
+        ({"training_args": {"average_tokens_across_devices": False}}, "average_tokens_across_devices"),
+        ({"training_args": {"parallelism_config": object()}}, "native parallelism"),
+        ({"finetuning_args": {"use_dft_loss": True}}, "Custom SFT losses"),
     ],
 )
-def test_reject_unsupported_context_parallel_args(overrides, match: str) -> None:
+def test_reject_unsupported_gemma4_context_parallel_args(overrides, match: str) -> None:
     arguments = _cp_arguments(**overrides)
     with pytest.raises(ValueError, match=match):
-        _validate_context_parallel_args(**arguments, world_size=8)
+        validate_context_parallel_sft_args(**arguments, world_size=8)

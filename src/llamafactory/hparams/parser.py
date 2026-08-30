@@ -91,6 +91,7 @@ else:
     _TRAIN_MCA_ARGS = []
     _TRAIN_MCA_CLS = tuple()
 
+
 _TRAIN_MBRIDGE_ARGS = [
     ModelArguments,
     DataArguments,
@@ -310,58 +311,6 @@ def _check_extra_dependencies(
             check_version("rouge_chinese", mandatory=True)
 
 
-def _validate_context_parallel_args(
-    model_args: "ModelArguments",
-    data_args: "DataArguments",
-    training_args: "TrainingArguments",
-    finetuning_args: "FinetuningArguments",
-    world_size: Optional[int] = None,
-) -> None:
-    """Validate the deliberately narrow first public Gemma 4 CP surface."""
-    if finetuning_args.context_parallel_size <= 1:
-        return
-
-    cp_size = finetuning_args.context_parallel_size
-    world_size = int(os.environ.get("WORLD_SIZE", "1")) if world_size is None else world_size
-    if finetuning_args.stage != "sft":
-        raise ValueError("`context_parallel_size > 1` currently supports the SFT stage only.")
-    if world_size > 1 and world_size % cp_size != 0:
-        raise ValueError(f"WORLD_SIZE ({world_size}) must be divisible by context_parallel_size ({cp_size}).")
-    if training_args.deepspeed is None:
-        raise ValueError("`context_parallel_size > 1` currently requires DeepSpeed.")
-    if not training_args.bf16:
-        raise ValueError("`context_parallel_size > 1` currently requires BF16 training.")
-    if model_args.flash_attn != AttentionFunction.TRITON_GQA:
-        raise ValueError("`context_parallel_size > 1` requires `flash_attn: triton_gqa`.")
-    if training_args.per_device_train_batch_size != 1:
-        raise ValueError("Context parallelism currently requires `per_device_train_batch_size: 1`.")
-    if not training_args.dataloader_drop_last:
-        raise ValueError("Context parallelism currently requires `dataloader_drop_last: true`.")
-    if data_args.packing or data_args.neat_packing:
-        raise ValueError("Context parallelism does not support packed SFT data yet.")
-    if (
-        getattr(training_args.eval_strategy, "value", training_args.eval_strategy) != "no"
-        or training_args.do_eval
-        or training_args.do_predict
-    ):
-        raise ValueError("Evaluation and prediction are not supported with context parallelism yet.")
-    if training_args.predict_with_generate:
-        raise ValueError("`predict_with_generate` is not supported with context parallelism.")
-    if training_args.label_smoothing_factor != 0.0:
-        raise ValueError("Label smoothing is not supported with context parallelism.")
-    if not training_args.average_tokens_across_devices:
-        raise ValueError("Context parallelism requires `average_tokens_across_devices: true`.")
-    if training_args.parallelism_config is not None:
-        raise ValueError("Do not combine LLaMA Factory context parallelism with Transformers native parallelism.")
-    if finetuning_args.use_dft_loss or finetuning_args.use_eaft_loss or finetuning_args.use_asft_loss:
-        raise ValueError("Custom SFT losses are not supported with context parallelism yet.")
-    if not finetuning_args.freeze_vision_tower or not finetuning_args.freeze_multi_modal_projector:
-        raise ValueError(
-            "Gemma 4 context parallelism currently requires `freeze_vision_tower: true` and "
-            "`freeze_multi_modal_projector: true` for text-only SFT."
-        )
-
-
 def _parse_train_args(args: dict[str, Any] | list[str] | None = None) -> _TRAIN_CLS:
     parser = HfArgumentParser(_TRAIN_ARGS)
     allow_extra_keys = is_env_enabled("ALLOW_EXTRA_ARGS")
@@ -472,6 +421,9 @@ def get_train_args(args: dict[str, Any] | list[str] | None = None) -> _TRAIN_CLS
 
     # Check arguments
     if finetuning_args.stage != "sft":
+        if getattr(training_args, "ulysses_context_parallel_size", 1) > 1:
+            raise ValueError("`ulysses_context_parallel_size > 1` currently supports the SFT stage only.")
+
         if training_args.predict_with_generate:
             raise ValueError("`predict_with_generate` cannot be set as True except SFT.")
 
@@ -483,8 +435,6 @@ def get_train_args(args: dict[str, Any] | list[str] | None = None) -> _TRAIN_CLS
 
     if finetuning_args.stage == "sft" and training_args.do_predict and not training_args.predict_with_generate:
         raise ValueError("Please enable `predict_with_generate` to save model predictions.")
-
-    _validate_context_parallel_args(model_args, data_args, training_args, finetuning_args)
 
     if finetuning_args.use_megatron_bridge:
         if finetuning_args.use_mca or finetuning_args.use_hyper_parallel:

@@ -10,7 +10,7 @@ finetuning_type: lora
 lora_rank: 8
 lora_target: all
 deepspeed: examples/deepspeed/ds_z3_config.json
-context_parallel_size: 4
+ulysses_context_parallel_size: 4
 freeze_vision_tower: true
 freeze_multi_modal_projector: true
 

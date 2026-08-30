@@ -38,6 +38,15 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
+def _get_sft_trainer_class(training_args: "Seq2SeqTrainingArguments"):
+    if getattr(training_args, "ulysses_context_parallel_size", 1) > 1:
+        from .context_parallel_trainer import ContextParallelSeq2SeqTrainer
+
+        return ContextParallelSeq2SeqTrainer
+
+    return CustomSeq2SeqTrainer
+
+
 def run_sft(
     model_args: "ModelArguments",
     data_args: "DataArguments",
@@ -46,6 +55,12 @@ def run_sft(
     generating_args: "GeneratingArguments",
     callbacks: Optional[list["TrainerCallback"]] = None,
 ):
+    trainer_cls = _get_sft_trainer_class(training_args)
+    if trainer_cls is not CustomSeq2SeqTrainer:
+        from .context_parallel import validate_context_parallel_sft_args
+
+        validate_context_parallel_sft_args(data_args, training_args, finetuning_args)
+
     tokenizer_module = load_tokenizer(model_args)
     tokenizer = tokenizer_module["tokenizer"]
     template = get_template_and_fix_tokenizer(tokenizer, data_args)
@@ -103,7 +118,7 @@ def run_sft(
     gen_kwargs["pad_token_id"] = tokenizer.pad_token_id
 
     # Initialize our Trainer
-    trainer = CustomSeq2SeqTrainer(
+    trainer = trainer_cls(
         model=model,
         args=training_args,
         finetuning_args=finetuning_args,

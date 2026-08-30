@@ -575,15 +575,6 @@ class FinetuningArguments(
         default=False,
         metadata={"help": "Whether or not to compute effective tokens per second."},
     )
-    context_parallel_size: int = field(
-        default=1,
-        metadata={
-            "help": (
-                "Ulysses context-parallel group size for Gemma 4 SFT. "
-                "A value greater than 1 requires DeepSpeed and `flash_attn: triton_gqa`."
-            )
-        },
-    )
 
     def __post_init__(self):
         def split_arg(arg):
@@ -605,7 +596,6 @@ class FinetuningArguments(
         assert self.ref_model_quantization_bit in [None, 8, 4], "We only accept 4-bit or 8-bit quantization."
         assert self.reward_model_quantization_bit in [None, 8, 4], "We only accept 4-bit or 8-bit quantization."
         assert self.hyper_parallel_cp_size > 0, "`hyper_parallel_cp_size` must be greater than 0."
-        assert self.context_parallel_size > 0, "`context_parallel_size` must be greater than 0."
 
         if self.stage == "ppo" and self.reward_model is None:
             raise ValueError("`reward_model` is necessary for PPO training.")
