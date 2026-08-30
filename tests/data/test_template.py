@@ -339,6 +339,50 @@ def test_phi4_template():
 
 
 @pytest.mark.runs_on(["cpu", "mps"])
+def test_llama3_chinese_template_consistency():
+    target_models = {
+        "Llama-3-8B-Chinese-Chat": "shenzhi-wang/Llama3-8B-Chinese-Chat",
+        "Llama-3-70B-Chinese-Chat": "shenzhi-wang/Llama3-70B-Chinese-Chat",
+    }
+    unaffected_models = ["Llama-3.1-8B-Chinese-Chat", "Llama-3.1-70B-Chinese-Chat"]
+    for model_name in target_models:
+        assert DEFAULT_TEMPLATE[model_name] == "llama3_zh"
+    for model_name in unaffected_models:
+        assert DEFAULT_TEMPLATE[model_name] == "llama3"
+
+    assert TEMPLATES["llama3_zh"].default_system == "You are a helpful assistant."
+    assert TEMPLATES["llama3"].default_system == ""
+
+    conversations = [
+        {"role": "user", "content": "A box contains 12 red markers and 8 blue markers."},
+        {"role": "assistant", "content": "There are 20 markers."},
+        {"role": "user", "content": "If 5 are removed, how many remain?"},
+        {"role": "assistant", "content": "15 markers remain."},
+    ]
+    custom_system = "You are a concise math assistant."
+    checks = [
+        (target_models["Llama-3-8B-Chinese-Chat"], "llama3_zh", None, True),
+        (target_models["Llama-3-8B-Chinese-Chat"], "llama3_zh", custom_system, True),
+        ("shenzhi-wang/Llama3.1-8B-Chinese-Chat", "llama3", None, False),
+    ]
+    for model_id, template_name, system, check_full_conversation in checks:
+        tokenizer = AutoTokenizer.from_pretrained(model_id)
+        template = get_template_and_fix_tokenizer(tokenizer, DataArguments(template=template_name))
+        message_sets = (conversations[:-1], conversations) if check_full_conversation else (conversations[:-1],)
+        for messages in message_sets:
+            actual_ids = sum(template._encode(tokenizer, messages, system, tools=None), [])
+            reference_messages = ([{"role": "system", "content": system}] if system else []) + messages
+            reference_ids = tokenizer.apply_chat_template(
+                reference_messages,
+                tokenize=True,
+                add_generation_prompt=messages[-1]["role"] == "user",
+            )
+            if hasattr(reference_ids, "input_ids"):
+                reference_ids = reference_ids.input_ids
+            assert actual_ids == reference_ids
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
 @pytest.mark.xfail(not HF_TOKEN, reason="Authorization.")
 def test_qwen2_5_template():
     prompt_str = (
