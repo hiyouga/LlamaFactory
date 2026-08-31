@@ -552,6 +552,15 @@ class QwQTemplate(ReasoningTemplate):
             if not response_elements or not isinstance(response_elements[0], str):
                 continue
 
+            if messages[response_index]["role"] == Role.FUNCTION and messages[response_index]["content"].startswith(
+                "\n"
+            ):
+                prompt_elements = rendered_messages[response_index - 1]
+                if prompt_elements and isinstance(prompt_elements[-1], str):
+                    prompt_elements[-1] += "\n"
+                else:
+                    prompt_elements.append("\n")
+
             if messages[response_index]["role"] == Role.FUNCTION and self.thought_words[1] in response_elements[0]:
                 function_thought_end = self.thought_words[1].rstrip("\n") + "\n"
                 response_elements[0] = response_elements[0].replace(self.thought_words[1], function_thought_end, 1)
@@ -591,13 +600,13 @@ class QwQTemplate(ReasoningTemplate):
 
     @override
     def _process_history_thoughts(self, messages: list[dict[str, str]], is_inference: bool) -> bool:
-        last_user_index = max(
-            (index for index, message in enumerate(messages[:-1]) if message["role"] == Role.USER),
-            default=-1,
-        )
-        for index, message in enumerate(messages[:-1]):
-            if message["role"] in {Role.ASSISTANT, Role.FUNCTION} and index < last_user_index:
+        for message in messages[:-1]:
+            if message["role"] in {Role.ASSISTANT, Role.FUNCTION}:
+                had_thought = self.thought_words[1].strip() in message["content"]
                 message["content"] = self.remove_thought(message["content"])
+                if message["role"] == Role.FUNCTION and had_thought:
+                    # The official Jinja retains an empty content line before historical tool calls.
+                    message["content"] = "\n" + message["content"]
 
         return True
 

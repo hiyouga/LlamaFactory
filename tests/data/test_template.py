@@ -460,7 +460,7 @@ def test_qwen3_template(cot_messages: bool):
     _check_template("Qwen/Qwen3-8B", "qwen3", prompt_str, answer_str, messages=messages)
 
 
-def test_qwq_history_processing_preserves_the_active_tool_chain():
+def test_qwq_history_processing_strips_prompt_reasoning_only():
     template = deepcopy(TEMPLATES["qwq"])
     messages = [
         {"role": "user", "content": "old question"},
@@ -476,7 +476,7 @@ def test_qwq_history_processing_preserves_the_active_tool_chain():
 
     assert template._process_history_thoughts(messages, is_inference=True)
     assert "old reasoning" not in messages[1]["content"]
-    assert messages[3]["content"].startswith("<think>\nactive reasoning\n</think>")
+    assert messages[3]["content"] == '\n{"name":"search","arguments":{}}'
 
 
 @pytest.mark.runs_on(["cpu", "mps"])
