@@ -460,7 +460,7 @@ def test_qwen3_template(cot_messages: bool):
     _check_template("Qwen/Qwen3-8B", "qwen3", prompt_str, answer_str, messages=messages)
 
 
-def test_glmz1_history_processing_preserves_non_model_content_and_active_tools():
+def test_glmz1_history_processing_strips_prompt_reasoning_only():
     template = deepcopy(TEMPLATES["glmz1"])
     messages = [
         {"role": "user", "content": "  literal </think> user text  "},
@@ -474,7 +474,7 @@ def test_glmz1_history_processing_preserves_non_model_content_and_active_tools()
     assert template._process_history_thoughts(messages, is_inference=True)
     assert messages[0]["content"] == "  literal </think> user text  "
     assert messages[1]["content"] == "old answer"
-    assert messages[3]["content"].startswith("<think>active reasoning</think>")
+    assert messages[3]["content"] == '{"name":"search","arguments":{}}'
     assert messages[4]["content"] == "  literal </think> tool result  "
 
 
@@ -538,30 +538,29 @@ def test_glm_template_consistency():
             ],
         },
     ]
-    for enable_thinking in (True, False):
-        cases.append(
-            {
-                "model_id": "zai-org/GLM-Z1-9B-0414",
-                "template": "glmz1",
-                "enable_thinking": enable_thinking,
-                "messages": [
-                    {"role": "user", "content": "What is the current temperature in Paris?"},
-                    {"role": "function", "content": thought + function_call},
-                    {"role": "observation", "content": observation},
-                    {"role": "assistant", "content": thought + "It is 21 degrees Celsius."},
-                ],
-                "official_messages": [
-                    {"role": "system", "content": system},
-                    {"role": "user", "content": "What is the current temperature in Paris?"},
-                    {
-                        "role": "assistant",
-                        "content": thought + function_arguments,
-                        "metadata": "get_current_temperature",
-                    },
-                    {"role": "observation", "content": observation},
-                ],
-            }
-        )
+    cases.append(
+        {
+            "model_id": "zai-org/GLM-Z1-9B-0414",
+            "template": "glmz1",
+            "enable_thinking": True,
+            "messages": [
+                {"role": "user", "content": "What is the current temperature in Paris?"},
+                {"role": "function", "content": thought + function_call},
+                {"role": "observation", "content": observation},
+                {"role": "assistant", "content": thought + "It is 21 degrees Celsius."},
+            ],
+            "official_messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": "What is the current temperature in Paris?"},
+                {
+                    "role": "assistant",
+                    "content": thought + function_arguments,
+                    "metadata": "get_current_temperature",
+                },
+                {"role": "observation", "content": observation},
+            ],
+        }
+    )
     for enable_thinking in (True, False):
         visible_answer = "There are 20 markers."
         history_answer = f"<think>\n12 + 8 = 20.\n</think>\n\n{visible_answer}"

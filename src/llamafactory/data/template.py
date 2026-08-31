@@ -612,12 +612,8 @@ class GlmZ1Template(Glm4ToolSystemMixin, ReasoningTemplate):
 
     @override
     def _process_history_thoughts(self, messages: list[dict[str, str]], is_inference: bool) -> bool:
-        last_user_index = max(
-            (index for index, message in enumerate(messages[:-1]) if message["role"] == Role.USER),
-            default=-1,
-        )
-        for index, message in enumerate(messages[:-1]):
-            if message["role"] in {Role.ASSISTANT, Role.FUNCTION} and index < last_user_index:
+        for message in messages[:-1]:
+            if message["role"] in {Role.ASSISTANT, Role.FUNCTION}:
                 message["content"] = message["content"].split("</think>")[-1].strip()
 
         return True
