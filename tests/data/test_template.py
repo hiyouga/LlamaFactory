@@ -131,8 +131,7 @@ def test_rendering_refactor_preserves_existing_template_boundaries():
     standard = deepcopy(TEMPLATES["falcon_h1"])
     prompt_ids, response_ids = standard.encode_oneturn(tokenizer, messages, system="system")
     assert prompt_ids == [tokenizer.bos_token_id] + tokenizer.encode(
-        "<|im_start|>system\nsystem<|im_end|>\n"
-        "<|im_start|>user\nquestion<|im_end|>\n<|im_start|>assistant\n"
+        "<|im_start|>system\nsystem<|im_end|>\n<|im_start|>user\nquestion<|im_end|>\n<|im_start|>assistant\n"
     )
     assert response_ids == tokenizer.encode("answer<|im_end|>\n")
 

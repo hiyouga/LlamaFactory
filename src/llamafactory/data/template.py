@@ -204,9 +204,7 @@ class Template:
 
         return rendered_messages
 
-    def _process_rendered_messages(
-        self, rendered_messages: list["SLOTS"], messages: list[dict[str, str]]
-    ) -> None:
+    def _process_rendered_messages(self, rendered_messages: list["SLOTS"], messages: list[dict[str, str]]) -> None:
         r"""Apply model-specific changes to formatter output before tokenization."""
         return None
 
