@@ -460,6 +460,23 @@ def test_qwen3_template(cot_messages: bool):
     _check_template("Qwen/Qwen3-8B", "qwen3", prompt_str, answer_str, messages=messages)
 
 
+def test_qwen3_nothink_processes_every_response_boundary():
+    template = deepcopy(TEMPLATES["qwen3_nothink"])
+    messages = [
+        {"role": "user", "content": "question 1"},
+        {"role": "assistant", "content": "answer 1"},
+        {"role": "user", "content": "question 2"},
+        {"role": "assistant", "content": "answer 2"},
+    ]
+    rendered_messages = template._render(messages, system=None, tools=None)
+
+    processed_response_indices = template._process_thought_boundaries(rendered_messages, messages)
+
+    assert processed_response_indices == {1, 3}
+    assert rendered_messages[0][-1].endswith(template.add_thought())
+    assert rendered_messages[2][-1].endswith(template.add_thought())
+
+
 @pytest.mark.runs_on(["cpu", "mps"])
 def test_qwen3_family_template_consistency():
     qwen3_models = [

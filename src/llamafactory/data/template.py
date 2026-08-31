@@ -545,16 +545,23 @@ class QwenNothinkTemplate(Template):
         return messages
 
     @override
-    def _process_rendered_messages(self, rendered_messages: list["SLOTS"], messages: list[dict[str, str]]) -> None:
-        response_index = len(rendered_messages) - 1
-        if response_index == 0 or messages[response_index]["role"] not in {Role.ASSISTANT, Role.FUNCTION}:
-            return
+    def _process_thought_boundaries(
+        self, rendered_messages: list["SLOTS"], messages: list[dict[str, str]]
+    ) -> set[int]:
+        processed_response_indices = set()
+        for response_index in range(1, len(rendered_messages), 2):
+            if messages[response_index]["role"] not in {Role.ASSISTANT, Role.FUNCTION}:
+                continue
 
-        prompt_elements = rendered_messages[response_index - 1]
-        if prompt_elements and isinstance(prompt_elements[-1], str):
-            prompt_elements[-1] += self.add_thought()
-        else:
-            prompt_elements.append(self.add_thought())
+            prompt_elements = rendered_messages[response_index - 1]
+            if prompt_elements and isinstance(prompt_elements[-1], str):
+                prompt_elements[-1] += self.add_thought()
+            else:
+                prompt_elements.append(self.add_thought())
+
+            processed_response_indices.add(response_index)
+
+        return processed_response_indices
 
 
 class QwenThinkingHistoryMixin:
@@ -562,7 +569,10 @@ class QwenThinkingHistoryMixin:
 
     @override
     def _process_history_thoughts(self, messages: list[dict[str, str]], is_inference: bool) -> bool:
-        last_user_index = max(index for index, message in enumerate(messages[:-1]) if message["role"] == Role.USER)
+        last_user_index = max(
+            (index for index, message in enumerate(messages[:-1]) if message["role"] == Role.USER),
+            default=-1,
+        )
         for index, message in enumerate(messages[:-1]):
             if message["role"] in {Role.ASSISTANT, Role.FUNCTION} and (
                 self.enable_thinking is False or index < last_user_index
@@ -577,10 +587,13 @@ class QwenReasoningTemplate(QwenThinkingHistoryMixin, ReasoningTemplate):
     r"""Render the dual-mode Qwen3 thinking protocol before tokenization."""
 
     @override
-    def _process_rendered_messages(self, rendered_messages: list["SLOTS"], messages: list[dict[str, str]]) -> None:
+    def _process_thought_boundaries(
+        self, rendered_messages: list["SLOTS"], messages: list[dict[str, str]]
+    ) -> set[int]:
+        processed_response_indices = set()
         response_index = len(rendered_messages) - 1
         if response_index == 0 or messages[response_index]["role"] not in {Role.ASSISTANT, Role.FUNCTION}:
-            return
+            return processed_response_indices
 
         content = messages[response_index]["content"]
         has_thought = self.thought_words[0].strip() in content or self.thought_words[1].strip() in content
@@ -591,12 +604,14 @@ class QwenReasoningTemplate(QwenThinkingHistoryMixin, ReasoningTemplate):
             else:
                 prompt_elements.append(self.add_thought())
 
-            messages[response_index]["content"] = self.add_thought() + content
+            processed_response_indices.add(response_index)
         elif content and not has_thought:
             response_elements = rendered_messages[response_index]
             if response_elements and isinstance(response_elements[0], str):
                 response_elements[0] = self.add_thought() + response_elements[0]
-                messages[response_index]["content"] = self.add_thought() + content
+                processed_response_indices.add(response_index)
+
+        return processed_response_indices
 
 
 @dataclass
@@ -604,9 +619,12 @@ class QwenPrefilledThinkingTemplate(QwenThinkingHistoryMixin, ReasoningTemplate)
     r"""Place Qwen's opening thinking tag in the prompt before tokenization."""
 
     @override
-    def _process_rendered_messages(self, rendered_messages: list["SLOTS"], messages: list[dict[str, str]]) -> None:
+    def _process_thought_boundaries(
+        self, rendered_messages: list["SLOTS"], messages: list[dict[str, str]]
+    ) -> set[int]:
+        processed_response_indices = set()
         if not self.enable_thinking:
-            return
+            return processed_response_indices
 
         last_response_index = len(rendered_messages) - 1
         for response_index in range(1, len(rendered_messages), 2):
@@ -639,9 +657,10 @@ class QwenPrefilledThinkingTemplate(QwenThinkingHistoryMixin, ReasoningTemplate)
                 response_elements[0] = response_content[len(matched_prefix) :]
             elif messages[response_index]["content"]:
                 response_elements[0] = self.thought_words[1] + response_content
-                messages[response_index]["content"] = self.thought_words[0] + messages[response_index]["content"]
-            else:
-                messages[response_index]["content"] = self.thought_words[0]
+
+            processed_response_indices.add(response_index)
+
+        return processed_response_indices
 
 
 @dataclass
