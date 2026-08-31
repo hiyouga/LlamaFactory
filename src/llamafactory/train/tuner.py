@@ -14,6 +14,7 @@
 
 import os
 import shutil
+import sys
 from typing import TYPE_CHECKING, Any, Optional
 
 import torch
@@ -73,7 +74,6 @@ def _training_function(config: dict[str, Any]) -> None:
 
     # Windows multiprocessing fix: spawn start method cannot pickle local functions
     # (e.g., PEFT's enable_input_require_grads closure), causing AttributeError at startup.
-    import sys
     if sys.platform == "win32":
         if training_args.dataloader_num_workers > 0:
             logger.warning(
@@ -82,12 +82,6 @@ def _training_function(config: dict[str, Any]) -> None:
                 f"to avoid multiprocessing pickling errors with spawn start method."
             )
             training_args.dataloader_num_workers = 0
-        if data_args.preprocessing_num_workers > 1:
-            logger.warning(
-                f"Windows detected: reducing preprocessing_num_workers=1 "
-                f"(was {data_args.preprocessing_num_workers}) for stability."
-            )
-            data_args.preprocessing_num_workers = 1
 
     callbacks.append(LogCallback())
     if finetuning_args.pissa_convert:
