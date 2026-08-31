@@ -460,6 +460,25 @@ def test_qwen3_template(cot_messages: bool):
     _check_template("Qwen/Qwen3-8B", "qwen3", prompt_str, answer_str, messages=messages)
 
 
+def test_qwq_history_processing_preserves_the_active_tool_chain():
+    template = deepcopy(TEMPLATES["qwq"])
+    messages = [
+        {"role": "user", "content": "old question"},
+        {"role": "assistant", "content": "<think>\nold reasoning\n</think>\n\nold answer"},
+        {"role": "user", "content": "new question"},
+        {
+            "role": "function",
+            "content": '<think>\nactive reasoning\n</think>\n\n{"name":"search","arguments":{}}',
+        },
+        {"role": "observation", "content": "tool result"},
+        {"role": "assistant", "content": "final answer"},
+    ]
+
+    assert template._process_history_thoughts(messages, is_inference=True)
+    assert "old reasoning" not in messages[1]["content"]
+    assert messages[3]["content"].startswith("<think>\nactive reasoning\n</think>")
+
+
 @pytest.mark.runs_on(["cpu", "mps"])
 def test_qwq_template_consistency():
     assert DEFAULT_TEMPLATE["QwQ-32B-Instruct"] == "qwq"

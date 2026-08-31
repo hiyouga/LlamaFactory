@@ -536,9 +536,12 @@ class QwQTemplate(ReasoningTemplate):
     r"""Render QwQ thinking and tokenizer-defined tool-call whitespace."""
 
     @override
-    def _process_rendered_messages(self, rendered_messages: list["SLOTS"], messages: list[dict[str, str]]) -> None:
+    def _process_thought_boundaries(
+        self, rendered_messages: list["SLOTS"], messages: list[dict[str, str]]
+    ) -> set[int]:
+        processed_response_indices = set()
         if not self.enable_thinking:
-            return
+            return processed_response_indices
 
         last_response_index = len(rendered_messages) - 1
         for response_index in range(1, len(rendered_messages), 2):
@@ -548,18 +551,6 @@ class QwQTemplate(ReasoningTemplate):
             response_elements = rendered_messages[response_index]
             if not response_elements or not isinstance(response_elements[0], str):
                 continue
-
-            if (
-                response_index != last_response_index
-                and messages[response_index]["role"] == Role.FUNCTION
-                and not self.preserve_thinking
-                and self.thought_words[1] in messages[response_index]["content"]
-            ):
-                response_elements[0] = "\n" + self.remove_thought(response_elements[0])
-                prompt_elements = rendered_messages[response_index - 1]
-                if prompt_elements and isinstance(prompt_elements[-1], str):
-                    prompt_elements[-1] += "\n"
-                    response_elements[0] = response_elements[0][1:]
 
             if messages[response_index]["role"] == Role.FUNCTION and self.thought_words[1] in response_elements[0]:
                 function_thought_end = self.thought_words[1].rstrip("\n") + "\n"
@@ -579,7 +570,7 @@ class QwQTemplate(ReasoningTemplate):
                     self.thought_words[0].strip() not in messages[response_index]["content"]
                     and self.thought_words[1].strip() not in messages[response_index]["content"]
                 ):
-                    messages[response_index]["content"] = self.thought_words[0] + messages[response_index]["content"]
+                    processed_response_indices.add(response_index)
 
                 continue
 
@@ -594,16 +585,18 @@ class QwQTemplate(ReasoningTemplate):
             elif messages[response_index]["content"]:
                 response_elements[0] = self.thought_words[1] + response_content
 
-            if (
-                self.thought_words[0].strip() not in messages[response_index]["content"]
-                and self.thought_words[1].strip() not in messages[response_index]["content"]
-            ):
-                messages[response_index]["content"] = self.thought_words[0] + messages[response_index]["content"]
+            processed_response_indices.add(response_index)
+
+        return processed_response_indices
 
     @override
     def _process_history_thoughts(self, messages: list[dict[str, str]], is_inference: bool) -> bool:
-        for message in messages[:-1]:
-            if message["role"] == Role.ASSISTANT:
+        last_user_index = max(
+            (index for index, message in enumerate(messages[:-1]) if message["role"] == Role.USER),
+            default=-1,
+        )
+        for index, message in enumerate(messages[:-1]):
+            if message["role"] in {Role.ASSISTANT, Role.FUNCTION} and index < last_user_index:
                 message["content"] = self.remove_thought(message["content"])
 
         return True
