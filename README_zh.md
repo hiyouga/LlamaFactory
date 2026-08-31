@@ -27,7 +27,7 @@
 
 ### 欢迎关注我们全新的开源项目——<br>🐧 [PenguinHarness](https://github.com/Prism-Shadow/penguin-harness)：本地优先的多 Agent 应用开发平台——全自动创建、微调、部署 AI 应用！
 
-点击关注项目：https://github.com/Prism-Shadow/penguin-harness
+关注并点 Star 收藏我们的项目：https://github.com/Prism-Shadow/penguin-harness
 
 </div>
 
