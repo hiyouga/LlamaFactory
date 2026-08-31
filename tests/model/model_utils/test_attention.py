@@ -27,7 +27,12 @@ except ImportError:
         return True
 
 
+from transformers import PretrainedConfig
+
+from llamafactory.extras.constants import AttentionFunction
 from llamafactory.extras.packages import is_transformers_version_greater_than
+from llamafactory.hparams import ModelArguments
+from llamafactory.model.model_utils.attention import configure_attn_implementation
 from llamafactory.train.test_utils import load_infer_model
 
 
@@ -58,3 +63,29 @@ def test_attention():
         for module in model.modules():
             if "Attention" in module.__class__.__name__:
                 assert module.__class__.__name__ == llama_attention_classes[requested_attention]
+
+
+def test_gpt_oss_registers_the_flash_attention_3_kernel(monkeypatch: pytest.MonkeyPatch):
+    """The gpt-oss branch imports the kernel registrar by name, with no fallback.
+
+    transformers 5.0 renamed `load_and_register_kernel` to `load_and_register_attn_kernel`, so
+    reaching for the wrong one ends every gpt-oss run at load time with an ImportError.
+    """
+    from transformers.integrations import hub_kernels
+
+    registrar = (
+        "load_and_register_attn_kernel"
+        if is_transformers_version_greater_than("5.0.0")
+        else "load_and_register_kernel"
+    )
+    registered = []
+    monkeypatch.setattr(hub_kernels, registrar, registered.append)
+
+    config = PretrainedConfig(model_type="gpt_oss")
+    model_args = ModelArguments(model_name_or_path=TINY_LLAMA3)
+
+    configure_attn_implementation(config, model_args)
+
+    assert registered == ["kernels-community/vllm-flash-attn3"]
+    assert config._attn_implementation == "kernels-community/vllm-flash-attn3"
+    assert model_args.flash_attn == AttentionFunction.FA3

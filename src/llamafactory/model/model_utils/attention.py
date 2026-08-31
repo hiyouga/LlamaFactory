@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 
 from ...extras import logging
 from ...extras.constants import AttentionFunction
-from ...extras.packages import is_torch_version_greater_than
+from ...extras.packages import is_torch_version_greater_than, is_transformers_version_greater_than
 
 
 if TYPE_CHECKING:
@@ -32,10 +32,16 @@ def configure_attn_implementation(config: "PretrainedConfig", model_args: "Model
     from transformers.utils import is_flash_attn_2_available
 
     if getattr(config, "model_type", None) == "gpt_oss":
-        from transformers.integrations.hub_kernels import load_and_register_kernel
+        # transformers 5.0 renamed this to load_and_register_attn_kernel. Both take the
+        # attn_implementation as their first positional argument; the 5.x signature only adds
+        # two arguments that default to the old behaviour.
+        if is_transformers_version_greater_than("5.0.0"):
+            from transformers.integrations.hub_kernels import load_and_register_attn_kernel as register_attn_kernel
+        else:
+            from transformers.integrations.hub_kernels import load_and_register_kernel as register_attn_kernel
 
         flash_attn3_kernel = "kernels-community/vllm-flash-attn3"
-        load_and_register_kernel(flash_attn3_kernel)
+        register_attn_kernel(flash_attn3_kernel)
         setattr(config, "_attn_implementation", flash_attn3_kernel)
         setattr(config, "_attn_implementation_internal", flash_attn3_kernel)
         model_args.flash_attn = AttentionFunction.FA3
