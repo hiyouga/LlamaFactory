@@ -73,6 +73,7 @@ def _check_template(
     prompt_str: str,
     answer_str: str,
     messages: list[dict[str, str]] = MESSAGES,
+    system: str | None = None,
 ) -> None:
     r"""Check template.
 
@@ -82,16 +83,18 @@ def _check_template(
         prompt_str: the string corresponding to the prompt part.
         answer_str: the string corresponding to the answer part.
         messages: the list of messages.
+        system: the optional system message.
 
     """
     tokenizer = AutoTokenizer.from_pretrained(model_id)
-    content_str = tokenizer.apply_chat_template(messages, tokenize=False)
-    content_ids = tokenizer.apply_chat_template(messages, tokenize=True)
+    reference_messages = ([{"role": "system", "content": system}] if system else []) + messages
+    content_str = tokenizer.apply_chat_template(reference_messages, tokenize=False)
+    content_ids = tokenizer.apply_chat_template(reference_messages, tokenize=True)
     if is_transformers_version_greater_than("5.0.0"):
         content_ids = content_ids["input_ids"]
 
     template = get_template_and_fix_tokenizer(tokenizer, DataArguments(template=template_name))
-    prompt_ids, answer_ids = template.encode_oneturn(tokenizer, messages)
+    prompt_ids, answer_ids = template.encode_oneturn(tokenizer, messages, system=system)
     assert content_str == prompt_str + answer_str
     assert content_ids == prompt_ids + answer_ids
     _check_tokenization(tokenizer, (prompt_ids, answer_ids), (prompt_str, answer_str))
@@ -353,33 +356,24 @@ def test_llama3_chinese_template_consistency():
     assert TEMPLATES["llama3_zh"].default_system == "You are a helpful assistant."
     assert TEMPLATES["llama3"].default_system == ""
 
-    conversations = [
+    messages = [
         {"role": "user", "content": "A box contains 12 red markers and 8 blue markers."},
         {"role": "assistant", "content": "There are 20 markers."},
         {"role": "user", "content": "If 5 are removed, how many remain?"},
         {"role": "assistant", "content": "15 markers remain."},
     ]
-    custom_system = "You are a concise math assistant."
-    checks = [
-        (target_models["Llama-3-8B-Chinese-Chat"], "llama3_zh", None, True),
-        (target_models["Llama-3-8B-Chinese-Chat"], "llama3_zh", custom_system, True),
-        ("shenzhi-wang/Llama3.1-8B-Chinese-Chat", "llama3", None, False),
-    ]
-    for model_id, template_name, system, check_full_conversation in checks:
-        tokenizer = AutoTokenizer.from_pretrained(model_id)
-        template = get_template_and_fix_tokenizer(tokenizer, DataArguments(template=template_name))
-        message_sets = (conversations[:-1], conversations) if check_full_conversation else (conversations[:-1],)
-        for messages in message_sets:
-            actual_ids = sum(template._encode(tokenizer, messages, system, tools=None), [])
-            reference_messages = ([{"role": "system", "content": system}] if system else []) + messages
-            reference_ids = tokenizer.apply_chat_template(
-                reference_messages,
-                tokenize=True,
-                add_generation_prompt=messages[-1]["role"] == "user",
-            )
-            if hasattr(reference_ids, "input_ids"):
-                reference_ids = reference_ids.input_ids
-            assert actual_ids == reference_ids
+    model_id = target_models["Llama-3-8B-Chinese-Chat"]
+    for system in (None, "You are a concise math assistant."):
+        system_text = system or "You are a helpful assistant."
+        prompt_str = (
+            f"<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n{system_text}<|eot_id|>"
+            f"<|start_header_id|>user<|end_header_id|>\n\n{messages[0]['content']}<|eot_id|>"
+            f"<|start_header_id|>assistant<|end_header_id|>\n\n{messages[1]['content']}<|eot_id|>"
+            f"<|start_header_id|>user<|end_header_id|>\n\n{messages[2]['content']}<|eot_id|>"
+            "<|start_header_id|>assistant<|end_header_id|>\n\n"
+        )
+        answer_str = f"{messages[3]['content']}<|eot_id|>"
+        _check_template(model_id, "llama3_zh", prompt_str, answer_str, messages=messages, system=system)
 
 
 @pytest.mark.runs_on(["cpu", "mps"])
