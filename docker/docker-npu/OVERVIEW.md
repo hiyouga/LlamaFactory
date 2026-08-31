@@ -21,6 +21,8 @@ The following `latest` NPU image tags are available:
 | A2 | openEuler 24.03 | `latest-910b-openeuler` |
 | A3 | openEuler 24.03 | `latest-a3-openeuler` |
 
+For historical NPU image tags and links to their corresponding archived Dockerfiles, see [Supported Tags](./supported_tags.md).
+
 ## Image Overview
 
 The image includes the following core components:
@@ -54,7 +56,7 @@ latest-<chip>-<os>
 | `chip` | `910b` or `a3` | Ascend chip model supported by the image |
 | `os` | `ubuntu` or `openeuler` | Container operating system family |
 
-Release builds use full tags:
+Future NPU release images will use the full tag format below. Historical release images used earlier naming formats and do not follow this rule.
 
 ```text
 <LlamaFactory-version>-cann<CANN-version>-torch_npu<TorchNPU-version>-<chip>-<os>-<Python-version>

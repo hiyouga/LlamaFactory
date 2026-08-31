@@ -94,6 +94,11 @@ def _make_norms_dtype_safe(model: HFModel) -> int:
     return n
 
 
+def is_lora_model(model: HFModel) -> bool:
+    """Return whether PEFT LoRA layers have already been injected into the model."""
+    return any(isinstance(module, LoraLayer) for module in model.modules())
+
+
 def get_transformer_layer_cls(model: HFModel) -> set[type[nn.Module]]:
     classes: set[type[nn.Module]] = set()
     for module in model.modules():
@@ -123,7 +128,8 @@ def save_model(model: HFModel, output_dir: str, processor: Processor) -> None:
     if DistributedInterface().get_rank() == 0:
         logger.info("Gathering state dict for saving...")
 
-    options = StateDictOptions(full_state_dict=True, cpu_offload=True)
+    lora_model = is_lora_model(model)
+    options = StateDictOptions(full_state_dict=True, cpu_offload=True, ignore_frozen_params=lora_model)
     state_dict = get_model_state_dict(model, options=options)
 
     if DistributedInterface().get_rank() == 0:
@@ -151,7 +157,8 @@ def save_checkpoint(model: HFModel, optimizer: torch.optim.Optimizer, ckpt_dir: 
         if DistributedInterface().get_rank() == 0:
             logger.info("Gathering state dict for saving additional HF format checkpoint...")
 
-        hf_options = StateDictOptions(full_state_dict=True, cpu_offload=True)
+        lora_model = is_lora_model(model)
+        hf_options = StateDictOptions(full_state_dict=True, cpu_offload=True, ignore_frozen_params=lora_model)
         hf_state_dict = get_model_state_dict(model, options=hf_options)
 
         if DistributedInterface().get_rank() == 0:
@@ -218,7 +225,7 @@ class FSDP2Engine:
         )
 
     def is_lora_module_wrap(self, model) -> bool:
-        return any(isinstance(module, LoraLayer) for module in model.modules())
+        return is_lora_model(model)
 
     def prepare_model(self, model: HFModel, ignored_params: set[nn.Parameter] | None = None) -> HFModel:
         if self.fsdp_mesh is None:

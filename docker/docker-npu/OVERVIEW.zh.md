@@ -21,6 +21,8 @@ LlamaFactory 昇腾 NPU 镜像面向华为昇腾 Atlas NPU，提供可直接使�
 | A2 | openEuler 24.03 | `latest-910b-openeuler` |
 | A3 | openEuler 24.03 | `latest-a3-openeuler` |
 
+历史版本的 NPU 镜像 Tag 及其对应的 Dockerfile 归档链接，请参阅 [Supported Tags](./supported_tags.md)。
+
 ## 镜像介绍
 
 镜像内预装以下主要组件：
@@ -54,7 +56,7 @@ latest-<芯片信息>-<操作系统>
 | `芯片信息` | `910b` 或 `a3` | 镜像所适配的昇腾芯片型号 |
 | `操作系统` | `ubuntu` 或 `openeuler` | 容器操作系统类型 |
 
-Release 构建使用完整 tag：
+后续发布的 NPU release 镜像将使用以下完整 tag 格式。历史 release 镜像使用旧的命名格式，不适用以下规则。
 
 ```text
 <LlamaFactory版本>-cann<CANN版本>-torch_npu<TorchNPU版本>-<芯片信息>-<操作系统>-<Python版本>
