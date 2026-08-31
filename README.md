@@ -27,7 +27,7 @@
 
 ### Check our new open-source project —<br>🐧 [PenguinHarness](https://github.com/Prism-Shadow/penguin-harness): Local-first multi-agent app development platform - create, fine-tune, deploy AI apps automatically!
 
-Follow and star our project: https://github.com/Prism-Shadow/penguin-harness
+Follow us and give us a star ⭐: https://github.com/Prism-Shadow/penguin-harness
 
 </div>
 
