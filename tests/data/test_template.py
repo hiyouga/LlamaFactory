@@ -532,8 +532,10 @@ def test_yi_legacy_template_boundary_merge():
     rendered_messages = template._render(messages, system=None, tools=None)
     source_text = template._convert_elements_to_text(tokenizer, rendered_messages[0])
     target_text = template._convert_elements_to_text(tokenizer, rendered_messages[1])
-    source_ids, target_ids = template._encode(tokenizer, messages, system=None, tools=None)
+    encoded_messages, processed_response_indices = template._encode(tokenizer, messages, system=None, tools=None)
+    source_ids, target_ids = encoded_messages
 
+    assert processed_response_indices == set()
     assert source_ids == tokenizer.encode(source_text)[:-1]
     assert target_ids[0] == 0x110000
     assert source_ids + target_ids == tokenizer.encode(source_text + target_text)

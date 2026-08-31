@@ -410,7 +410,7 @@ class YiLegacyTemplate(Template):
         messages: list[dict[str, str]],
         system: Optional[str],
         tools: Optional[str],
-    ) -> list[list[int]]:
+    ) -> tuple[list[list[int]], set[int]]:
         processed_messages = self._process_messages(messages)
         if processed_messages is not None:
             messages = processed_messages
@@ -430,7 +430,7 @@ class YiLegacyTemplate(Template):
             split_index = self._get_common_prefix_length(source_ids, full_ids)
             encoded_messages.extend([full_ids[:split_index], full_ids[split_index:]])
 
-        return encoded_messages
+        return encoded_messages, set()
 
 
 @dataclass
