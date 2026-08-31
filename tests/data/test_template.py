@@ -460,7 +460,7 @@ def test_qwen3_template(cot_messages: bool):
     _check_template("Qwen/Qwen3-8B", "qwen3", prompt_str, answer_str, messages=messages)
 
 
-def test_qwen3_nothink_processes_every_response_boundary():
+def test_qwen3_nothink_processes_only_generation_boundary():
     template = deepcopy(TEMPLATES["qwen3_nothink"])
     messages = [
         {"role": "user", "content": "question 1"},
@@ -472,8 +472,8 @@ def test_qwen3_nothink_processes_every_response_boundary():
 
     processed_response_indices = template._process_thought_boundaries(rendered_messages, messages)
 
-    assert processed_response_indices == {1, 3}
-    assert rendered_messages[0][-1].endswith(template.add_thought())
+    assert processed_response_indices == {3}
+    assert not rendered_messages[0][-1].endswith(template.add_thought())
     assert rendered_messages[2][-1].endswith(template.add_thought())
 
 

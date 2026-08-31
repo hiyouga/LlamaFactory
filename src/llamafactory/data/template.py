@@ -548,20 +548,17 @@ class QwenNothinkTemplate(Template):
     def _process_thought_boundaries(
         self, rendered_messages: list["SLOTS"], messages: list[dict[str, str]]
     ) -> set[int]:
-        processed_response_indices = set()
-        for response_index in range(1, len(rendered_messages), 2):
-            if messages[response_index]["role"] not in {Role.ASSISTANT, Role.FUNCTION}:
-                continue
+        response_index = len(rendered_messages) - 1
+        if response_index == 0 or messages[response_index]["role"] not in {Role.ASSISTANT, Role.FUNCTION}:
+            return set()
 
-            prompt_elements = rendered_messages[response_index - 1]
-            if prompt_elements and isinstance(prompt_elements[-1], str):
-                prompt_elements[-1] += self.add_thought()
-            else:
-                prompt_elements.append(self.add_thought())
+        prompt_elements = rendered_messages[response_index - 1]
+        if prompt_elements and isinstance(prompt_elements[-1], str):
+            prompt_elements[-1] += self.add_thought()
+        else:
+            prompt_elements.append(self.add_thought())
 
-            processed_response_indices.add(response_index)
-
-        return processed_response_indices
+        return {response_index}
 
 
 class QwenThinkingHistoryMixin:
