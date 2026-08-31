@@ -548,13 +548,16 @@ class DeepSeekR1Template(DeepSeekR1ReasoningMixin, ReasoningTemplate):
     r"""Render the original R1 thinking prefill before tokenization."""
 
     @override
-    def _process_rendered_messages(
+    def _process_thought_boundaries(
         self, rendered_messages: list["SLOTS"], messages: list[dict[str, str]]
-    ) -> None:
+    ) -> set[int]:
         if self.enable_thinking is True:
-            self._move_thought_prefill(rendered_messages)
+            return self._move_thought_prefill(rendered_messages)
 
-    def _move_thought_prefill(self, rendered_messages: list["SLOTS"]) -> None:
+        return set()
+
+    def _move_thought_prefill(self, rendered_messages: list["SLOTS"]) -> set[int]:
+        processed_response_indices = set()
         thought_start = self.thought_words[0]
         for response_index in range(1, len(rendered_messages), 2):
             response_elements = rendered_messages[response_index]
@@ -573,6 +576,10 @@ class DeepSeekR1Template(DeepSeekR1ReasoningMixin, ReasoningTemplate):
 
             if response_content:
                 response_elements[0] = response_content[len(thought_start) :]
+
+            processed_response_indices.add(response_index)
+
+        return processed_response_indices
 
 
 @dataclass
