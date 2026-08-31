@@ -508,6 +508,17 @@ def test_falcon_h1_template_consistency():
     assert len(extracted_calls) == 1
     assert extracted_calls[0].name == "get_current_temperature"
     assert json.loads(extracted_calls[0].arguments) == {"city": "Paris"}
+    second_tool = {
+        "type": "function",
+        "function": {
+            "name": "get_current_time",
+            "description": "Get the current time for a city.",
+            "parameters": {"type": "object", "properties": {"city": {"type": "string"}}},
+        },
+    }
+    rendered_tools = template.format_tools.apply(content=json.dumps([*tools, second_tool], ensure_ascii=False))[0]
+    serialized_tools = rendered_tools.split("<tools>\n", maxsplit=1)[1].split("\n</tools>", maxsplit=1)[0]
+    assert json.loads(serialized_tools) == [*tools, second_tool]
     for messages, reference_messages, case_tools in cases:
         prompt_ids, _ = template.encode_oneturn(
             tokenizer,

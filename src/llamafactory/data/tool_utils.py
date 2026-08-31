@@ -644,12 +644,10 @@ class FalconH1ToolUtils(QwenToolUtils):
     @override
     @staticmethod
     def tool_formatter(tools: list[dict[str, Any]]) -> str:
-        tool_texts = []
-        for tool in tools:
-            wrapped_tool = tool if tool.get("type") == "function" else {"type": "function", "function": tool}
-            tool_texts.append(f"[{json.dumps(wrapped_tool, ensure_ascii=False)}]")
-
-        return FALCON_H1_TOOL_PROMPT.format(tool_text="".join(tool_texts))
+        wrapped_tools = [
+            tool if tool.get("type") == "function" else {"type": "function", "function": tool} for tool in tools
+        ]
+        return FALCON_H1_TOOL_PROMPT.format(tool_text=json.dumps(wrapped_tools, ensure_ascii=False))
 
     @override
     @staticmethod
