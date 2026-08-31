@@ -540,6 +540,7 @@ class Qwen38ReasoningTemplate(ReasoningTemplate):
                 "conclusion without unnecessary elaboration."
             )
         else:
+            # Defensive validation for callers that configure the template without DataArguments.
             raise ValueError(
                 f"Unexpected reasoning effort {self.reasoning_effort}. "
                 "Supported types are xhigh (default), medium, and low."
