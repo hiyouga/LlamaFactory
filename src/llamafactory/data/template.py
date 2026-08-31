@@ -612,20 +612,27 @@ class GlmZ1Template(Glm4ToolSystemMixin, ReasoningTemplate):
 
     @override
     def _process_history_thoughts(self, messages: list[dict[str, str]], is_inference: bool) -> bool:
-        for message in messages[:-1]:
-            message["content"] = message["content"].split("</think>")[-1].strip()
+        last_user_index = max(
+            (index for index, message in enumerate(messages[:-1]) if message["role"] == Role.USER),
+            default=-1,
+        )
+        for index, message in enumerate(messages[:-1]):
+            if message["role"] in {Role.ASSISTANT, Role.FUNCTION} and index < last_user_index:
+                message["content"] = message["content"].split("</think>")[-1].strip()
 
         return True
 
     @override
-    def _process_rendered_messages(self, rendered_messages: list["SLOTS"], messages: list[dict[str, str]]) -> None:
+    def _process_thought_boundaries(
+        self, rendered_messages: list["SLOTS"], messages: list[dict[str, str]]
+    ) -> set[int]:
         response_index = len(rendered_messages) - 1
         if messages[response_index]["role"] != Role.ASSISTANT:
-            return
+            return set()
 
         response_elements = rendered_messages[response_index]
         if not response_elements or not isinstance(response_elements[0], str):
-            return
+            return set()
 
         response_content = response_elements[0]
         if messages[response_index]["content"] == "" and response_content == "\n":
@@ -638,6 +645,8 @@ class GlmZ1Template(Glm4ToolSystemMixin, ReasoningTemplate):
             prompt_elements[-1] += self.thought_prefill
         else:
             prompt_elements.append(self.thought_prefill)
+
+        return {response_index}
 
 
 @dataclass

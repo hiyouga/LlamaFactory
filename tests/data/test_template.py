@@ -460,6 +460,24 @@ def test_qwen3_template(cot_messages: bool):
     _check_template("Qwen/Qwen3-8B", "qwen3", prompt_str, answer_str, messages=messages)
 
 
+def test_glmz1_history_processing_preserves_non_model_content_and_active_tools():
+    template = deepcopy(TEMPLATES["glmz1"])
+    messages = [
+        {"role": "user", "content": "  literal </think> user text  "},
+        {"role": "assistant", "content": "<think>old reasoning</think> old answer"},
+        {"role": "user", "content": "new question"},
+        {"role": "function", "content": '<think>active reasoning</think>{"name":"search","arguments":{}}'},
+        {"role": "observation", "content": "  literal </think> tool result  "},
+        {"role": "assistant", "content": "final answer"},
+    ]
+
+    assert template._process_history_thoughts(messages, is_inference=True)
+    assert messages[0]["content"] == "  literal </think> user text  "
+    assert messages[1]["content"] == "old answer"
+    assert messages[3]["content"].startswith("<think>active reasoning</think>")
+    assert messages[4]["content"] == "  literal </think> tool result  "
+
+
 @pytest.mark.runs_on(["cpu", "mps"])
 def test_glm_template_consistency():
     system = "You are a helpful weather assistant. Use the available tools when needed."
