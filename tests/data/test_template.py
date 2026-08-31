@@ -462,6 +462,43 @@ def test_qwen3_template(cot_messages: bool):
     _check_template("Qwen/Qwen3-8B", "qwen3", prompt_str, answer_str, messages=messages)
 
 
+def test_hunyuan_hooks_preserve_active_tools_and_add_mt_turn_bos():
+    template = deepcopy(TEMPLATES["hunyuan_instruct"])
+    messages = [
+        {"role": "user", "content": "literal </think> user text"},
+        {
+            "role": "assistant",
+            "content": "<think>old reasoning</think><answer>old answer</answer>",
+        },
+        {"role": "user", "content": "new question"},
+        {"role": "function", "content": '<think>active reasoning</think>{"name":"search","arguments":{}}'},
+        {"role": "observation", "content": "literal </think> tool result"},
+        {"role": "assistant", "content": "final answer"},
+    ]
+
+    assert template._process_history_thoughts(messages, is_inference=True)
+    assert messages[0]["content"] == "literal </think> user text"
+    assert messages[1]["content"] == "old answer"
+    assert messages[3]["content"].startswith("<think>active reasoning</think>")
+    assert messages[4]["content"] == "literal </think> tool result"
+
+    mt_template = TEMPLATES["hy_mt_7b"]
+    mt_messages = [
+        {"role": "user", "content": "question 1"},
+        {"role": "assistant", "content": "answer 1"},
+        {"role": "user", "content": "question 2"},
+        {"role": "assistant", "content": "answer 2"},
+    ]
+    rendered_messages = [["user 1"], ["assistant 1"], ["user 2"], ["assistant 2"]]
+    mt_template._process_rendered_messages(rendered_messages, mt_messages)
+    assert rendered_messages == [
+        ["user 1"],
+        ["assistant 1"],
+        [{"bos_token"}, "user 2"],
+        ["assistant 2"],
+    ]
+
+
 @pytest.mark.runs_on(["cpu", "mps"])
 def test_hunyuan_template_consistency():
     expected_templates = {

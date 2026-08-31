@@ -141,25 +141,6 @@ class FunctionFormatter(StringFormatter):
 
 
 @dataclass
-class HunyuanFunctionFormatter(FunctionFormatter):
-    r"""Join Hunyuan reasoning directly to the following tool-call block."""
-
-    @override
-    def apply(self, **kwargs) -> SLOTS:
-        content = kwargs.get("content", "")
-        thought_words = kwargs.get("thought_words")
-        slots = super().apply(**kwargs)
-        if thought_words and len(thought_words) == 2 and thought_words[1] in content:
-            thought_end = thought_words[1]
-            return [
-                slot.replace(thought_end, thought_end.rstrip("\n"), 1) if isinstance(slot, str) else slot
-                for slot in slots
-            ]
-
-        return slots
-
-
-@dataclass
 class ToolFormatter(Formatter):
     def __post_init__(self):
         self.tool_utils = get_tool_utils(self.tool_format)

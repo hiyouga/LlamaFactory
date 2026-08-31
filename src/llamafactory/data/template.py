@@ -21,7 +21,7 @@ from typing_extensions import override
 
 from ..extras import logging
 from .data_utils import Role
-from .formatter import EmptyFormatter, FunctionFormatter, HunyuanFunctionFormatter, StringFormatter, ToolFormatter
+from .formatter import EmptyFormatter, FunctionFormatter, StringFormatter, ToolFormatter
 from .mm_plugin import get_mm_plugin
 
 
@@ -129,10 +129,6 @@ class Template:
 
         return token_ids
 
-    def _format_message_prefix(self, message: dict[str, str], index: int) -> "SLOTS":
-        r"""Return model-specific elements inserted before an individual message."""
-        return []
-
     def _encode(
         self,
         tokenizer: "PreTrainedTokenizer",
@@ -184,8 +180,6 @@ class Template:
                         system_and_tools = self.format_system.apply(content=(system + tool_text))
 
                     elements += system_and_tools
-
-            elements += self._format_message_prefix(message, i)
 
             if message["role"] == Role.USER:
                 elements += self.format_user.apply(content=message["content"], idx=str(i // 2))
@@ -570,11 +564,10 @@ class HunyuanMT7BTemplate(Template):
     r"""Start every Hunyuan MT user turn with the tokenizer BOS token."""
 
     @override
-    def _format_message_prefix(self, message: dict[str, str], index: int) -> "SLOTS":
-        if index > 0 and message["role"] == Role.USER:
-            return [{"bos_token"}]
-
-        return []
+    def _process_rendered_messages(self, rendered_messages: list["SLOTS"], messages: list[dict[str, str]]) -> None:
+        for index, message in enumerate(messages):
+            if index > 0 and message["role"] == Role.USER:
+                rendered_messages[index].insert(0, {"bos_token"})
 
 
 @dataclass
@@ -958,7 +951,7 @@ register_template(
     format_user=StringFormatter(slots=["<｜hy_User｜>{{content}}<｜hy_Assistant｜>"]),
     format_assistant=StringFormatter(slots=["{{content}}<｜hy_place▁holder▁no▁2｜>"]),
     format_system=StringFormatter(slots=["{{content}}<｜hy_place▁holder▁no▁3｜>"]),
-    format_function=HunyuanFunctionFormatter(
+    format_function=FunctionFormatter(
         slots=["{{content}}<｜hy_place▁holder▁no▁2｜>"],
         tool_format="hunyuan",
     ),
