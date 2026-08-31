@@ -470,6 +470,8 @@ def test_hunyuan_hooks_preserve_active_tools_and_add_mt_turn_bos():
             "role": "assistant",
             "content": "<think>old reasoning</think><answer>old answer</answer>",
         },
+        {"role": "user", "content": "legacy question"},
+        {"role": "assistant", "content": "<think>legacy reasoning</think>legacy answer"},
         {"role": "user", "content": "new question"},
         {"role": "function", "content": '<think>active reasoning</think>{"name":"search","arguments":{}}'},
         {"role": "observation", "content": "literal </think> tool result"},
@@ -479,8 +481,9 @@ def test_hunyuan_hooks_preserve_active_tools_and_add_mt_turn_bos():
     assert template._process_history_thoughts(messages, is_inference=True)
     assert messages[0]["content"] == "literal </think> user text"
     assert messages[1]["content"] == "old answer"
-    assert messages[3]["content"].startswith("<think>active reasoning</think>")
-    assert messages[4]["content"] == "literal </think> tool result"
+    assert messages[3]["content"] == "legacy answer"
+    assert messages[5]["content"].startswith("<think>active reasoning</think>")
+    assert messages[6]["content"] == "literal </think> tool result"
 
     mt_template = TEMPLATES["hy_mt_7b"]
     mt_messages = [

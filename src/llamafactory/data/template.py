@@ -542,9 +542,14 @@ class HunyuanReasoningTemplate(ReasoningTemplate):
     @override
     def _process_history_thoughts(self, messages: list[dict[str, str]], is_inference: bool) -> bool:
         for message in messages[:-1]:
-            if message["role"] == Role.ASSISTANT and "<answer>" in message["content"]:
+            if message["role"] != Role.ASSISTANT:
+                continue
+
+            if "<answer>" in message["content"]:
                 answer = message["content"].split("<answer>", maxsplit=1)[-1]
                 message["content"] = answer.split("</answer>", maxsplit=1)[0].strip()
+            else:
+                message["content"] = self.remove_thought(message["content"])
 
         return True
 
@@ -1408,6 +1413,8 @@ register_template(
 )
 
 
+# The following two templates are copied from the official Hy-MT2 chat templates:
+# https://github.com/Tencent-Hunyuan/Hy-MT2/blob/main/train/llama_factory_support/hy_dense_template.py
 register_template(
     name="hy_dense_1_8b",
     format_user=StringFormatter(slots=["<｜hy_User｜>{{content}}"]),
