@@ -122,12 +122,12 @@ class DataArguments:
         metadata={"help": "Override the default system message in the template."},
     )
     enable_thinking: bool | None = field(
-        default=True,
-        metadata={"help": "Whether or not to enable thinking mode for reasoning models."},
+        default=None,
+        metadata={"help": "Whether or not to enable thinking mode for reasoning models. Defaults to the template's own setting if not specified."},
     )
-    preserve_thinking: bool = field(
-        default=False,
-        metadata={"help": "Whether or not to preserve thinking content in historical turns for reasoning models."},
+    preserve_thinking: bool | None = field(
+        default=None,
+        metadata={"help": "Whether or not to preserve thinking content in historical turns for reasoning models. Defaults to the template's own setting if not specified."},
     )
     tokenized_path: str | None = field(
         default=None,
