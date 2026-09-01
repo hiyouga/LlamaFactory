@@ -323,7 +323,10 @@ class FSDP2Engine:
         if self.rank == 0:
             logger.info("Materializing sharded model params...")
 
-        device = get_current_accelerator()
+        # When CPU offloading is enabled, FSDP2 requires parameters to be materialized on CPU.
+        # Materializing on the accelerator device causes a RuntimeError because FSDP2's
+        # CPUOffloadPolicy expects parameters to reside on CPU before sharding begins.
+        device = "cpu" if self.offload_params else get_current_accelerator()
         model.to_empty(device=device)
 
         if dcp_path and os.path.exists(dcp_path):
