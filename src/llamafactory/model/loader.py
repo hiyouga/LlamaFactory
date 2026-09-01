@@ -53,6 +53,15 @@ class TokenizerModule(TypedDict):
     processor: Optional["ProcessorMixin"]
 
 
+def _patch_missing_hf_device_map(model: "PreTrainedModel", model_args: "ModelArguments") -> None:
+    r"""Patch a fallback hf_device_map for export models that require it."""
+    if model_args.export_dir is None or model_args.export_device != "auto" or hasattr(model, "hf_device_map"):
+        return
+
+    # Keep the fallback scoped to export auto-device loading to avoid affecting training paths.
+    model.hf_device_map = {"": str(getattr(model, "device", "cpu"))}
+
+
 def _get_init_kwargs(model_args: "ModelArguments") -> dict[str, Any]:
     r"""Get arguments to load config/tokenizer/model.
 
@@ -169,6 +178,8 @@ def load_model(
                 model = load_class.from_config(config, trust_remote_code=model_args.trust_remote_code)
             else:
                 model = load_class.from_pretrained(**init_kwargs)
+                _patch_missing_hf_device_map(model, model_args)
+
                 if getattr(model.config, "model_type", None) in ["qwen2_5_omni", "qwen3_omni_moe"]:
                     model = getattr(model, "thinker")
 
