@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from ...extras import logging
 from ...extras.constants import IGNORE_INDEX
-from .processor_utils import DatasetProcessor, greedy_knapsack, infer_seqlen
+from .processor_utils import DatasetProcessor, greedy_knapsack_indices, infer_seqlen, semantic_aware_knapsack
 
 
 if TYPE_CHECKING:
@@ -28,6 +28,11 @@ if TYPE_CHECKING:
 logger = logging.get_logger(__name__)
 
 MAX_SU_SEQ_IDX = 2**32  # maximum sub-sequence index
+
+
+def _messages_to_text(messages: list[dict[str, str]]) -> str:
+    r"""Join the string content of chat messages into a single text blob for embedding purposes."""
+    return "\n".join(message["content"] for message in messages if isinstance(message.get("content"), str))
 
 
 @dataclass
@@ -151,7 +156,8 @@ class PackedSupervisedDatasetProcessor(SupervisedDatasetProcessor):
         valid_num = 0
         batch_input_ids, batch_labels, batch_images, batch_videos, batch_audios = [], [], [], [], []
         lengths = []
-        length2indexes = defaultdict(list)
+        batch_texts = []
+        use_semantic_packing = self.data_args.packing_strategy == "semantic_aware"
         for i in range(len(examples["_prompt"])):
             if len(examples["_prompt"][i]) % 2 != 1 or len(examples["_response"][i]) != 1:
                 logger.warning_rank0(
@@ -173,7 +179,9 @@ class PackedSupervisedDatasetProcessor(SupervisedDatasetProcessor):
                 logger.warning_rank0(f"Dropped lengthy example with length {length} > {self.data_args.cutoff_len}.")
             else:
                 lengths.append(length)
-                length2indexes[length].append(valid_num)
+                if use_semantic_packing:
+                    batch_texts.append(_messages_to_text(examples["_prompt"][i] + examples["_response"][i]))
+
                 batch_input_ids.append(input_ids)
                 batch_labels.append(labels)
                 batch_images.append(examples["_images"][i] or [])
@@ -183,7 +191,19 @@ class PackedSupervisedDatasetProcessor(SupervisedDatasetProcessor):
 
         model_inputs = defaultdict(list)
         requires_packing_params = self.data_args.neat_packing
-        knapsacks = greedy_knapsack(lengths, self.data_args.cutoff_len)
+        if use_semantic_packing:
+            sequences = [
+                {"text": text, "input_ids": input_ids} for text, input_ids in zip(batch_texts, batch_input_ids)
+            ]
+            knapsacks = semantic_aware_knapsack(
+                sequences,
+                self.data_args.cutoff_len,
+                self.data_args.packing_embedding_model,
+                self.data_args.packing_similarity_threshold,
+            )
+        else:
+            knapsacks = greedy_knapsack_indices(list(range(valid_num)), lengths, self.data_args.cutoff_len)
+
         for knapsack in knapsacks:
             packed_input_ids, packed_attention_masks, packed_position_ids, packed_labels = [], [], [], []
             packed_images, packed_videos, packed_audios = [], [], []
@@ -193,8 +213,7 @@ class PackedSupervisedDatasetProcessor(SupervisedDatasetProcessor):
                 video_subseq_ids: list[int] = []
                 audio_subseq_ids: list[int] = []
 
-            for i, length in enumerate(knapsack):
-                index = length2indexes[length].pop()
+            for i, index in enumerate(knapsack):
                 packed_input_ids += batch_input_ids[index]
                 packed_position_ids += list(range(len(batch_input_ids[index])))  # NOTE: pad_to_multiple_of ignore this
                 packed_labels += batch_labels[index]
