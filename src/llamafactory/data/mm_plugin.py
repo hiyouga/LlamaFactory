@@ -2807,10 +2807,14 @@ class GLM4VPlugin(Qwen2VLPlugin):
             )
             # prepare video metadata
             video_metadata = [
-                {"fps": 2, "duration": duration, "total_frames": len(video)}
+                {
+                    "fps": getattr(processor, "video_fps", 2.0),
+                    "duration": duration,
+                    "total_num_frames": len(video),
+                }
                 for video, duration in zip(video_data["videos"], video_data["durations"])
             ]
-            mm_inputs.update(video_processor(images=None, videos=video_data["videos"], video_metadata=video_metadata))
+            mm_inputs.update(video_processor(videos=video_data["videos"], video_metadata=video_metadata))
 
         return mm_inputs
 

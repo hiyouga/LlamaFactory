@@ -505,6 +505,39 @@ def test_qwen3_vl_plugin_video_path():
 
 
 @pytest.mark.runs_on(["cpu", "mps"])
+def test_glm4v_video_metadata_kwargs():
+    class FakeVideoProcessor:
+        def __call__(self, **kwargs):
+            self.kwargs = kwargs
+            return {"video_grid_thw": torch.tensor([[len(kwargs["videos"][0]), 1, 1]])}
+
+    class FakeProcessor:
+        video_fps = 1.5
+        video_max_pixels = 4096
+        video_min_pixels = 1
+        video_maxlen = 8
+
+        def __init__(self):
+            self.video_processor = FakeVideoProcessor()
+
+    processor = FakeProcessor()
+    glm4v_plugin = get_mm_plugin(name="glm4v", image_token="<|image|>", video_token="<|video|>")
+    glm4v_plugin._get_mm_inputs([], VIDEOS, [], processor)
+
+    video_processor_kwargs = processor.video_processor.kwargs
+    assert "images" not in video_processor_kwargs
+    assert video_processor_kwargs["videos"] == VIDEOS
+    assert video_processor_kwargs["video_metadata"] == [
+        {
+            "fps": processor.video_fps,
+            "duration": len(VIDEOS[0]) / processor.video_fps,
+            "total_num_frames": len(VIDEOS[0]),
+        }
+    ]
+    assert "total_frames" not in video_processor_kwargs["video_metadata"][0]
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
 @pytest.mark.skipif(not is_transformers_version_greater_than("4.47.0"), reason="Requires transformers>=4.47.0")
 def test_video_llava_plugin():
     image_seqlen = 256
