@@ -40,6 +40,7 @@ from ..utils import logging
 from ..utils.callbacks import (
     CallbackHandler,
     LoggingCallback,
+    ProfilerCallback,
     TrainerCallback,
     TrainerState,
 )
@@ -133,6 +134,9 @@ class BaseTrainer:
 
         # Callbacks
         self.callback_handler = CallbackHandler([LoggingCallback()], trainer=self)
+        if getattr(self.args, "enable_torch_profiler", False):
+            self.callback_handler.add_callback(ProfilerCallback(self.args))
+
         for cb in callbacks or []:
             self.callback_handler.add_callback(cb)
 
