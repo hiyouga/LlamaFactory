@@ -290,3 +290,9 @@ llamafactory-cli train examples/extras/oft/llama3_oft_sft.yaml
 ```bash
 llamafactory-cli train examples/extras/qoft/llama3_oft_sft_bnb_npu.yaml
 ```
+
+#### Adding New Tokens with Embedding Initialization
+
+```bash
+llamafactory-cli train examples/extras/add_tokens/qwen3_add_tokens_vocab_mean_noise.yaml
+```

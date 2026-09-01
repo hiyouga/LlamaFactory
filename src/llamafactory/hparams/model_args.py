@@ -90,15 +90,37 @@ class BaseModelArguments:
             )
         },
     )
-    init_special_tokens: Literal["noise_init", "desc_init", "desc_init_w_noise"] = field(
-        default="noise_init",
+    init_special_tokens: Literal[
+        "vocab_mean",
+        "noise",
+        "vocab_mean_noise",
+        "description",
+        "description_noise",
+        "noise_init",
+        "desc_init",
+        "desc_init_w_noise",
+    ] = field(
+        default="vocab_mean_noise",
         metadata={
             "help": (
                 "Initialization method for new special tokens: "
-                "'noise_init' (default, random noise around mean), "
-                "'desc_init' (semantic initialization from descriptions), "
-                "'desc_init_w_noise' (semantic + random noise). "
-                "Note: 'desc_init' methods require new_special_tokens_config."
+                "'vocab_mean_noise' (default, vocab mean + Gaussian noise), "
+                "'noise' (pure Gaussian noise), "
+                "'vocab_mean' (pure mean of existing vocab embeddings), "
+                "'description' (semantic initialization from descriptions), "
+                "'description_noise' (semantic + Gaussian noise). "
+                "Note: 'description'/'description_noise' require new_special_tokens_config. "
+                "Legacy aliases 'noise_init'->'vocab_mean_noise', 'desc_init'->'description', "
+                "'desc_init_w_noise'->'description_noise' are deprecated but still accepted."
+            )
+        },
+    )
+    freeze_original_embeddings: bool = field(
+        default=False,
+        metadata={
+            "help": (
+                "Whether to freeze the original embedding rows and train only the newly added "
+                "token embeddings. Only takes effect when resize_vocab is enabled."
             )
         },
     )
@@ -262,14 +284,28 @@ class BaseModelArguments:
             # No special tokens to add
             self._special_token_descriptions = None
 
-        # Validate init method
-        if self.init_special_tokens in ["desc_init", "desc_init_w_noise"]:
+        # Normalize deprecated init-method aliases to canonical names.
+        # NOTE: keep this mapping in sync with INIT_METHOD_ALIASES in model/model_utils/embedding.py.
+        init_method_aliases = {
+            "noise_init": "vocab_mean_noise",
+            "desc_init": "description",
+            "desc_init_w_noise": "description_noise",
+        }
+        if self.init_special_tokens in init_method_aliases:
+            canonical = init_method_aliases[self.init_special_tokens]
+            logger.warning_rank0(
+                f"init_special_tokens='{self.init_special_tokens}' is deprecated, use '{canonical}' instead."
+            )
+            self.init_special_tokens = canonical
+
+        # Validate init method: 'description'/'description_noise' require a descriptions config.
+        if self.init_special_tokens in ["description", "description_noise"]:
             if self._special_token_descriptions is None:
                 logger.warning_rank0(
                     f"init_special_tokens='{self.init_special_tokens}' requires new_special_tokens_config. "
-                    "Falling back to 'noise_init'"
+                    "Falling back to 'vocab_mean_noise'"
                 )
-                self.init_special_tokens = "noise_init"
+                self.init_special_tokens = "vocab_mean_noise"
 
 
 @dataclass
