@@ -390,9 +390,16 @@ class TorchProfilerCallback(TrainerCallback):
             if is_torch_cuda_available():
                 activities.append(torch.profiler.ProfilerActivity.CUDA)
             if is_torch_npu_available():
-                activities.append(torch.profiler.ProfilerActivity.NPU)
-        except Exception:
-            pass
+                npu_activity = getattr(torch.profiler.ProfilerActivity, "NPU", None)
+                if npu_activity is not None:
+                    activities.append(npu_activity)
+                else:
+                    logger.warning_rank0(
+                        "NPU device detected but current torch build has no `ProfilerActivity.NPU`; "
+                        "NPU profiling disabled. Upgrade torch to enable NPU traces."
+                    )
+        except Exception as e:
+            logger.warning_rank0(f"Failed to add device profiler activities: {e}.")
 
         self.profiler = torch.profiler.profile(
             activities=activities,
