@@ -139,7 +139,7 @@ def patch_qwen3_5_forward_npu(model: "PreTrainedModel") -> None:
 
 
 def patch_qwen3_5_forward_gpu(model: "PreTrainedModel") -> None:
-    """Patch the forward method of Qwen3_5ForConditionalGeneration to support cu_seqlens input only patch when do training.
+    """Patch Qwen3.5 decoder forward methods to support cu_seqlens during training.
 
     Refer to: https://github.com/axolotl-ai-cloud/axolotl/blob/main/src/axolotl/monkeypatch/models/qwen3_5/modeling.py.
     """
@@ -286,12 +286,12 @@ def patch_qwen3_5_forward_gpu(model: "PreTrainedModel") -> None:
 
         return output
 
-    if model.config.architectures[0] == "Qwen3_5ForConditionalGeneration":
+    if model.config.architectures[0] in ("Qwen3_5ForCausalLM", "Qwen3_5ForConditionalGeneration"):
         from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5DecoderLayer, Qwen3_5GatedDeltaNet
 
         Qwen3_5DecoderLayer.forward = _patched_decoder_forward
         Qwen3_5GatedDeltaNet.forward = _patch_gdn_forward
-    elif model.config.architectures[0] == "Qwen3_5MoeForConditionalGeneration":
+    elif model.config.architectures[0] in ("Qwen3_5MoeForCausalLM", "Qwen3_5MoeForConditionalGeneration"):
         from transformers.models.qwen3_5_moe.modeling_qwen3_5_moe import (
             Qwen3_5MoeDecoderLayer,
             Qwen3_5MoeGatedDeltaNet,
@@ -484,7 +484,12 @@ def patch_model(
         autocast_projector_dtype(model, model_args)
         add_z3_leaf_module(model)
 
-        if getattr(model.config, "model_type", None) in ["qwen3_5", "qwen3_5_moe"]:
+        if getattr(model.config, "model_type", None) in [
+            "qwen3_5",
+            "qwen3_5_moe",
+            "qwen3_5_moe_text",
+            "qwen3_5_text",
+        ]:
             if is_torch_npu_available():
                 patch_qwen3_5_forward_npu(model)
             elif is_torch_cuda_available() and model_args.flash_attn == "fa2":

@@ -758,6 +758,20 @@ class Qwen35ToolUtils(ToolUtils):
         return results if results else content
 
 
+class Qwen38ToolUtils(Qwen35ToolUtils):
+    r"""Qwen 3.8 tool template preserving the OpenAI function wrapper."""
+
+    @override
+    @staticmethod
+    def tool_formatter(tools: list[dict[str, Any]]) -> str:
+        tool_text = ""
+        for tool in tools:
+            wrapped_tool = tool if tool.get("type") == "function" else {"type": "function", "function": tool}
+            tool_text += "\n" + json.dumps(wrapped_tool, ensure_ascii=False)
+
+        return QWEN35_TOOL_PROMPT.format(tool_text=tool_text)
+
+
 class GLM4MOEToolUtils(QwenToolUtils):
     r"""GLM-4-MOE tool using template."""
 
@@ -970,6 +984,7 @@ TOOLS = {
     "mistral": MistralToolUtils(),
     "qwen": QwenToolUtils(),
     "qwen3_5": Qwen35ToolUtils(),
+    "qwen3_8": Qwen38ToolUtils(),
     "glm4_moe": GLM4MOEToolUtils(),
     "seed_oss": SeedToolUtils(),
     "ling": LingToolUtils(),

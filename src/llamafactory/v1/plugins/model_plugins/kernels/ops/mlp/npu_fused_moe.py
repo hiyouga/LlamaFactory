@@ -363,6 +363,9 @@ _V5_MODEL_TYPE_TO_PATCHES = {
     "qwen3_5_moe": {
         "Qwen3_5MoeExperts": NpuMoeFusedV5.experts_forward,
     },
+    "qwen3_5_moe_text": {
+        "Qwen3_5MoeExperts": NpuMoeFusedV5.experts_forward,
+    },
 }
 
 _MODEL_TYPE_TO_PATCHES = (

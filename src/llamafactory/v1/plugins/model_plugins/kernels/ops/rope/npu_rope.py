@@ -121,7 +121,9 @@ _MODEL_TYPE_TO_PATCHES = {
     "qwen3_vl": _default_rope_patch("qwen3_vl"),
     "qwen3_vl_moe": _default_rope_patch("qwen3_vl_moe"),
     "qwen3_5": _default_rope_patch("qwen3_5"),
+    "qwen3_5_text": _default_rope_patch("qwen3_5"),
     "qwen3_5_moe": _default_rope_patch("qwen3_5_moe"),
+    "qwen3_5_moe_text": _default_rope_patch("qwen3_5_moe"),
 }
 
 

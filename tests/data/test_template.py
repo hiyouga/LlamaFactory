@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+from copy import deepcopy
 from typing import TYPE_CHECKING
 
 import pytest
@@ -22,6 +23,7 @@ from llamafactory.data import get_template_and_fix_tokenizer
 from llamafactory.data.template import TEMPLATES, parse_template
 from llamafactory.extras.constants import (
     DEFAULT_TEMPLATE,
+    MCA_SUPPORTED_MODELS,
     MULTIMODAL_SUPPORTED_MODELS,
     SUPPORTED_MODELS,
     DownloadSource,
@@ -52,6 +54,16 @@ MESSAGES_WITH_THOUGHT = [
     {"role": "user", "content": "你好"},
     {"role": "assistant", "content": "<think>\n模型思考内容\n</think>\n\n很高兴认识你！"},
 ]
+
+
+class CharTokenizer:
+    r"""Minimal reversible tokenizer for testing rendered template text."""
+
+    def encode(self, text: str, add_special_tokens: bool = False) -> list[int]:
+        return [ord(char) for char in text]
+
+    def decode(self, token_ids: list[int]) -> str:
+        return "".join(chr(token_id) for token_id in token_ids)
 
 
 def _check_tokenization(
@@ -111,6 +123,20 @@ def test_moss_vl_registration():
     assert TEMPLATES["moss_vl"].mm_plugin.vision_eos_token == "<|vision_end|>"
     assert TEMPLATES["moss_vl"].mm_plugin.time_bos_token == "<|time_start|>"
     assert TEMPLATES["moss_vl"].mm_plugin.time_eos_token == "<|time_end|>"
+
+
+def test_qwen38_registration():
+    multimodal_model = "Qwen3.8-27B"
+    text_model = "Qwen3.8-2.4T-A95B-Thinking"
+
+    assert SUPPORTED_MODELS[multimodal_model][DownloadSource.DEFAULT] == "Qwen/Qwen3.8-27B"
+    assert DEFAULT_TEMPLATE[multimodal_model] == "qwen3_8"
+    assert multimodal_model in MULTIMODAL_SUPPORTED_MODELS
+
+    assert SUPPORTED_MODELS[text_model][DownloadSource.DEFAULT] == "Qwen/Qwen3.8-2.4T-A95B"
+    assert DEFAULT_TEMPLATE[text_model] == "qwen3_8"
+    assert text_model not in MULTIMODAL_SUPPORTED_MODELS
+    assert {"qwen3_5_moe_text", "qwen3_5_text"} <= MCA_SUPPORTED_MODELS
 
 
 @pytest.mark.runs_on(["cpu", "mps"])
@@ -237,6 +263,48 @@ def test_reasoning_encode_multiturn_discarding_history_cot(enable_thinking: bool
         tokenizer,
         (encoded_pairs[0][0], encoded_pairs[0][1], encoded_pairs[1][0], encoded_pairs[1][1]),
         (prompt_str_1, answer_str_1, prompt_str_2, answer_str_2),
+    )
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
+def test_qwen38_reasoning_instruction():
+    tokenizer = CharTokenizer()
+    template = deepcopy(TEMPLATES["qwen3_8"])
+    encoded_pairs = template.encode_multiturn(tokenizer, MESSAGES[:2], system="Medical assistant")
+
+    prompt_text = tokenizer.decode(encoded_pairs[0][0])
+    answer_text = tokenizer.decode(encoded_pairs[0][1])
+    assert prompt_text == (
+        "<|im_start|>system\n"
+        "Reasoning effort is set to xhigh. Please think carefully through the task, validate key assumptions, "
+        "consider plausible alternatives, and prioritize correctness, consistency, and clarity in the final answer."
+        "\n\nMedical assistant<|im_end|>\n"
+        "<|im_start|>user\nHow are you<|im_end|>\n<|im_start|>assistant\n"
+    )
+    assert answer_text == "<think>\n\n</think>\n\nI am fine!<|im_end|>\n"
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
+def test_qwen38_tool_system_order():
+    tokenizer = CharTokenizer()
+    template = deepcopy(TEMPLATES["qwen3_8"])
+    tools = '[{"name":"get_weather","parameters":{"type":"object","properties":{}}}]'
+    messages = [
+        {"role": "user", "content": "How is the weather?"},
+        {"role": "function", "content": '{"name":"get_weather","arguments":{}}'},
+    ]
+    encoded_pairs = template.encode_multiturn(tokenizer, messages, system="Use tools safely", tools=tools)
+
+    prompt_text = tokenizer.decode(encoded_pairs[0][0])
+    answer_text = tokenizer.decode(encoded_pairs[0][1])
+    reasoning_text = template._get_reasoning_instruction()
+    tool_text = template.format_tools.apply(content=tools)[0].lstrip("\n")
+    assert prompt_text == (
+        f"<|im_start|>system\n{reasoning_text}\n\n{tool_text}\n\nUse tools safely<|im_end|>\n"
+        "<|im_start|>user\nHow is the weather?<|im_end|>\n<|im_start|>assistant\n"
+    )
+    assert answer_text == (
+        "<think>\n\n</think>\n\n<tool_call>\n<function=get_weather>\n</function>\n</tool_call><|im_end|>\n"
     )
 
 

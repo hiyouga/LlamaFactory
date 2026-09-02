@@ -83,7 +83,13 @@ _MODEL_TYPE_TO_PATCHES = {
     "qwen3_5": {
         "Qwen3_5MLP": npu_swiglu_forward,
     },
+    "qwen3_5_text": {
+        "Qwen3_5MLP": npu_swiglu_forward,
+    },
     "qwen3_5_moe": {
+        "Qwen3_5MoeMLP": npu_swiglu_forward,
+    },
+    "qwen3_5_moe_text": {
         "Qwen3_5MoeMLP": npu_swiglu_forward,
     },
 }

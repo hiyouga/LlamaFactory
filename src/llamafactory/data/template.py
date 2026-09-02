@@ -523,6 +523,80 @@ class ReasoningTemplate(Template):
 
 
 @dataclass
+class Qwen38ReasoningTemplate(ReasoningTemplate):
+    r"""Qwen3.8 template with reasoning-effort instructions and official system ordering."""
+
+    reasoning_effort: str = "xhigh"
+
+    def _get_reasoning_instruction(self) -> str:
+        if self.enable_thinking is False:
+            return ""
+
+        if self.reasoning_effort == "xhigh":
+            return (
+                "Reasoning effort is set to xhigh. Please think carefully through the task, validate key assumptions, "
+                "consider plausible alternatives, and prioritize correctness, consistency, and clarity in the final "
+                "answer."
+            )
+        elif self.reasoning_effort == "medium":
+            return ""
+        elif self.reasoning_effort == "low":
+            return (
+                "Reasoning effort is set to low. Keep your thinking brief and focused, moving directly to the "
+                "conclusion without unnecessary elaboration."
+            )
+        else:
+            # Defensive validation for callers that configure the template without DataArguments.
+            raise ValueError(
+                f"Unexpected reasoning effort {self.reasoning_effort}. "
+                "Supported types are xhigh (default), medium, and low."
+            )
+
+    @override
+    def _encode(
+        self,
+        tokenizer: "PreTrainedTokenizer",
+        messages: list[dict[str, str]],
+        system: Optional[str],
+        tools: Optional[str],
+    ) -> list[list[int]]:
+        system = (system or self.default_system).strip()
+        reasoning_instruction = self._get_reasoning_instruction()
+        encoded_messages = []
+        for i, message in enumerate(messages):
+            elements = []
+
+            if i == 0:
+                elements += self.format_prefix.apply()
+                system_parts = []
+                if reasoning_instruction:
+                    system_parts.append(reasoning_instruction)
+                if tools:
+                    system_parts.append(self.format_tools.apply(content=tools)[0].lstrip("\n"))
+                if system:
+                    system_parts.append(system)
+                if system_parts:
+                    elements += self.format_system.apply(content="\n\n".join(system_parts))
+
+            if message["role"] == Role.USER:
+                elements += self.format_user.apply(content=message["content"], idx=str(i // 2))
+            elif message["role"] == Role.ASSISTANT:
+                elements += self.format_assistant.apply(content=message["content"])
+            elif message["role"] == Role.OBSERVATION:
+                elements += self.format_observation.apply(content=message["content"])
+            elif message["role"] == Role.FUNCTION:
+                elements += self.format_function.apply(
+                    content=message["content"], thought_words=self.thought_words, tool_call_words=self.tool_call_words
+                )
+            else:
+                raise NotImplementedError("Unexpected role: {}".format(message["role"]))
+
+            encoded_messages.append(self._convert_elements_to_ids(tokenizer, elements))
+
+        return encoded_messages
+
+
+@dataclass
 class Glm47ReasoningTemplate(ReasoningTemplate):
     r"""GLM-4.7 uses only the closing </think> tag for empty thinking blocks."""
 
@@ -693,6 +767,9 @@ def get_template_and_fix_tokenizer(tokenizer: "PreTrainedTokenizer", data_args: 
     if data_args.train_on_prompt and template.efficient_eos:
         raise ValueError("Current template does not support `train_on_prompt`.")
 
+    if isinstance(template, Qwen38ReasoningTemplate) and data_args.tool_format not in {None, "qwen3_8"}:
+        raise ValueError("Template `qwen3_8` uses its built-in tool format; remove the incompatible `tool_format`.")
+
     if data_args.tool_format is not None:
         logger.info_rank0(f"Using tool format: {data_args.tool_format}.")
         default_slots = ["{{content}}"] if template.efficient_eos else ["{{content}}", {"eos_token"}]
@@ -712,7 +789,11 @@ def get_template_and_fix_tokenizer(tokenizer: "PreTrainedTokenizer", data_args: 
             "e.g., qwen3_vl_nothink"
         )
         template.enable_thinking = data_args.enable_thinking
-        template.preserve_thinking = data_args.preserve_thinking
+        if isinstance(template, Qwen38ReasoningTemplate):
+            template.reasoning_effort = data_args.reasoning_effort
+            template.preserve_thinking = True if data_args.preserve_thinking is None else data_args.preserve_thinking
+        elif data_args.preserve_thinking is not None:
+            template.preserve_thinking = data_args.preserve_thinking
 
     template.fix_special_tokens(tokenizer)
     template.fix_jinja_template(tokenizer)
@@ -2288,6 +2369,24 @@ register_template(
     replace_eos=True,
     mm_plugin=get_mm_plugin(name="qwen3_vl", image_token="<|image_pad|>", video_token="<|video_pad|>"),
     template_class=ReasoningTemplate,
+)
+
+
+register_template(
+    name="qwen3_8",
+    format_user=StringFormatter(slots=["<|im_start|>user\n{{content}}<|im_end|>\n<|im_start|>assistant\n"]),
+    format_assistant=StringFormatter(slots=["{{content}}<|im_end|>\n"]),
+    format_system=StringFormatter(slots=["<|im_start|>system\n{{content}}<|im_end|>\n"]),
+    format_function=FunctionFormatter(slots=["{{content}}<|im_end|>\n"], tool_format="qwen3_8"),
+    format_observation=StringFormatter(
+        slots=["<|im_start|>user\n<tool_response>\n{{content}}\n</tool_response><|im_end|>\n<|im_start|>assistant\n"]
+    ),
+    format_tools=ToolFormatter(tool_format="qwen3_8"),
+    stop_words=["<|im_end|>"],
+    replace_eos=True,
+    preserve_thinking=True,
+    mm_plugin=get_mm_plugin(name="qwen3_vl", image_token="<|image_pad|>", video_token="<|video_pad|>"),
+    template_class=Qwen38ReasoningTemplate,
 )
 
 
