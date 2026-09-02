@@ -168,6 +168,10 @@ class TrainingArguments:
         default=None,
         metadata={"help": "Alpha parameter from LD-DPO, controls weighting of verbose token log-probabilities."},
     )
+    chunk_loss_size: int | None = field(
+        default=None,
+        metadata={"help": "Sequence chunk size for memory-efficient loss computation. None disables Chunk Loss."},
+    )
 
     def __post_init__(self) -> None:
         self.dist_config = get_plugin_config(self.dist_config)
@@ -190,6 +194,9 @@ class TrainingArguments:
                     "`learning_rate` instead and remove `lr` from `optim_config`."
                 )
             self.optim_config["lr"] = self.learning_rate
+
+        if self.chunk_loss_size is not None and self.chunk_loss_size <= 0:
+            raise ValueError("`chunk_loss_size` must be positive when chunk loss is enabled.")
 
         if str(self.batching_strategy) == str(BatchingStrategy.DYNAMIC_BATCHING):
             if self.max_steps is None or self.max_steps <= 0:
