@@ -177,6 +177,8 @@ class LogCallback(TrainerCallback):
     def __init__(self) -> None:
         # Progress
         self.start_time = 0
+        self.start_step = 0
+        self.start_tokens = 0
         self.cur_steps = 0
         self.max_steps = 0
         self.elapsed_time = ""
@@ -196,9 +198,11 @@ class LogCallback(TrainerCallback):
     def _set_abort(self, signum, frame) -> None:
         self.aborted = True
 
-    def _reset(self, max_steps: int = 0) -> None:
+    def _reset(self, max_steps: int = 0, start_step: int = 0, start_tokens: int = 0) -> None:
         self.start_time = time.time()
-        self.cur_steps = 0
+        self.start_step = start_step
+        self.start_tokens = start_tokens
+        self.cur_steps = start_step
         self.max_steps = max_steps
         self.elapsed_time = ""
         self.remaining_time = ""
@@ -206,7 +210,8 @@ class LogCallback(TrainerCallback):
     def _timing(self, cur_steps: int) -> None:
         cur_time = time.time()
         elapsed_time = cur_time - self.start_time
-        avg_time_per_step = elapsed_time / cur_steps if cur_steps != 0 else 0
+        steps_done = cur_steps - self.start_step
+        avg_time_per_step = elapsed_time / steps_done if steps_done > 0 else 0
         remaining_time = (self.max_steps - cur_steps) * avg_time_per_step
         self.cur_steps = cur_steps
         self.elapsed_time = str(timedelta(seconds=int(elapsed_time)))
@@ -239,7 +244,11 @@ class LogCallback(TrainerCallback):
     def on_train_begin(self, args: "TrainingArguments", state: "TrainerState", control: "TrainerControl", **kwargs):
         if args.should_save:
             self.do_train = True
-            self._reset(max_steps=state.max_steps)
+            self._reset(
+                max_steps=state.max_steps,
+                start_step=state.global_step,
+                start_tokens=state.num_input_tokens_seen,
+            )
             self._create_thread_pool(output_dir=args.output_dir)
 
     @override
@@ -289,7 +298,8 @@ class LogCallback(TrainerCallback):
             remaining_time=self.remaining_time,
         )
         if state.num_input_tokens_seen:
-            logs["throughput"] = round(state.num_input_tokens_seen / (time.time() - self.start_time), 2)
+            new_tokens = state.num_input_tokens_seen - self.start_tokens
+            logs["throughput"] = round(new_tokens / (time.time() - self.start_time), 2)
             logs["total_tokens"] = state.num_input_tokens_seen
 
         if is_env_enabled("RECORD_VRAM"):
