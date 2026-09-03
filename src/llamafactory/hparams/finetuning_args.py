@@ -15,6 +15,8 @@
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
+from ..extras.packages import is_transformers_version_greater_than
+
 
 @dataclass
 class FreezeArguments:
@@ -555,6 +557,14 @@ class FinetuningArguments(
         default=False,
         metadata={"help": "Whether or not to freeze the language model in MLLM training."},
     )
+    num_mtp_layers: int = field(
+        default=0,
+        metadata={"help": "Number of Multi-Token Prediction (MTP) layers to train externally."},
+    )
+    mtp_loss_weight: float = field(
+        default=0.0,
+        metadata={"help": "Weight of the external MTP auxiliary loss. 0 disables MTP training."},
+    )
     compute_accuracy: bool = field(
         default=False,
         metadata={"help": "Whether or not to compute the token-level accuracy at evaluation."},
@@ -633,6 +643,12 @@ class FinetuningArguments(
 
             if self.pissa_init:
                 raise ValueError("`pissa_init` is only valid for LoRA training.")
+
+        if self.num_mtp_layers > 0 and not is_transformers_version_greater_than("5.14.0"):
+            raise ValueError(
+                "MTP training requires `transformers>=5.14.0`, "
+                'please install it via `pip install "transformers>=5.14.0"`.'
+            )
 
     def to_dict(self) -> dict[str, Any]:
         args = asdict(self)
