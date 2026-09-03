@@ -1547,6 +1547,21 @@ register_template(
 )
 
 
+# LightOnOCR-2 uses ChatML format with Pixtral vision encoder.
+# Architecture: Pixtral ViT + 2-layer MLP projector + Qwen3 decoder.
+# The model performs OCR without explicit task prompts; the extraction
+# behavior is embedded in the weights (user message contains only the image).
+register_template(
+    name="lighton_ocr",
+    format_user=StringFormatter(slots=["<|im_start|>user\n{{content}}<|im_end|>\n<|im_start|>assistant\n"]),
+    format_assistant=StringFormatter(slots=["{{content}}<|im_end|>\n"]),
+    format_system=StringFormatter(slots=["<|im_start|>system\n{{content}}<|im_end|>\n"]),
+    stop_words=["<|im_end|>"],
+    replace_eos=True,
+    mm_plugin=get_mm_plugin(name="pixtral", image_token="<|image_pad|>"),
+)
+
+
 register_template(
     name="llama2",
     format_user=StringFormatter(slots=[{"bos_token"}, "[INST] {{content}} [/INST]"]),
