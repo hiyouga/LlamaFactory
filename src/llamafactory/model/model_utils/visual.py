@@ -371,6 +371,13 @@ _register_composite_model(
 
 
 _register_composite_model(
+    model_type="audioflamingo3",
+    projector_key="multi_modal_projector",
+    vision_model_keys=["audio_encoder"],
+)
+
+
+_register_composite_model(
     model_type="qwen2_5_omni_thinker",
     projector_keys=["visual.merger", "audio_tower.proj"],
     vision_model_keys=["visual.patch_embed", "visual.blocks", "audio_tower"],

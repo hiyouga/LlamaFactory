@@ -2204,6 +2204,21 @@ register_template(
 )
 
 
+# Audio-Flamingo-3: https://huggingface.co/nvidia/audio-flamingo-3-hf
+# Note: AF3 uses <sound> as audio placeholder, not <audio>
+# Existing datasets using <audio> need preprocessing: <audio> -> <sound>
+register_template(
+    name="audio_flamingo_3",
+    format_user=StringFormatter(slots=["<|im_start|>user\n{{content}}<|im_end|>\n<|im_start|>assistant\n"]),
+    format_assistant=StringFormatter(slots=["{{content}}<|im_end|>\n"]),
+    format_system=StringFormatter(slots=["<|im_start|>system\n{{content}}<|im_end|>\n"]),
+    default_system="You are a helpful assistant.",
+    stop_words=["<|im_end|>"],
+    replace_eos=True,
+    mm_plugin=get_mm_plugin(name="audio_flamingo_3", audio_token="<sound>"),
+)
+
+
 # copied from qwen template
 register_template(
     name="qwen2_omni",

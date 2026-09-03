@@ -2253,6 +2253,177 @@ class Qwen2AudioPlugin(BasePlugin):
 
 
 @dataclass
+class AudioFlamingo3Plugin(BasePlugin):
+    r"""Audio-Flamingo-3 plugin for audio processing.
+
+    AF3 uses a Whisper-style encoder with conv downsampling and avg pooling.
+    For audio > 30s, it uses windowing (30-second chunks, max 20 windows = 10 min).
+
+    Token expansion formula per window:
+        conv_output_len = (mel_len - 1) // 2 + 1
+        audio_tokens_len = (conv_output_len - 2) // 2 + 1
+
+    For long audio, total tokens = sum of tokens across all windows.
+    """
+
+    # AF3 windowing parameters (from HuggingFace processor defaults)
+    chunk_length: float = 30.0  # seconds per window
+    max_audio_len: float = 600.0  # max 10 minutes
+
+    @override
+    def _get_mm_inputs(
+        self,
+        images: list["ImageInput"],
+        videos: list["VideoInput"],
+        audios: list["AudioInput"],
+        processor: "MMProcessor",
+        **kwargs,
+    ) -> dict[str, "torch.Tensor"]:
+        r"""Process audio inputs for Audio-Flamingo-3."""
+        feature_extractor: SequenceFeatureExtractor = getattr(processor, "feature_extractor", None)
+        sampling_rate = getattr(feature_extractor, "sampling_rate", 16000)
+        mm_inputs = {}
+
+        if len(audios) != 0:
+            audios = self._regularize_audios(audios, sampling_rate=sampling_rate)["audios"]
+            mm_inputs.update(
+                feature_extractor(
+                    audios,
+                    sampling_rate=sampling_rate,
+                    return_attention_mask=True,
+                    padding="max_length",
+                    return_tensors="pt",
+                )
+            )
+            # Store raw audio lengths for windowing calculation
+            mm_inputs["_raw_audio_lengths"] = [len(audio) for audio in audios]
+            mm_inputs["_sampling_rate"] = sampling_rate
+
+        return mm_inputs
+
+    def _compute_audio_token_length_with_windowing(
+        self, n_samples: int, sampling_rate: int, feature_extractor: "SequenceFeatureExtractor"
+    ) -> int:
+        r"""Compute total audio tokens for audio of any length, handling windowing.
+
+        AF3 processes audio in 30-second windows. For each window:
+        1. Extract mel spectrogram (length depends on audio in window)
+        2. Conv2 downsampling: (mel_len - 1) // 2 + 1
+        3. Avg pooling: (conv_out - 2) // 2 + 1
+
+        Total tokens = sum across all windows.
+        """
+        # Get feature extractor parameters
+        hop_length = getattr(feature_extractor, "hop_length", 160)  # Default for Whisper
+
+        # Calculate window size in samples
+        window_size = int(sampling_rate * self.chunk_length)
+        max_samples = int(sampling_rate * self.max_audio_len)
+
+        # Truncate to max length if needed
+        n_samples = min(n_samples, max_samples)
+
+        # Calculate number of windows (ceiling division, at least 1)
+        n_windows = max(1, (n_samples + window_size - 1) // window_size)
+
+        total_tokens = 0
+        for win_idx in range(n_windows):
+            # Calculate samples in this window
+            start_sample = win_idx * window_size
+            end_sample = min(start_sample + window_size, n_samples)
+            win_samples = end_sample - start_sample
+
+            if win_samples <= 0:
+                continue
+
+            # Calculate mel spectrogram length for this window
+            # Formula: (n_samples - n_fft) // hop_length + 1, but padded
+            mel_len = (win_samples + hop_length - 1) // hop_length
+
+            # Apply AF3 downsampling formula
+            # Conv2 with stride 2
+            conv_output_len = (mel_len - 1) // 2 + 1
+            # Avg pooling with kernel=2, stride=2
+            audio_tokens_len = max(1, (conv_output_len - 2) // 2 + 1)
+
+            total_tokens += audio_tokens_len
+
+        return max(1, total_tokens)
+
+    @override
+    def process_messages(
+        self,
+        messages: list[dict[str, str]],
+        images: list["ImageInput"],
+        videos: list["VideoInput"],
+        audios: list["AudioInput"],
+        processor: Optional["MMProcessor"],
+    ) -> list[dict[str, str]]:
+        self._validate_input(processor, images, videos, audios)
+        self._validate_messages(messages, images, videos, audios)
+        messages = deepcopy(messages)
+
+        # Calculate audio token lengths if we have audios
+        audio_token_lengths: list[int] = []
+        if self.expand_mm_tokens and len(audios) > 0:
+            feature_extractor = getattr(processor, "feature_extractor", None)
+            sampling_rate = getattr(feature_extractor, "sampling_rate", 16000)
+
+            # Load audios to get their lengths
+            regularized = self._regularize_audios(audios, sampling_rate=sampling_rate)
+            raw_audios = regularized["audios"]
+
+            for audio in raw_audios:
+                n_samples = len(audio)
+                token_count = self._compute_audio_token_length_with_windowing(
+                    n_samples, sampling_rate, feature_extractor
+                )
+                audio_token_lengths.append(token_count)
+
+        audio_idx = 0
+        for message in messages:
+            content = message["content"]
+            # AF3 uses <sound> as placeholder, map <audio> -> <sound> for dataset compatibility
+            while AUDIO_PLACEHOLDER in content:
+                if self.expand_mm_tokens and audio_idx < len(audio_token_lengths):
+                    token_count = audio_token_lengths[audio_idx]
+                    audio_idx += 1
+                else:
+                    token_count = 1
+
+                # Expand <audio> to <sound> * token_count
+                content = content.replace(AUDIO_PLACEHOLDER, self.audio_token * token_count, 1)
+
+            message["content"] = content
+
+        return messages
+
+    @override
+    def get_mm_inputs(
+        self,
+        images: list["ImageInput"],
+        videos: list["VideoInput"],
+        audios: list["AudioInput"],
+        imglens: list[int],
+        vidlens: list[int],
+        audlens: list[int],
+        batch_ids: list[list[int]],
+        processor: Optional["MMProcessor"],
+    ) -> dict[str, Union[list[int], "torch.Tensor"]]:
+        self._validate_input(processor, images, videos, audios)
+        mm_inputs = self._get_mm_inputs(images, videos, audios, processor)
+
+        # Remove internal keys used for windowing calculation
+        mm_inputs.pop("_raw_audio_lengths", None)
+        mm_inputs.pop("_sampling_rate", None)
+
+        # AF3 model expects input_features_mask, but feature_extractor returns attention_mask
+        if "attention_mask" in mm_inputs:
+            mm_inputs["input_features_mask"] = mm_inputs.pop("attention_mask")
+        return mm_inputs
+
+
+@dataclass
 class Qwen2VLPlugin(BasePlugin):
     vision_bos_token: str = "<|vision_start|>"
     vision_eos_token: str = "<|vision_end|>"
@@ -3243,6 +3414,7 @@ class YoutuVLPlugin(BasePlugin):
 
 
 PLUGINS = {
+    "audio_flamingo_3": AudioFlamingo3Plugin,
     "base": BasePlugin,
     "ernie_vl": ErnieVLPlugin,
     "gemma3": Gemma3Plugin,
