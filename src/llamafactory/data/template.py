@@ -2298,6 +2298,7 @@ register_template(
     ),
     format_tools=ToolFormatter(tool_format="qwen"),
     stop_words=["<|im_end|>"],
+    thought_words=("<think>", "</think>"),
     replace_eos=True,
     mm_plugin=get_mm_plugin(name="qwen3_vl", image_token="<|image_pad|>", video_token="<|video_pad|>"),
     template_class=ReasoningTemplate,
