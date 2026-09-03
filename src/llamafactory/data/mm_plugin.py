@@ -27,7 +27,6 @@ from typing import TYPE_CHECKING, Any, BinaryIO, Literal, NotRequired, Optional,
 
 import numpy as np
 import torch
-import torchaudio
 from transformers.image_utils import get_image_size, is_valid_image, make_flat_list_of_images, to_numpy_array
 from transformers.models.mllama.processing_mllama import (
     convert_sparse_cross_attention_mask_to_dense,
@@ -37,7 +36,12 @@ from transformers.video_utils import make_batched_videos
 from typing_extensions import override
 
 from ..extras.constants import AUDIO_PLACEHOLDER, IGNORE_INDEX, IMAGE_PLACEHOLDER, VIDEO_PLACEHOLDER
-from ..extras.packages import is_pillow_available, is_pyav_available, is_transformers_version_greater_than
+from ..extras.packages import (
+    is_pillow_available,
+    is_pyav_available,
+    is_torchaudio_available,
+    is_transformers_version_greater_than,
+)
 
 
 if is_pillow_available():
@@ -47,6 +51,10 @@ if is_pillow_available():
 
 if is_pyav_available():
     import av
+
+
+if is_torchaudio_available():
+    import torchaudio
 
 
 if TYPE_CHECKING:
@@ -313,6 +321,11 @@ class MMPluginMixin:
         results, sampling_rates = [], []
         for audio in audios:
             if not isinstance(audio, np.ndarray):
+                if not is_torchaudio_available():
+                    raise ImportError(
+                        "torchaudio is required to process audio data. Please install it with `pip install torchaudio`."
+                    )
+
                 audio, sr = torchaudio.load(audio)
                 if audio.shape[0] > 1:
                     audio = audio.mean(dim=0, keepdim=True)
