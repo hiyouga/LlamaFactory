@@ -37,6 +37,11 @@ RUN apt-get update && \
     apt-get install -y gcc g++ && \
     apt-get clean
 
+# Install libibverbs for RDMA support
+RUN apt-get update && \
+    apt-get install -y libibverbs-dev && \
+    apt-get clean
+
 # Change pip source
 RUN pip config set global.index-url "${PIP_INDEX}" && \
     pip config set global.extra-index-url "${PIP_INDEX}" && \
