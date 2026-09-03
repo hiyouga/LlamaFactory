@@ -891,12 +891,17 @@ def get_swanlab_callback(finetuning_args: "FinetuningArguments") -> "TrainerCall
     return swanlab_callback
 
 
+def _get_ray_resource_name() -> str:
+    device = get_device_name().upper()
+    return "GPU" if device in ("GPU", "XPU") else device
+
+
 def get_placement_group(num_workers: int) -> tuple["PlacementGroup", dict[str, int]]:
     r"""Get the Ray placement group for distributed training."""
     bundle = {"CPU": 10}
-    device_name = get_device_name().upper()
-    if device_name != "CPU":
-        bundle[device_name] = 1
+    ray_resource = _get_ray_resource_name()
+    if ray_resource != "CPU":
+        bundle[ray_resource] = 1
     bundles = [bundle for _ in range(num_workers)]
     pg = placement_group(bundles, strategy="PACK")
 
@@ -932,7 +937,7 @@ def get_ray_remote_config_for_worker(
     }
 
     device_name = get_device_name()
-    if device_name == "gpu":
+    if device_name in ("gpu", "xpu"):
         remote_config["num_gpus"] = 1
     elif device_name == "npu":
         remote_config["resources"] = {"NPU": 1}
