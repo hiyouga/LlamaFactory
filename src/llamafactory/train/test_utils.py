@@ -31,15 +31,64 @@ if TYPE_CHECKING:
     from ..data.data_utils import DatasetModule
 
 
-def compare_model(model_a: "torch.nn.Module", model_b: "torch.nn.Module", diff_keys: list[str] = []) -> None:
+def compare_model(
+    model_a: "torch.nn.Module",
+    model_b: "torch.nn.Module",
+    diff_keys: list[str] = [],
+    skip_keys: list[str] = [],
+) -> None:
     state_dict_a = model_a.state_dict()
     state_dict_b = model_b.state_dict()
+    assert not (set(skip_keys) & set(diff_keys)), "skip_keys and diff_keys must not overlap"
     assert set(state_dict_a.keys()) == set(state_dict_b.keys())
     for name in state_dict_a.keys():
+        if any(key in name for key in skip_keys):
+            continue
+        a, b = state_dict_a[name].cpu(), state_dict_b[name].cpu()
         if any(key in name for key in diff_keys):
-            assert torch.allclose(state_dict_a[name], state_dict_b[name], rtol=1e-4, atol=1e-5) is False
+            assert torch.allclose(a, b, rtol=1e-4, atol=1e-5) is False
         else:
-            assert torch.allclose(state_dict_a[name], state_dict_b[name], rtol=1e-4, atol=1e-5) is True
+            assert torch.allclose(a, b, rtol=1e-4, atol=1e-5) is True
+
+
+def compare_model_pissa(model_a: "torch.nn.Module", model_b: "torch.nn.Module", adapter: str = "default") -> None:
+    """Compare two PiSSA-initialized LoRA models by gauge-invariant quantities.
+
+    SVD factorization is not unique: ``torch.linalg.svd`` on any backend (cuBLAS, MKL,
+    Intel XPU, ...) may return sign-flipped columns of ``U``/``V``, or an arbitrary
+    rotation within a degenerate (equal singular value) subspace. All such variants are
+    equally valid, so the raw ``lora_A`` / ``lora_B`` factors legitimately differ
+    across platforms/backends and must not be compared directly (that is why the
+    old factor-level ``compare_model`` check was ``xfail``-flaky).
+
+    What *is* invariant under every SVD gauge choice is the effective update
+    ``B @ A * scaling``. This function asserts on that, plus the residual base weight
+    ``W_orig - B @ A`` directly (both must match between the two models).
+    """
+    # lora_embedding_A/B are used by Embedding LoRA layers and are intentionally not checked here;
+    # this function covers only Linear LoRA layers (lora_A/lora_B via get_delta_weight).
+    modules_a = {n: m for n, m in model_a.named_modules() if hasattr(m, "lora_A") and adapter in m.lora_A}
+    modules_b = {n: m for n, m in model_b.named_modules() if hasattr(m, "lora_A") and adapter in m.lora_A}
+    assert modules_a.keys() == modules_b.keys()
+    assert len(modules_a) > 0, "no LoRA layers found to compare"
+
+    # PiSSA models load in fp16 and the invariant flows through an SVD + a B @ A matmul,
+    # so the recovered quantities agree only to fp16 precision (~1e-4). A gauge violation,
+    # by contrast, changes signs/magnitudes wholesale, so this tolerance still catches it.
+    rtol, atol = 1e-3, 1e-4
+    for name, module_a in modules_a.items():
+        module_b = modules_b[name]
+
+        # Gauge-invariant update: B @ A * scaling, in the base weight's orientation.
+        delta_a = module_a.get_delta_weight(adapter).cpu()
+        delta_b = module_b.get_delta_weight(adapter).cpu()
+        assert torch.allclose(delta_a, delta_b, rtol=rtol, atol=atol), f"delta (B@A) mismatch at {name}"
+
+        # Residual base weights (W_orig - B@A) must also match; since deltas are already
+        # equal above, this is equivalent to checking the base weights directly.
+        assert torch.allclose(
+            module_a.base_layer.weight.cpu(), module_b.base_layer.weight.cpu(), rtol=rtol, atol=atol
+        ), f"base_layer.weight mismatch at {name}"
 
 
 def check_lora_model(model: "LoraModel") -> tuple[set[str], set[str]]:
