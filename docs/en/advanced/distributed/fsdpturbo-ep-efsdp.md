@@ -1,6 +1,6 @@
 # FSDPTurbo EP/EFSDP and LlamaFactory FSDP2/CP Design
 
-Chinese version: [FSDPTurbo EP/EFSDP 与 LlamaFactory FSDP2/CP 设计说明](../../../zh/advanced/distributed/fsdpturbo-ep-efsdp.md)
+Chinese v1 guide: [Distributed training with FSDPTurbo](https://llamafactory.readthedocs.io/zh-cn/latest/feature-guide/distributed_training.html#fsdpturbo)
 
 This document describes the current implementation of the `fsdpturbo` distributed plugin. Its core principle is a clear separation of responsibilities:
 

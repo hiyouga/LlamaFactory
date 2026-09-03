@@ -1,64 +1,51 @@
-LlamaFactory 文档
-=================
+LlamaFactory v1 文档
+=====================
 
 .. toctree::
    :maxdepth: 1
    :caption: Getting Started
 
-   getting-started
-   installation
-   llamaboard-web-ui
+   quick_start
 
 .. toctree::
-   :maxdepth: 1
-   :caption: Data Preparation
+   :maxdepth: 2
+   :caption: Feature Guide
 
-   data-preparation/data-processing
-
-.. toctree::
-   :maxdepth: 1
-   :caption: Training
-
-   training/sft
-   training/dpo
-
-.. toctree::
-   :maxdepth: 1
-   :caption: Inference
-
-   inference/deploy
+   feature-guide/index
+   feature-guide/data_preparation
+   feature-guide/sft
+   feature-guide/dpo
+   feature-guide/rm
+   feature-guide/batching
+   feature-guide/distributed_training
+   feature-guide/optimizer
+   feature-guide/model_saving
+   feature-guide/model_export
+   feature-guide/inference
+   feature-guide/kernel_acceleration
 
 .. toctree::
-   :maxdepth: 1
-   :caption: Advanced
+   :maxdepth: 2
+   :caption: Configuration
 
-   advanced/lora-and-quantization/lora
-   advanced/lora-and-quantization/quantization
-   advanced/ktransformers
-   advanced/distributed/fsdp
-   advanced/distributed/deepspeed
-   advanced/distributed/parallel-dp-tp-ep-sp-cp
-   advanced/distributed/fsdpturbo-ep-efsdp
-   advanced/custom-kernels/triton
-   advanced/custom-kernels/fused-operators
+   configuration/index
+   configuration/data
+   configuration/model
+   configuration/training
+   configuration/inference
 
 .. toctree::
-   :maxdepth: 1
-   :caption: Hyperparameters
+   :maxdepth: 2
+   :caption: Developer Guide
 
-   hyperparameters/data-argument
-   hyperparameters/model-argument
-   hyperparameters/sample-argument
-   hyperparameters/training-argument
+   developer-guide/index
+   developer-guide/architecture_overview
+   developer-guide/core/index
+   developer-guide/baseplugin_mechanism
+   developer-guide/plugins/index
 
 .. toctree::
-   :maxdepth: 1
-   :caption: Dev Guide
+   :maxdepth: 2
+   :caption: Multi-Backend
 
-   dev-guide/core/data-engine
-   dev-guide/core/model-engine
-   dev-guide/core/trainer
-   dev-guide/plugins/data-plugins
-   dev-guide/plugins/model-plugins/initialization
-   dev-guide/plugins/model-plugins/kernels
-   dev-guide/plugins/model-plugins/rendering
+   multi-backend/npu/index
