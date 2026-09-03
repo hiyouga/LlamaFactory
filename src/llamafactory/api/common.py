@@ -58,13 +58,18 @@ def check_lfi_path(path: str) -> None:
         os.makedirs(SAFE_MEDIA_PATH, exist_ok=True)
         real_path = os.path.realpath(path)
         safe_path = os.path.realpath(SAFE_MEDIA_PATH)
-
-        if not real_path.startswith(safe_path):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN, detail="File access is restricted to the safe media directory."
-            )
-    except Exception:
+    except OSError:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or inaccessible file path.")
+
+    try:
+        is_safe_path = os.path.commonpath([real_path, safe_path]) == safe_path
+    except ValueError:
+        is_safe_path = False
+
+    if not is_safe_path:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="File access is restricted to the safe media directory."
+        )
 
 
 def check_ssrf_url(url: str) -> None:
@@ -78,19 +83,17 @@ def check_ssrf_url(url: str) -> None:
         if not hostname:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid URL hostname.")
 
-        ip_info = socket.getaddrinfo(hostname, parsed_url.port)
-        ip_address_str = ip_info[0][4][0]
-        ip = ipaddress.ip_address(ip_address_str)
-
-        if not ip.is_global:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access to private or reserved IP addresses is not allowed.",
-            )
+        for ip_info in socket.getaddrinfo(hostname, parsed_url.port, type=socket.SOCK_STREAM):
+            ip = ipaddress.ip_address(ip_info[4][0])
+            if not ip.is_global:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Access to private or reserved IP addresses is not allowed.",
+                )
 
     except socket.gaierror:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=f"Could not resolve hostname: {parsed_url.hostname}"
         )
-    except Exception as e:
+    except ValueError as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid URL: {e}")
