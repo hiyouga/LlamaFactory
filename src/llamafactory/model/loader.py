@@ -152,6 +152,8 @@ def load_model(
         init_kwargs["config"] = config
         init_kwargs["pretrained_model_name_or_path"] = model_args.model_name_or_path
         init_kwargs["torch_dtype"] = "auto"
+        if model_args.ignore_mismatched_sizes:
+            init_kwargs["ignore_mismatched_sizes"] = True
 
         if model_args.mixture_of_depths == "load":
             model = load_mod_pretrained_model(**init_kwargs)
