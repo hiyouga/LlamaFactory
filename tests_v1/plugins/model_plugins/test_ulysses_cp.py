@@ -90,7 +90,7 @@ def _test_sequence_parallel_loss(
         assert loss is not None
 
 
-@pytest.mark.runs_on(["cuda", "npu"])
+@pytest.mark.runs_on(["cuda", "npu", "xpu"])
 @pytest.mark.require_distributed(2)
 @pytest.mark.parametrize(("cp_size", "dp_size", "batch_size"), [(2, 1, 1), (2, 1, 2)])
 def test_sequence_parallel_loss(cp_size, dp_size, batch_size):
