@@ -201,7 +201,52 @@ class MultiModalDataCollatorForSeq2Seq(DataCollatorForSeq2Seq):
             features["position_ids"], rope_deltas = self.get_rope_func(**rope_index_kwargs)
             features["rope_deltas"] = rope_deltas - (1 - rope_index_kwargs["attention_mask"]).sum(dim=-1).unsqueeze(-1)
         else:  # for qwen vl
-            features["position_ids"], features["rope_deltas"] = self.get_rope_func(**rope_index_kwargs)
+            try:
+                features["position_ids"], features["rope_deltas"] = self.get_rope_func(**rope_index_kwargs)
+            except RuntimeError as err:
+                # Defensive fallback for the mrope get_rope_index shape mismatch
+                # ("value tensor of shape [3, A] cannot be broadcast to indexing result of shape [3, B]")
+                # which fires when the vision placeholder token count in input_ids disagrees with the
+                # image_grid_thw / video_grid_thw declared by the processor. This happens on a tiny
+                # fraction of samples (e.g. a truncated or irregular-grid video) and would otherwise
+                # kill the whole run. Degrade to a flat positional encoding (3 identical axes) for the
+                # offending batch so training continues, and log it for later data-level cleanup.
+                if "shape mismatch" not in str(err) and "cannot be broadcast" not in str(err):
+                    raise
+                self._log_rope_mismatch(err, features, mm_inputs)
+                features["position_ids"], features["rope_deltas"] = self._fallback_rope_position_ids(
+                    features["input_ids"], rope_index_kwargs["attention_mask"]
+                )
+
+
+    @staticmethod
+    def _fallback_rope_position_ids(input_ids: "torch.Tensor", attention_mask: "torch.Tensor"):
+        r"""Flat positional fallback: every non-pad token gets a monotonic position; all 3 mrope axes identical."""
+        bsz, seq_len = input_ids.shape
+        positions = torch.arange(seq_len, device=input_ids.device, dtype=input_ids.dtype)
+        position_ids = positions.view(1, 1, seq_len).expand(3, bsz, seq_len).contiguous()
+        valid_len = attention_mask.bool().sum(dim=-1)
+        rope_deltas = torch.where(valid_len > 0, seq_len - valid_len, torch.zeros_like(valid_len))
+        return position_ids, rope_deltas.to(dtype=input_ids.dtype)
+
+    def _log_rope_mismatch(self, err: Exception, features: dict[str, "torch.Tensor"], mm_inputs: dict[str, Any]) -> None:
+        r"""Print a one-line diagnostic when the mrope fallback path is taken."""
+        input_ids = features.get("input_ids")
+        image_grid = mm_inputs.get("image_grid_thw")
+        video_grid = mm_inputs.get("video_grid_thw")
+        image_token_id = getattr(self.model.config, "image_token_id", None) if self.model is not None else None
+        video_token_id = getattr(self.model.config, "video_token_id", None) if self.model is not None else None
+        n_img = int((input_ids == image_token_id).sum().item()) if image_token_id is not None and input_ids is not None else -1
+        n_vid = int((input_ids == video_token_id).sum().item()) if video_token_id is not None and input_ids is not None else -1
+        print(
+            "rope_fallback: get_rope_index shape mismatch caught -> "
+            f"input_ids={tuple(input_ids.shape) if input_ids is not None else None} "
+            f"image_tokens={n_img} video_tokens={n_vid} "
+            f"image_grid_thw={image_grid.tolist() if image_grid is not None else None} "
+            f"video_grid_thw={video_grid.tolist() if video_grid is not None else None} "
+            f"err={err}",
+            flush=True,
+        )
 
     def _compute_rope_position_ids_with_packing(
         self,
