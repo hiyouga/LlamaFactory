@@ -2569,7 +2569,7 @@ register_model_group(
             DownloadSource.MODELSCOPE: "Qwen/Qwen2-Math-72B-Instruct",
         },
     },
-    template="qwen",
+    template="qwen2",
 )
 
 
@@ -2630,14 +2630,6 @@ register_model_group(
         "Qwen2.5-72B-Instruct": {
             DownloadSource.DEFAULT: "Qwen/Qwen2.5-72B-Instruct",
             DownloadSource.MODELSCOPE: "Qwen/Qwen2.5-72B-Instruct",
-        },
-        "Qwen2.5-7B-Instruct-1M": {
-            DownloadSource.DEFAULT: "Qwen/Qwen2.5-7B-Instruct-1M",
-            DownloadSource.MODELSCOPE: "Qwen/Qwen2.5-7B-Instruct-1M",
-        },
-        "Qwen2.5-14B-Instruct-1M": {
-            DownloadSource.DEFAULT: "Qwen/Qwen2.5-14B-Instruct-1M",
-            DownloadSource.MODELSCOPE: "Qwen/Qwen2.5-14B-Instruct-1M",
         },
         "Qwen2.5-0.5B-Instruct-GPTQ-Int8": {
             DownloadSource.DEFAULT: "Qwen/Qwen2.5-0.5B-Instruct-GPTQ-Int8",
@@ -2783,18 +2775,6 @@ register_model_group(
             DownloadSource.DEFAULT: "Qwen/Qwen2.5-Math-72B",
             DownloadSource.MODELSCOPE: "Qwen/Qwen2.5-Math-72B",
         },
-        "Qwen2.5-Math-1.5B-Instruct": {
-            DownloadSource.DEFAULT: "Qwen/Qwen2.5-Math-1.5B-Instruct",
-            DownloadSource.MODELSCOPE: "Qwen/Qwen2.5-Coder-1.5B-Instruct",
-        },
-        "Qwen2.5-Math-7B-Instruct": {
-            DownloadSource.DEFAULT: "Qwen/Qwen2.5-Math-7B-Instruct",
-            DownloadSource.MODELSCOPE: "Qwen/Qwen2.5-Coder-7B-Instruct",
-        },
-        "Qwen2.5-Math-72B-Instruct": {
-            DownloadSource.DEFAULT: "Qwen/Qwen2.5-Math-72B-Instruct",
-            DownloadSource.MODELSCOPE: "Qwen/Qwen2.5-Coder-72B-Instruct",
-        },
         "QwQ-32B-Preview-Instruct": {
             DownloadSource.DEFAULT: "Qwen/QwQ-32B-Preview",
             DownloadSource.MODELSCOPE: "Qwen/QwQ-32B-Preview",
@@ -2805,6 +2785,40 @@ register_model_group(
         },
     },
     template="qwen",
+)
+
+
+register_model_group(
+    models={
+        "Qwen2.5-7B-Instruct-1M": {
+            DownloadSource.DEFAULT: "Qwen/Qwen2.5-7B-Instruct-1M",
+            DownloadSource.MODELSCOPE: "Qwen/Qwen2.5-7B-Instruct-1M",
+        },
+        "Qwen2.5-14B-Instruct-1M": {
+            DownloadSource.DEFAULT: "Qwen/Qwen2.5-14B-Instruct-1M",
+            DownloadSource.MODELSCOPE: "Qwen/Qwen2.5-14B-Instruct-1M",
+        },
+    },
+    template="qwen2",
+)
+
+
+register_model_group(
+    models={
+        "Qwen2.5-Math-1.5B-Instruct": {
+            DownloadSource.DEFAULT: "Qwen/Qwen2.5-Math-1.5B-Instruct",
+            DownloadSource.MODELSCOPE: "Qwen/Qwen2.5-Math-1.5B-Instruct",
+        },
+        "Qwen2.5-Math-7B-Instruct": {
+            DownloadSource.DEFAULT: "Qwen/Qwen2.5-Math-7B-Instruct",
+            DownloadSource.MODELSCOPE: "Qwen/Qwen2.5-Math-7B-Instruct",
+        },
+        "Qwen2.5-Math-72B-Instruct": {
+            DownloadSource.DEFAULT: "Qwen/Qwen2.5-Math-72B-Instruct",
+            DownloadSource.MODELSCOPE: "Qwen/Qwen2.5-Math-72B-Instruct",
+        },
+    },
+    template="qwen2_5_math",
 )
 
 
