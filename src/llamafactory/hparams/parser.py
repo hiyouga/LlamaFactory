@@ -581,6 +581,15 @@ def get_train_args(args: dict[str, Any] | list[str] | None = None) -> _TRAIN_CLS
     if (not training_args.do_train) and finetuning_args.stage == "dpo" and finetuning_args.ref_model is None:
         logger.warning_rank0("Specify `ref_model` for computing rewards at evaluation.")
 
+    if finetuning_args.early_stopping_steps is not None:
+        logger.warning_rank0(
+            "`early_stopping_steps` is deprecated, use `early_stopping_patience` instead. "
+            "It counts evaluations, not training steps."
+        )
+
+    if finetuning_args.early_stopping_threshold > 0.0 and finetuning_args.early_stopping_patience is None:
+        logger.warning_rank0("`early_stopping_threshold` requires `early_stopping_patience` to take effect.")
+
     # Post-process training arguments
     training_args.generation_max_length = training_args.generation_max_length or data_args.cutoff_len
     training_args.generation_num_beams = data_args.eval_num_beams or training_args.generation_num_beams

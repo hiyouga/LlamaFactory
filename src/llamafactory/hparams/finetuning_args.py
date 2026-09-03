@@ -563,9 +563,28 @@ class FinetuningArguments(
         default=False,
         metadata={"help": "Whether or not to disable the shuffling of the training set."},
     )
+    early_stopping_patience: int | None = field(
+        default=None,
+        metadata={
+            "help": (
+                "Number of evaluations with no improvement in `metric_for_best_model` after which training stops. "
+                "Counted in evaluation calls, not training steps. Requires `metric_for_best_model` and an "
+                "`eval_strategy` other than `no`."
+            )
+        },
+    )
     early_stopping_steps: int | None = field(
         default=None,
-        metadata={"help": "Number of steps to stop training if the `metric_for_best_model` does not improve."},
+        metadata={"help": "Deprecated alias of `early_stopping_patience`."},
+    )
+    early_stopping_threshold: float = field(
+        default=0.0,
+        metadata={
+            "help": (
+                "How much the `metric_for_best_model` must improve to count as an improvement. "
+                "Requires `early_stopping_patience`."
+            )
+        },
     )
     plot_loss: bool = field(
         default=False,
@@ -591,6 +610,9 @@ class FinetuningArguments(
         self.galore_target: list[str] = split_arg(self.galore_target)
         self.apollo_target: list[str] = split_arg(self.apollo_target)
         self.use_ref_model = self.stage == "dpo" and self.pref_loss not in ["orpo", "simpo"]
+
+        if self.early_stopping_steps is not None and self.early_stopping_patience is None:
+            self.early_stopping_patience = self.early_stopping_steps
 
         assert self.finetuning_type in ["lora", "oft", "freeze", "full"], "Invalid fine-tuning method."
         assert self.ref_model_quantization_bit in [None, 8, 4], "We only accept 4-bit or 8-bit quantization."

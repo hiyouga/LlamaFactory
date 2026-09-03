@@ -78,8 +78,13 @@ def _training_function(config: dict[str, Any]) -> None:
     if finetuning_args.use_swanlab:
         callbacks.append(get_swanlab_callback(finetuning_args))
 
-    if finetuning_args.early_stopping_steps is not None:
-        callbacks.append(EarlyStoppingCallback(early_stopping_patience=finetuning_args.early_stopping_steps))
+    if finetuning_args.early_stopping_patience is not None:
+        callbacks.append(
+            EarlyStoppingCallback(
+                early_stopping_patience=finetuning_args.early_stopping_patience,
+                early_stopping_threshold=finetuning_args.early_stopping_threshold,
+            )
+        )
 
     if getattr(training_args, "enable_torch_profiler", False):
         callbacks.append(TorchProfilerCallback(training_args))
