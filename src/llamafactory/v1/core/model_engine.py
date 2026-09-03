@@ -224,6 +224,15 @@ class ModelEngine:
 
             model = apply_kernels(model, self.args.kernel_config, require_logits=self.is_train)
 
+        if self.args.mtp_config is not None:
+            from ..plugins.model_plugins.mtp import MTPModelPlugin, load_mtp_weights
+
+            model = MTPModelPlugin(self.args.mtp_config.name)(model, self.args.mtp_config)
+            # transformers' from_pretrained drops mtp.* as unexpected, so re-load them from
+            # the checkpoint after the block is grafted. No-op on meta device (FSDP2 meta path
+            # loads mtp.* through the regular HF weight loop) or when no mtp.* weights exist.
+            load_mtp_weights(model, self.args.model)
+
         return model
 
 

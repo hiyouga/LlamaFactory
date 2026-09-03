@@ -166,25 +166,28 @@ def padding_and_split_data(data, device_mesh=None):
     return data
 
 
-@SequenceParallelLossPlugin("sequence_parallel_loss").register()
-def sequence_parallel_loss(model, model_inputs):
-    device_mesh = DistributedInterface().get_device_mesh(Dim.CP)
+def _padding_split_and_forward(model, model_inputs, device_mesh):
+    """Pad + split inputs along the CP dim, run the model, and return both.
 
+    Returns ``(model_inputs, outputs)`` where ``model_inputs`` holds the *local* sequence
+    chunks and ``outputs`` is the raw model output (carrying ``logits`` and, when MTP is
+    enabled, ``mtp_logits``).
+    """
     model_inputs = {
         k: v.to(dist.get_rank(), non_blocking=True) for k, v in model_inputs.items() if isinstance(v, torch.Tensor)
     }
-
     model_inputs = padding_and_split_data(model_inputs, device_mesh)
+    outputs: ModelOutput = model(**model_inputs)
+    return model_inputs, outputs
 
+
+def _sequence_parallel_main_loss(outputs, model_inputs, cp_group):
+    """Main-head weighted CE loss under Ulysses context parallelism (single-token shift)."""
     batch_size, _ = model_inputs["labels"].shape
 
-    outputs: ModelOutput = model(**model_inputs)
-
     logits = outputs.logits.float()
-
     labels = model_inputs["labels"]
 
-    cp_group = get_ulysses_sequence_parallel_group()
     cp_world_size = get_ulysses_sequence_parallel_world_size(cp_group)
     cp_rank = get_ulysses_sequence_parallel_rank(cp_group)
 
@@ -213,5 +216,43 @@ def sequence_parallel_loss(model, model_inputs):
     log_probs = global_log_probs[..., :-1].contiguous()
 
     loss = (-log_probs * shift_loss_weights).sum() / (shift_loss_weights.sum() + 1e-6)
+    return loss
+
+
+@SequenceParallelLossPlugin("sequence_parallel_loss").register()
+def sequence_parallel_loss(model, model_inputs):
+    device_mesh = DistributedInterface().get_device_mesh(Dim.CP)
+    model_inputs, outputs = _padding_split_and_forward(model, model_inputs, device_mesh)
+    cp_group = get_ulysses_sequence_parallel_group()
+    return _sequence_parallel_main_loss(outputs, model_inputs, cp_group)
+
+
+@SequenceParallelLossPlugin("sequence_parallel_mtp_loss").register()
+def sequence_parallel_mtp_loss(model, model_inputs):
+    """Context-parallel loss that also includes the scaled MTP loss.
+
+    The main head uses the same Ulysses CP loss as ``sequence_parallel_loss``. Each MTP
+    head ``k`` (predicting token ``p + k + 2``) is handled by ``compute_mtp_loss`` with the
+    CP group, which all-gathers labels / loss_weights / log_probs across the CP group so
+    that the per-head loss is computed on the full sequence.
+    """
+    from ..mtp import compute_mtp_loss
+
+    device_mesh = DistributedInterface().get_device_mesh(Dim.CP)
+    model_inputs, outputs = _padding_split_and_forward(model, model_inputs, device_mesh)
+    cp_group = get_ulysses_sequence_parallel_group()
+
+    loss = _sequence_parallel_main_loss(outputs, model_inputs, cp_group)
+
+    mtp_logits = getattr(outputs, "mtp_logits", None)
+    if mtp_logits:
+        labels = model_inputs["labels"]
+        loss_weights = model_inputs["loss_weights"]
+        mtp_loss = compute_mtp_loss(mtp_logits, labels, loss_weights, cp_group=cp_group)
+        loss_scale = float(getattr(model.config, "mtp_loss_scaling_factor", 0.3))
+        loss = loss + mtp_loss * loss_scale
+        # Expose the unscaled per-head-mean MTP loss for logging (the main `loss` above
+        # already includes the scaled contribution). Read back by BaseTrainer.fit.
+        model._last_mtp_loss = float(mtp_loss.detach().item())
 
     return loss

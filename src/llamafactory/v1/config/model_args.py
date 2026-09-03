@@ -59,6 +59,16 @@ class ModelArguments:
         default=None,
         metadata={"help": "Quantization configuration for the model."},
     )
+    mtp_config: PluginConfig | None = field(
+        default=None,
+        metadata={
+            "help": (
+                "Multi-Token Prediction (MTP) configuration. Set `name: mtp` and "
+                "`num_layers: K` to append K MTP heads to the model, plus an optional "
+                "`loss_scale` (default 0.3). Example: {name: mtp, num_layers: 1, loss_scale: 0.3}."
+            )
+        },
+    )
 
     def __post_init__(self) -> None:
         supported_flash_attn = [item.value for item in AttentionFunction]
@@ -71,3 +81,4 @@ class ModelArguments:
         self.peft_config = get_plugin_config(self.peft_config)
         self.kernel_config = get_plugin_config(self.kernel_config)
         self.quant_config = get_plugin_config(self.quant_config)
+        self.mtp_config = get_plugin_config(self.mtp_config)
