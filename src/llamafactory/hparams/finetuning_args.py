@@ -232,6 +232,16 @@ class RLHFArguments:
         default=None,
         metadata={"help": "The number of bits to quantize the reference model."},
     )
+    share_ref_base: bool = field(
+        default=False,
+        metadata={
+            "help": (
+                "Whether to share the base model between policy and reference by loading "
+                "ref_model_adapters as a frozen adapter named 'ref'. Only valid for LoRA DPO/KTO. "
+                "Incompatible with `ref_model`."
+            )
+        },
+    )
     reward_model: str | None = field(
         default=None,
         metadata={"help": "Path to the reward model used for the PPO training."},
@@ -591,6 +601,25 @@ class FinetuningArguments(
         self.galore_target: list[str] = split_arg(self.galore_target)
         self.apollo_target: list[str] = split_arg(self.apollo_target)
         self.use_ref_model = self.stage == "dpo" and self.pref_loss not in ["orpo", "simpo"]
+
+        if self.share_ref_base:
+            if self.finetuning_type != "lora":
+                raise ValueError("`share_ref_base` requires LoRA finetuning.")
+
+            if self.stage not in ("dpo", "kto"):
+                raise ValueError("`share_ref_base` only supports DPO/KTO stages.")
+
+            if self.stage == "dpo" and not self.use_ref_model:
+                raise ValueError("`share_ref_base` does not apply to ORPO/SimPO (no ref model).")
+
+            if self.ref_model is not None:
+                raise ValueError("`share_ref_base` is incompatible with `ref_model` (separate base path).")
+
+            if self.ref_model_adapters is None:
+                raise ValueError("`share_ref_base` requires `ref_model_adapters`.")
+
+            if self.ref_model_quantization_bit is not None:
+                raise ValueError("`share_ref_base` cannot use `ref_model_quantization_bit`.")
 
         assert self.finetuning_type in ["lora", "oft", "freeze", "full"], "Invalid fine-tuning method."
         assert self.ref_model_quantization_bit in [None, 8, 4], "We only accept 4-bit or 8-bit quantization."

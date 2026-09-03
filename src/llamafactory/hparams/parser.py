@@ -581,6 +581,13 @@ def get_train_args(args: dict[str, Any] | list[str] | None = None) -> _TRAIN_CLS
     if (not training_args.do_train) and finetuning_args.stage == "dpo" and finetuning_args.ref_model is None:
         logger.warning_rank0("Specify `ref_model` for computing rewards at evaluation.")
 
+    if training_args.do_train and finetuning_args.share_ref_base:
+        logger.info_rank0(
+            "[share_ref_base] Using shared base model with dual adapters: "
+            "'default' (policy, trainable) and 'ref' (reference, frozen). "
+            f"Reference adapter: {finetuning_args.ref_model_adapters}"
+        )
+
     # Post-process training arguments
     training_args.generation_max_length = training_args.generation_max_length or data_args.cutoff_len
     training_args.generation_num_beams = data_args.eval_num_beams or training_args.generation_num_beams

@@ -22,7 +22,7 @@ from ...extras.constants import IGNORE_INDEX
 from ...extras.ploting import plot_loss
 from ...hparams import ModelArguments
 from ...model import load_model, load_tokenizer
-from ..trainer_utils import create_modelcard_and_push, create_ref_model
+from ..trainer_utils import create_modelcard_and_push, create_ref_model, load_ref_adapter
 from .trainer import CustomKTOTrainer
 
 
@@ -54,7 +54,13 @@ def run_kto(
     )
 
     # Create reference model
-    if finetuning_args.ref_model is None and (not training_args.do_train):  # use the model itself
+    if finetuning_args.share_ref_base:
+        # Dual adapter mode: load ref adapter onto the same base model.
+        # Load it for both training and eval-only so that ref logp computation
+        # always has the 'ref' adapter available.
+        load_ref_adapter(model, finetuning_args)
+        ref_model = None
+    elif finetuning_args.ref_model is None and (not training_args.do_train):  # use the model itself
         ref_model = model
     else:
         ref_model = create_ref_model(model_args, finetuning_args)

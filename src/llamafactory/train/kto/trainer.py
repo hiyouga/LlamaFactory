@@ -15,6 +15,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
 import warnings
 from collections import defaultdict
 from contextlib import nullcontext
@@ -31,7 +32,13 @@ from typing_extensions import override
 from ...extras.constants import IGNORE_INDEX
 from ...extras.packages import is_transformers_version_greater_than
 from ..callbacks import SaveProcessorCallback
-from ..trainer_utils import create_custom_optimizer, create_custom_scheduler, get_batch_logps, nested_detach
+from ..trainer_utils import (
+    create_custom_optimizer,
+    create_custom_scheduler,
+    get_batch_logps,
+    nested_detach,
+    switch_ref_adapter_context,
+)
 
 
 if TYPE_CHECKING:
@@ -205,7 +212,10 @@ class CustomKTOTrainer(KTOTrainer):
         r"""Compute log probabilities of the reference model."""
         if self.ref_model is None:
             ref_model = model
-            ref_context = self.accelerator.unwrap_model(model).disable_adapter()
+            if self.finetuning_args.share_ref_base:
+                ref_context = switch_ref_adapter_context(self.accelerator.unwrap_model(model))
+            else:
+                ref_context = self.accelerator.unwrap_model(model).disable_adapter()
         else:
             ref_model = self.ref_model
             ref_context = nullcontext()
@@ -216,6 +226,34 @@ class CustomKTOTrainer(KTOTrainer):
             )
 
         return reference_chosen_logps, reference_rejected_logps, reference_kl_logps
+
+    @override
+    def _save(self, output_dir: Optional[str] = None, state_dict=None) -> None:
+        r"""Only save the 'default' (policy) adapter when share_ref_base is enabled."""
+        if self.finetuning_args.share_ref_base:
+            from peft import PeftModel
+
+            output_dir = output_dir if output_dir is not None else self.args.output_dir
+            os.makedirs(output_dir, exist_ok=True)
+            unwrapped = self.accelerator.unwrap_model(self.model)
+            if isinstance(unwrapped, PeftModel):
+                # Under FSDP, model.state_dict() is a collective op that hangs if called
+                # only on rank 0. Use the pre-gathered state_dict from the trainer if available,
+                # otherwise call state_dict() (safe when all ranks enter _save together under FSDP).
+                if state_dict is None:
+                    state_dict = self.model.state_dict()
+
+                unwrapped.save_pretrained(
+                    output_dir,
+                    selected_adapters=["default"],
+                    safe_serialization=getattr(self.args, "save_safetensors", True),
+                    state_dict=state_dict,
+                )
+                if self.processing_class is not None:
+                    self.processing_class.save_pretrained(output_dir)
+                return
+
+        super()._save(output_dir, state_dict)
 
     @override
     def get_batch_loss_metrics(
