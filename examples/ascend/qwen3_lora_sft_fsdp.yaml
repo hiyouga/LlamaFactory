@@ -1,0 +1,44 @@
+# Start FSDP fine-tuning
+# accelerate launch \
+#     --config_file examples/accelerate/fsdp_config.yaml \
+#     src/train.py examples/ascend/qwen3_lora_sft_fsdp.yaml
+# Change `num_processes` in fsdp2_config.yaml to 64 in A2
+# Change `num_processes` in fsdp2_config.yaml to 32 in A3
+
+
+### model
+model_name_or_path: Qwen/Qwen3-Next-80B-A3B-Instruct
+
+### method
+stage: sft
+do_train: true
+finetuning_type: lora
+lora_rank: 10
+lora_alpha: 16
+lora_dropout: 0.0
+lora_target: q_proj, k_proj, v_proj, o_proj
+
+### dataset
+dataset: identity,alpaca_en_demo
+dataset_dir: data
+template: qwen3
+cutoff_len: 2048
+val_size: 0.0
+max_samples: 100000
+packing: false
+preprocessing_num_workers: 16
+
+### output
+output_dir: saves/qwen3_lora_sft
+logging_dir: saves/qwen3_lora_sft/runs
+
+### train
+per_device_train_batch_size: 4
+gradient_accumulation_steps: 2
+learning_rate: 5.0E-5
+lr_scheduler_type: cosine
+warmup_steps: 0
+num_train_epochs: 1.0
+max_grad_norm: 1.0
+bf16: true
+ddp_timeout: 180000000
