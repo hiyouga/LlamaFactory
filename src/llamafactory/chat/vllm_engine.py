@@ -168,10 +168,9 @@ class VllmEngine(BaseEngine):
             n=num_return_sequences,
             repetition_penalty=(
                 repetition_penalty if repetition_penalty is not None else self.generating_args["repetition_penalty"]
-            )
-            or 1.0,  # repetition_penalty must > 0
+            ),
             temperature=temperature if temperature is not None else self.generating_args["temperature"],
-            top_p=(top_p if top_p is not None else self.generating_args["top_p"]) or 1.0,  # top_p must > 0
+            top_p=top_p if top_p is not None else self.generating_args["top_p"],
             top_k=(top_k if top_k is not None else self.generating_args["top_k"]) or -1,  # top_k must > 0
             stop=stop,
             stop_token_ids=self.template.get_stop_token_ids(self.tokenizer),
