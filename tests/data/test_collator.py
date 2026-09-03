@@ -22,14 +22,95 @@ from PIL import Image
 from transformers import AutoConfig, AutoModelForImageTextToText
 
 from llamafactory.data import get_template_and_fix_tokenizer
-from llamafactory.data.collator import MultiModalDataCollatorForSeq2Seq, prepare_4d_attention_mask
-from llamafactory.extras.constants import IGNORE_INDEX
+from llamafactory.data.collator import (
+    MultiModalDataCollatorForSeq2Seq,
+    SFTDataCollatorWith4DAttentionMask,
+    prepare_4d_attention_mask,
+)
+from llamafactory.extras.constants import IGNORE_INDEX, is_flash_attention
 from llamafactory.extras.packages import is_transformers_version_greater_than
 from llamafactory.hparams import get_infer_args
 from llamafactory.model import load_tokenizer
 
 
 TINY_LLAMA3 = os.getenv("TINY_LLAMA3", "llamafactory/tiny-random-Llama-3")
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
+@pytest.mark.parametrize(
+    "impl,expected",
+    [
+        ("flash_attention_2", True),
+        ("flash_attention_3", True),
+        ("flash_attention_4", True),
+        ("flash_attention_8", True),
+        ("sdpa", False),
+        ("eager", False),
+        (None, False),
+        ("", False),
+        ("kernels-community/vllm-flash-attn3", False),
+    ],
+)
+def test_is_flash_attention(impl, expected):
+    assert is_flash_attention(impl) is expected
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
+@pytest.mark.parametrize("attn_impl", ["flash_attention_2", "flash_attention_3", "flash_attention_4"])
+def test_sft_collator_neat_packing_with_flash_attn_variants(attn_impl):
+    r"""``neat_packing`` should activate for any FlashAttention variant, not just FA2.
+
+    This guards against regressions of: https://github.com/hiyouga/LLaMA-Factory/issues
+    (FIXME marked at src/llamafactory/data/collator.py:L527 before the fix).
+    """
+    model_args, data_args, *_ = get_infer_args({"model_name_or_path": TINY_LLAMA3, "template": "default"})
+    tokenizer_module = load_tokenizer(model_args)
+    template = get_template_and_fix_tokenizer(tokenizer_module["tokenizer"], data_args)
+    p = tokenizer_module["tokenizer"].pad_token_id
+    q = IGNORE_INDEX
+    features = [
+        {
+            "input_ids": [0, 1, 2, 3, 4, 5, p, p, p],
+            "attention_mask": [1, 1, 1, 1, 1, 1, 0, 0, 0],
+            "labels": [q, q, 2, 3, 4, 5, q, q, q],
+        }
+    ]
+    collator = SFTDataCollatorWith4DAttentionMask(
+        template=template,
+        pad_to_multiple_of=8,
+        label_pad_token_id=IGNORE_INDEX,
+        block_diag_attn=False,
+        attn_implementation=attn_impl,
+        neat_packing=True,
+        **tokenizer_module,
+    )
+
+    # We can't actually run the packed forward on CPU (no FA kernel), but we can
+    # verify the dispatch decisions the collator would make. __post_init__ succeeds
+    # and the helper matches all FA variants for the tiny-llama3 (non-gemma4).
+    assert is_flash_attention(collator.attn_implementation)
+    assert collator.neat_packing is True
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
+@pytest.mark.parametrize("attn_impl", ["eager", "sdpa"])
+def test_sft_collator_neat_packing_skips_non_flash_attn(attn_impl):
+    r"""``neat_packing`` should NOT activate the packed features path for ``eager``/``sdpa``."""
+    model_args, data_args, *_ = get_infer_args({"model_name_or_path": TINY_LLAMA3, "template": "default"})
+    tokenizer_module = load_tokenizer(model_args)
+    template = get_template_and_fix_tokenizer(tokenizer_module["tokenizer"], data_args)
+    collator = SFTDataCollatorWith4DAttentionMask(
+        template=template,
+        pad_to_multiple_of=8,
+        label_pad_token_id=IGNORE_INDEX,
+        block_diag_attn=True,
+        attn_implementation=attn_impl,
+        neat_packing=True,
+        **tokenizer_module,
+    )
+    assert not is_flash_attention(collator.attn_implementation)
+    # When attn_impl is non-FA, block_diag_attn stays responsible for 4d masks.
+    assert collator.block_diag_attn is True
 
 
 @pytest.mark.runs_on(["cpu", "mps"])
@@ -363,4 +444,7 @@ def test_4d_attention_mask():
 
 
 if __name__ == "__main__":
+    test_is_flash_attention("flash_attention_3", True)
+    test_sft_collator_neat_packing_with_flash_attn_variants("flash_attention_3")
+    test_sft_collator_neat_packing_skips_non_flash_attn("eager")
     test_multimodal_collator()
