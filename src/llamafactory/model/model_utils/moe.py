@@ -66,6 +66,10 @@ def add_z3_leaf_module(model: "PreTrainedModel") -> None:
         # hy3 uses custom code
         _set_z3_leaf_modules(model, ["HYV3MoE"])
 
+    if model_type == "bailing_hybrid":
+        # Ling 3.0 uses custom code
+        _set_z3_leaf_modules(model, ["BailingMoeV3SparseMoeBlock"])
+
     if model_type == "ernie4_5_moe":
         from transformers.models.ernie4_5_moe.modeling_ernie4_5_moe import Ernie4_5_MoeSparseMoeBlock
 

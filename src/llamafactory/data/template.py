@@ -1683,6 +1683,21 @@ register_template(
 )
 
 
+register_template(
+    name="muse_glimmer",
+    format_user=StringFormatter(slots=["<|start|>user<|message|>{{content}}<|eom|>"]),
+    format_assistant=StringFormatter(slots=["<|start|>assistant<|message|>{{content}}<|eot|>"]),
+    format_system=StringFormatter(slots=["<|start|>system<|message|>{{content}}<|eom|>"]),
+    format_observation=StringFormatter(slots=["<|start|>tool<|message|>{{content}}<|eom|>"]),
+    format_prefix=EmptyFormatter(slots=[{"bos_token"}]),
+    stop_words=["<|eot|>", "<|eom|>"],
+    replace_eos=True,
+    replace_jinja_template=True,
+    mm_plugin=get_mm_plugin(name="muse_glimmer", image_token="<|image|>", video_token="<|video|>"),
+    template_class=ReasoningTemplate,
+)
+
+
 # copied from vicuna template
 register_template(
     name="llava",

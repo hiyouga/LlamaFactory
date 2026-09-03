@@ -20,6 +20,7 @@ from transformers import (
     AutoConfig,
     AutoModelForCausalLM,
     AutoModelForImageTextToText,
+    AutoModelForMultimodalLM,
     AutoModelForSeq2SeqLM,
     AutoModelForTextToWaveform,
     AutoProcessor,
@@ -162,6 +163,10 @@ def load_model(
                 load_class = AutoModelForSeq2SeqLM
             elif type(config) in AutoModelForTextToWaveform._model_mapping.keys():  # audio-text for qwen omni
                 load_class = AutoModelForTextToWaveform
+            elif type(config) in AutoModelForMultimodalLM._model_mapping.keys():  # multimodal LM
+                load_class = AutoModelForMultimodalLM
+            elif getattr(config, "model_type", None) == "muse_glimmer":
+                load_class = AutoModelForMultimodalLM
             else:
                 load_class = AutoModelForCausalLM
 

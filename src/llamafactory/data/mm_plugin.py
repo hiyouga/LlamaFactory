@@ -3242,6 +3242,53 @@ class YoutuVLPlugin(BasePlugin):
         return messages
 
 
+class MuseGlimmerPlugin(BasePlugin):
+    r"""Plugin for the Muse Glimmer multimodal model.
+
+    Muse Glimmer uses a ViT-G/14 perception encoder and supports image and video inputs.
+    Image/video placeholders are replaced with the corresponding special tokens.
+    """
+
+    @override
+    def process_messages(
+        self,
+        messages: list[dict[str, str]],
+        images: list["ImageInput"],
+        videos: list["VideoInput"],
+        audios: list["AudioInput"],
+        processor: Optional["MMProcessor"],
+    ) -> list[dict[str, str]]:
+        self._validate_input(processor, images, videos, audios)
+        self._validate_messages(messages, images, videos, audios)
+        messages = deepcopy(messages)
+        for message in messages:
+            content = message["content"]
+            while IMAGE_PLACEHOLDER in content:
+                content = content.replace(IMAGE_PLACEHOLDER, self.image_token, 1)
+
+            while VIDEO_PLACEHOLDER in content:
+                content = content.replace(VIDEO_PLACEHOLDER, self.video_token, 1)
+
+            message["content"] = content
+
+        return messages
+
+    @override
+    def get_mm_inputs(
+        self,
+        images: list["ImageInput"],
+        videos: list["VideoInput"],
+        audios: list["AudioInput"],
+        imglens: list[int],
+        vidlens: list[int],
+        audlens: list[int],
+        batch_ids: list[list[int]],
+        processor: Optional["MMProcessor"],
+    ) -> dict[str, Union[list[int], "torch.Tensor"]]:
+        self._validate_input(processor, images, videos, audios)
+        return self._get_mm_inputs(images, videos, audios, processor)
+
+
 PLUGINS = {
     "base": BasePlugin,
     "ernie_vl": ErnieVLPlugin,
@@ -3260,6 +3307,7 @@ PLUGINS = {
     "minicpm_v_4_6": MiniCPMV4_6Plugin,
     "mllama": MllamaPlugin,
     "moss_vl": MossVLPlugin,
+    "muse_glimmer": MuseGlimmerPlugin,
     "paligemma": PaliGemmaPlugin,
     "pixtral": PixtralPlugin,
     "qwen2_audio": Qwen2AudioPlugin,
