@@ -244,6 +244,46 @@ def test_gemma4_plugin():
     _check_plugin(**check_inputs)
 
 
+def test_gemma4_plugin_uses_audio_processor_fallback(monkeypatch):
+    class AudioProcessor:
+        sampling_rate = 16000
+
+        def __call__(self, audios, **kwargs):
+            return {}
+
+    class Processor:
+        image_token = "<|image|>"
+        video_token = "<|video|>"
+        audio_token = "<|audio|>"
+        boi_token = "<start_of_image>"
+        eoi_token = "<end_of_image>"
+        boa_token = "<start_of_audio>"
+        eoa_token = "<end_of_audio>"
+        audio_processor = AudioProcessor()
+
+        @staticmethod
+        def _compute_audio_num_tokens(audio, sampling_rate):
+            assert sampling_rate == 16000
+            return 2
+
+    gemma4_plugin = get_mm_plugin(name="gemma4", audio_token="<|audio|>")
+    monkeypatch.setattr(
+        gemma4_plugin,
+        "_regularize_audios",
+        lambda audios, **kwargs: {"audios": audios},
+    )
+    messages = [{"role": "user", "content": "<audio>"}]
+
+    processed = gemma4_plugin.process_messages(messages, NO_IMAGES, NO_VIDEOS, AUDIOS, Processor())
+
+    assert processed == [
+        {
+            "role": "user",
+            "content": "<start_of_audio><|audio|><|audio|><end_of_audio>",
+        }
+    ]
+
+
 @pytest.mark.runs_on(["cpu", "mps"])
 @pytest.mark.skipif(not is_transformers_version_greater_than("4.52.0"), reason="Requires transformers>=4.52.0")
 def test_internvl_plugin():
