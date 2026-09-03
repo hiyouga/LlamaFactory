@@ -55,6 +55,7 @@ class Template:
     replace_jinja_template: bool
     enable_thinking: Optional[bool]
     preserve_thinking: bool
+    force_system: bool
     mm_plugin: "BasePlugin"
 
     def encode_oneturn(
@@ -148,7 +149,7 @@ class Template:
 
             if i == 0:
                 elements += self.format_prefix.apply()
-                if system or tools:
+                if system or tools or self.force_system:
                     tool_text = self.format_tools.apply(content=tools)[0] if tools else ""
                     if tools and not system:
                         # Tool prompts that separate themselves from the system message with a
@@ -264,7 +265,15 @@ class Template:
         jinja_template += (
             "{% if messages[0]['role'] == 'system' %}{% set loop_messages = messages[1:] %}"
             "{% set system_message = messages[0]['content'] %}{% else %}{% set loop_messages = messages %}{% endif %}"
-            "{% if system_message is defined %}{{ " + system + " }}{% endif %}"
+        )
+        if self.force_system:
+            jinja_template += (
+                "{% if system_message is not defined %}{% set system_message = '' %}{% endif %}{{ " + system + " }}"
+            )
+        else:
+            jinja_template += "{% if system_message is defined %}{{ " + system + " }}{% endif %}"
+
+        jinja_template += (
             "{% for message in loop_messages %}"
             "{% set content = message['content'] %}"
             "{% if message['role'] == 'user' %}"
@@ -315,8 +324,9 @@ class Template:
         system = self._convert_slots_to_ollama(self.format_system.apply(), tokenizer, placeholder=".System")
         user = self._convert_slots_to_ollama(self.format_user.apply(), tokenizer, placeholder=".Content")
         assistant = self._convert_slots_to_ollama(self.format_assistant.apply(), tokenizer, placeholder=".Content")
+        system_part = system if self.force_system else f"{{{{ if .System }}}}{system}{{{{ end }}}}"
         return (
-            f"{prefix}{{{{ if .System }}}}{system}{{{{ end }}}}"
+            f"{prefix}{system_part}"
             f"""{{{{ range .Messages }}}}{{{{ if eq .Role "user" }}}}{user}"""
             f"""{{{{ else if eq .Role "assistant" }}}}{assistant}{{{{ end }}}}{{{{ end }}}}"""
         )
@@ -629,6 +639,7 @@ def register_template(
     replace_jinja_template: bool = False,
     enable_thinking: Optional[bool] = True,
     preserve_thinking: bool = False,
+    force_system: bool = False,
     mm_plugin: "BasePlugin" = get_mm_plugin(name="base"),
     template_class: type["Template"] = Template,
 ) -> None:
@@ -682,6 +693,7 @@ def register_template(
         replace_jinja_template=replace_jinja_template,
         enable_thinking=enable_thinking,
         preserve_thinking=preserve_thinking,
+        force_system=force_system,
         mm_plugin=mm_plugin,
     )
 
@@ -745,6 +757,7 @@ def parse_template(tokenizer: "PreTrainedTokenizer") -> "Template":
         replace_jinja_template=False,
         enable_thinking=True,
         preserve_thinking=False,
+        force_system=False,
         mm_plugin=get_mm_plugin(name="base"),
     )
 
@@ -900,6 +913,25 @@ register_template(
     ),
     format_system=StringFormatter(slots=["<|START_OF_TURN_TOKEN|><|SYSTEM_TOKEN|>{{content}}<|END_OF_TURN_TOKEN|>"]),
     format_prefix=EmptyFormatter(slots=[{"bos_token"}]),
+)
+
+
+# copied from the official Command R7B chat template
+# https://huggingface.co/CohereLabs/c4ai-command-r7b-12-2024/blob/main/tokenizer_config.json
+register_template(
+    name="cohere2",
+    format_user=StringFormatter(
+        slots=[
+            (
+                "<|START_OF_TURN_TOKEN|><|USER_TOKEN|>{{content}}<|END_OF_TURN_TOKEN|>"
+                "<|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|><|START_RESPONSE|>"
+            )
+        ]
+    ),
+    format_assistant=StringFormatter(slots=["{{content}}<|END_RESPONSE|><|END_OF_TURN_TOKEN|>"]),
+    format_system=StringFormatter(slots=["<|START_OF_TURN_TOKEN|><|SYSTEM_TOKEN|>{{content}}<|END_OF_TURN_TOKEN|>"]),
+    format_prefix=EmptyFormatter(slots=[{"bos_token"}]),
+    force_system=True,
 )
 
 

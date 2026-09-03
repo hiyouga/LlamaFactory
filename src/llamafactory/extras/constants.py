@@ -345,6 +345,17 @@ register_model_group(
 
 register_model_group(
     models={
+        "CommandR-7B-Chat": {
+            DownloadSource.DEFAULT: "CohereLabs/c4ai-command-r7b-12-2024",
+            DownloadSource.MODELSCOPE: "CohereForAI/c4ai-command-r7b-12-2024",
+        },
+    },
+    template="cohere2",
+)
+
+
+register_model_group(
+    models={
         "CommandR-35B-Chat": {
             DownloadSource.DEFAULT: "CohereForAI/c4ai-command-r-v01",
             DownloadSource.MODELSCOPE: "AI-ModelScope/c4ai-command-r-v01",
