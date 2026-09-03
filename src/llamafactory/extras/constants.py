@@ -1306,6 +1306,10 @@ register_model_group(
             DownloadSource.DEFAULT: "tencent/Hy3-preview",
             DownloadSource.MODELSCOPE: "tencent/Hy3-preview",
         },
+        "Hy3": {
+            DownloadSource.DEFAULT: "tencent/Hy3",
+            DownloadSource.MODELSCOPE: "tencent/Hy3",
+        },
     },
     template="hy3",
 )
