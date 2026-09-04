@@ -391,6 +391,29 @@ def patch_config(
         for dtype_name, dtype in [("fp16", torch.float16), ("bf16", torch.bfloat16), ("fp32", torch.float32)]:
             setattr(config, dtype_name, model_args.compute_dtype == dtype)
 
+    # ---------------------------------------------------------------------------
+    # Nanbeige compatibility shims (workarounds for outdated trust_remote_code).
+    # See the longer note in `patch_model` for the full context. These become
+    # no-ops once the upstream Nanbeige HF repo ships transformers>=5.x-compatible
+    # remote code (`_tied_weights_keys` as dict, `rope_scaling` using `rope_type`).
+    # ---------------------------------------------------------------------------
+    if getattr(config, "model_type", None) == "nanbeige":
+        # Shim 2: normalize rope_scaling for the remote `_init_rope`.
+        # The remote code expects rope_scaling=None or {"type","factor"}.
+        # transformers>=5.x injects {"rope_type": "default", ...} which breaks
+        # NanbeigeAttention._init_rope with `KeyError: 'type'`.
+        rope_scaling = getattr(config, "rope_scaling", None)
+        if isinstance(rope_scaling, dict) and "type" not in rope_scaling:
+            rope_type = rope_scaling.get("rope_type", "default")
+            if rope_type == "default" or "factor" not in rope_scaling:
+                setattr(config, "rope_scaling", None)
+            else:
+                setattr(config, "rope_scaling", {"type": rope_type, "factor": rope_scaling["factor"]})
+
+        # Remote code indexes attention by _attn_implementation; leave a safe default when unset.
+        if getattr(config, "_attn_implementation", None) is None:
+            setattr(config, "_attn_implementation", "eager")
+
     if getattr(config, "model_type", None) == "minicpmo":
         setattr(config, "init_audio", True)
         setattr(config, "init_tts", False)
@@ -451,6 +474,40 @@ def patch_model(
         or (gen_config.typical_p is not None and gen_config.typical_p != 1.0)
     ):
         gen_config.do_sample = True
+
+    # ---------------------------------------------------------------------------
+    # Nanbeige compatibility shims (workarounds for outdated trust_remote_code).
+    #
+    # These patches are needed ONLY because the remote modeling code shipped in
+    # the Nanbeige4.2 HF repo predates transformers>=5.x. Once the upstream
+    # Nanbeige repo (Nanbeige/Nanbeige4.2-3B) updates its modeling_nanbeige.py /
+    # configuration_nanbeige.py to the new conventions, both shims below become
+    # no-ops and can be removed:
+    #   * `_tied_weights_keys` should be Dict[str, str] (target -> source) instead
+    #     of List[str].
+    #   * `_init_rope` should read `rope_scaling["rope_type"]` (with a fallback to
+    #     the legacy `"type"` key) instead of hard-coding `rope_scaling["type"]`.
+    # ---------------------------------------------------------------------------
+    if getattr(model.config, "model_type", None) == "nanbeige":
+        # Shim 1: `_tied_weights_keys` list -> dict.
+        # transformers>=5.x calls `.keys()` on it during
+        # `remove_tied_weights_from_state_dict`, which crashes checkpoint saving
+        # with `AttributeError: 'list' object has no attribute 'keys'` when the
+        # remote code still uses the old List[str] convention.
+        # Nanbeige4.2-3B ships with tie_word_embeddings=False so no real tying
+        # happens; we only need to satisfy the new dict format. The mapping value
+        # is only consumed by `get_expanded_tied_weights_keys` when
+        # tie_word_embeddings=True, so a safe self/source mapping is used for the
+        # standard lm_head.weight case.
+        for module in model.modules():
+            cls = type(module)
+            tied = getattr(cls, "_tied_weights_keys", None)
+            if isinstance(tied, list):
+                setattr(
+                    cls,
+                    "_tied_weights_keys",
+                    {k: "model.embed_tokens.weight" if k == "lm_head.weight" else k for k in tied},
+                )
 
     if getattr(model.config, "model_type", None) not in ["minicpmv", "minicpmo"] and "GenerationMixin" not in str(
         model.generate.__func__
