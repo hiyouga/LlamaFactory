@@ -371,6 +371,18 @@ def test_lfm2_tool_extractor_with_list_arg():
 
 
 @pytest.mark.runs_on(["cpu", "mps"])
+def test_lfm2_tool_extractor_positional_args():
+    # Positional arguments can't be mapped to the tool's named parameters, so a
+    # call that uses them is left as raw content instead of silently emitting a
+    # call with the positional values dropped.
+    formatter = ToolFormatter(tool_format="lfm2")
+    only_positional = """<|tool_call_start|>[test_tool(1, 2, 3)]<|tool_call_end|>"""
+    assert formatter.extract(only_positional) == only_positional
+    mixed = """<|tool_call_start|>[test_tool(1, size=10)]<|tool_call_end|>"""
+    assert formatter.extract(mixed) == mixed
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
 def test_lfm2_tool_extractor_no_match():
     formatter = ToolFormatter(tool_format="lfm2")
     result = "This is a regular response without tool calls."

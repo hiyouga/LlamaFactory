@@ -957,6 +957,13 @@ class LFM2ToolUtils(ToolUtils):
             else:
                 return content
 
+            # LFM2 tool calls only carry keyword arguments. Positional ones
+            # can't be mapped to the tool's named parameters here, so bail to
+            # the raw content rather than silently dropping them and emitting a
+            # call with missing arguments.
+            if node.args:
+                return content
+
             # Extract keyword arguments
             args_dict = {}
             for keyword in node.keywords:
