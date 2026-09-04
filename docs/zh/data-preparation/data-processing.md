@@ -117,7 +117,7 @@ dataset: ~/data/dataset_info.yaml    # 本地 dataset_info.yaml 文件路径
 
 v1 使用统一的 **Messages 格式**作为标准数据格式。每个样本都是一个包含 `messages` 字段的 JSON 对象。
 
-针对alpaca、sharegpt、以及dpo等格式的数据，可以通过内置的`DataConverterPlugin`插件，自动将其转化为标准格式，对于其他自定义格式的数据，用户也可通过自定义`DataConverterPlugin`来实现数据格式标准化，这部分内容参见[`DataConverterPlugin`](../dev-guide/plugins/data-plugins.md/#data-converter-plugin)
+针对alpaca、sharegpt、以及dpo等格式的数据，可以通过内置的`DataConverterPlugin`插件，自动将其转化为标准格式，对于其他自定义格式的数据，用户也可通过自定义`DataConverterPlugin`来实现数据格式标准化，这部分内容参见[`DataConverterPlugin`](../dev-guide/plugins/data-plugins.md#dataconverterplugin)
 
 ### 1. SFT（监督微调）样本格式
 
@@ -476,4 +476,4 @@ for content_item in sample['messages'][0]['content']:
 3. 通过 `weight` 和 `size` 参数可以灵活控制数据分布
 4. 支持同时使用本地数据集和 HuggingFace Hub 数据集
 5. 多模态数据通过在 `content` 中添加不同类型的元素来支持
-6. 更多细节信息请参考我们的 [API REFERENCE](../dev-guide/core/data-engine.md/#data-engine)
+6. 更多细节信息请参考我们的 [API REFERENCE](../dev-guide/core/data-engine.md#dataengine)
