@@ -15,12 +15,16 @@
 from collections import defaultdict
 from typing import TYPE_CHECKING, Any, Optional
 
+from datasets import Sequence, Value
+
 from ...extras import logging
 from ...extras.constants import IGNORE_INDEX
-from .processor_utils import DatasetProcessor, infer_seqlen
+from .processor_utils import DatasetProcessor, build_dataset_features, infer_seqlen
 
 
 if TYPE_CHECKING:
+    from datasets import Dataset, Features
+
     from ..mm_plugin import AudioInput, ImageInput, VideoInput
 
 
@@ -28,6 +32,21 @@ logger = logging.get_logger(__name__)
 
 
 class PairwiseDatasetProcessor(DatasetProcessor):
+    @staticmethod
+    def get_dataset_features(dataset: "Dataset") -> "Features":
+        r"""Return the schema for the fields emitted by ``preprocess_dataset``."""
+        return build_dataset_features(
+            dataset,
+            {
+                "chosen_input_ids": Sequence(Value("int32")),
+                "chosen_attention_mask": Sequence(Value("int8")),
+                "chosen_labels": Sequence(Value("int64")),
+                "rejected_input_ids": Sequence(Value("int32")),
+                "rejected_attention_mask": Sequence(Value("int8")),
+                "rejected_labels": Sequence(Value("int64")),
+            },
+        )
+
     def _encode_data_example(
         self,
         prompt: list[dict[str, str]],
@@ -69,6 +88,7 @@ class PairwiseDatasetProcessor(DatasetProcessor):
         return chosen_input_ids, chosen_labels, rejected_input_ids, rejected_labels
 
     def preprocess_dataset(self, examples: dict[str, list[Any]]) -> dict[str, list[Any]]:
+        # Keep these output keys in sync with ``get_dataset_features`` above.
         # build input pairs with format `<bos> X`, `Y1 <eos>` and `Y2 <eos>`
         model_inputs = defaultdict(list)
         for i in range(len(examples["_prompt"])):

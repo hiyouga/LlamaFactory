@@ -15,7 +15,9 @@
 import os
 
 import pytest
+from datasets import Dataset, Features, Sequence, Value
 
+from llamafactory.data.processor.supervised import SupervisedDatasetProcessor
 from llamafactory.train.test_utils import load_dataset_module
 
 
@@ -38,6 +40,60 @@ TRAIN_ARGS = {
     "overwrite_output_dir": True,
     "fp16": True,
 }
+
+
+def test_sft_features_stabilize_mixed_modality_batches():
+    source_features = Features(
+        {
+            "_prompt": Value("string"),
+            "_images": Sequence(Value("string")),
+            "_videos": Sequence(Value("string")),
+            "_audios": Sequence(Value("string")),
+        }
+    )
+    dataset = Dataset.from_dict(
+        {
+            "_prompt": ["text 1", "text 2", "image", "video"],
+            "_images": [None, None, ["image.png"], None],
+            "_videos": [None, None, None, ["video.mp4"]],
+            "_audios": [None, None, None, None],
+        },
+        features=source_features,
+    )
+
+    def preprocess_dataset(examples):
+        batch_size = len(examples["_prompt"])
+        return {
+            "input_ids": [[1] for _ in range(batch_size)],
+            "attention_mask": [[1] for _ in range(batch_size)],
+            "labels": [[1] for _ in range(batch_size)],
+            "images": examples["_images"],
+            "videos": examples["_videos"],
+            "audios": examples["_audios"],
+        }
+
+    processed_dataset = dataset.map(
+        preprocess_dataset,
+        batched=True,
+        batch_size=2,
+        remove_columns=dataset.column_names,
+        features=SupervisedDatasetProcessor.get_dataset_features(dataset),
+    )
+
+    assert processed_dataset.features["images"] == source_features["_images"]
+    assert processed_dataset.features["videos"] == source_features["_videos"]
+    assert processed_dataset.features["labels"] == Sequence(Value("int64"))
+    assert processed_dataset["images"][0] is None
+    assert processed_dataset["videos"][0] is None
+    assert processed_dataset["images"][2] == ["image.png"]
+    assert processed_dataset["videos"][3] == ["video.mp4"]
+
+
+def test_sft_features_require_aligned_media_columns():
+    dataset = Dataset.from_dict({"_prompt": ["text"]})
+
+    with pytest.raises(ValueError, match="_images, _videos, _audios"):
+        SupervisedDatasetProcessor.get_dataset_features(dataset)
 
 
 @pytest.mark.runs_on(["cpu", "mps"])

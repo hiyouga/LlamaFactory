@@ -16,12 +16,16 @@ from collections import defaultdict
 from dataclasses import asdict, dataclass
 from typing import TYPE_CHECKING, Any, Optional
 
+from datasets import Sequence, Value
+
 from ...extras import logging
 from ...extras.constants import IGNORE_INDEX
-from .processor_utils import DatasetProcessor, greedy_knapsack, infer_seqlen
+from .processor_utils import DatasetProcessor, build_dataset_features, greedy_knapsack, infer_seqlen
 
 
 if TYPE_CHECKING:
+    from datasets import Dataset, Features
+
     from ..mm_plugin import AudioInput, ImageInput, VideoInput
 
 
@@ -49,6 +53,18 @@ class PackingParams:
 
 @dataclass
 class SupervisedDatasetProcessor(DatasetProcessor):
+    @staticmethod
+    def get_dataset_features(dataset: "Dataset") -> "Features":
+        r"""Return the schema for the fields emitted by ``preprocess_dataset``."""
+        return build_dataset_features(
+            dataset,
+            {
+                "input_ids": Sequence(Value("int32")),
+                "attention_mask": Sequence(Value("int8")),
+                "labels": Sequence(Value("int64")),
+            },
+        )
+
     def _encode_data_example(
         self,
         prompt: list[dict[str, str]],
@@ -106,6 +122,7 @@ class SupervisedDatasetProcessor(DatasetProcessor):
         return input_ids, labels
 
     def preprocess_dataset(self, examples: dict[str, list[Any]]) -> dict[str, list[Any]]:
+        # Keep these output keys in sync with ``get_dataset_features`` above.
         # build inputs with format `<bos> X Y <eos>` and labels with format `<ignore> ... <ignore> Y <eos>`
         # for multiturn examples, we only mask the prompt part in each prompt-response pair.
         model_inputs = defaultdict(list)
@@ -144,6 +161,11 @@ class SupervisedDatasetProcessor(DatasetProcessor):
 
 @dataclass
 class PackedSupervisedDatasetProcessor(SupervisedDatasetProcessor):
+    @staticmethod
+    def get_dataset_features(dataset: "Dataset") -> None:
+        r"""Keep the inferred schema for packed outputs with packing metadata."""
+        return
+
     def preprocess_dataset(self, examples: dict[str, list[Any]]) -> dict[str, list[Any]]:
         # TODO: use `position_ids` to achieve packing
         # build inputs with format `<bos> X1 Y1 <eos> <bos> X2 Y2 <eos>`
