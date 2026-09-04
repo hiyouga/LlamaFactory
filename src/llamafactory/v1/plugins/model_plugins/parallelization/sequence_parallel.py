@@ -24,7 +24,7 @@ from ....accelerator.interface import Dim, DistributedInterface
 from ....utils import logging
 from ....utils.plugin import BasePlugin
 from ....utils.types import ModelOutput
-from .gdn_attention import _get_gdn_module, gdn_forward_with_cp, is_gdn_layer
+from .gdn_attention import _get_gdn_module, bind_position_ids, gdn_forward_with_cp, is_gdn_layer
 from .ulysses import (
     UlyssesAttention,
     get_ulysses_sequence_parallel_group,
@@ -139,6 +139,8 @@ def apply_sequence_parallel(model, cp_size: int):
                 replaced_modules.add(id(gdn_module))
                 gdn_module.original_forward = gdn_module.forward
                 gdn_module.forward = gdn_forward_with_cp.__get__(gdn_module, type(gdn_module))
+                if gdn_module is not module:
+                    bind_position_ids(module, gdn_module)
                 gdn_name = name if gdn_module is module else f"{name}.linear_attn"
                 logger.info_rank0(f"Replaced GDN forward in {gdn_name} with gdn_forward_with_cp for context parallel.")
 

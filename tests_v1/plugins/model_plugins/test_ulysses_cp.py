@@ -20,7 +20,7 @@ from llamafactory.v1.accelerator.interface import DistributedInterface
 from llamafactory.v1.config.model_args import ModelArguments
 from llamafactory.v1.config.training_args import TrainingArguments
 from llamafactory.v1.core.model_engine import ModelEngine
-from llamafactory.v1.plugins.model_plugins.parallelization import ulysses
+from llamafactory.v1.plugins.model_plugins.parallelization import gdn_attention, ulysses
 from llamafactory.v1.plugins.model_plugins.parallelization.sequence_parallel import (
     SequenceParallelModelPlugin,
     sequence_parallel_loss,
@@ -54,6 +54,108 @@ def test_qwen3_5_broadcast_position_ids_keep_packed_boundaries(monkeypatch: pyte
 
     assert captured["position_ids"].tolist() == [[0, 1, 0, 1, 2, 3]]
     assert captured["position_ids"].is_contiguous()
+
+
+def test_gdn_receives_position_ids_from_the_decoder_layer():
+    # Transformers calls linear_attn with hidden_states / cache_params / attention_mask only,
+    # so without this binding the packed boundaries never reach the delta-rule kernels.
+    class DecoderLayer(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear_attn = torch.nn.Identity()
+
+        def forward(self, hidden_states, position_ids=None, **kwargs):
+            return self.linear_attn(hidden_states)
+
+    layer = DecoderLayer()
+    gdn_attention.bind_position_ids(layer, layer.linear_attn)
+    position_ids = torch.tensor([[0, 1, 2, 0, 1]])
+
+    layer(torch.zeros(1, 5, 2), position_ids=position_ids)
+
+    assert layer.linear_attn.cp_position_ids is position_ids
+
+
+def test_gdn_position_ids_prefer_the_keyword():
+    # A caller that does pass the keyword is authoritative; the bound value is a stale
+    # leftover from whichever forward ran last.
+    module = torch.nn.Identity()
+    module.cp_position_ids = torch.tensor([[9, 9, 9]])
+    passed = torch.tensor([[0, 1, 2]])
+
+    assert gdn_attention.resolve_position_ids(module, {"position_ids": passed}) is passed
+
+
+def test_gdn_position_ids_fall_back_to_the_bound_value():
+    # This is the live path: transformers calls the GDN module without position_ids.
+    module = torch.nn.Identity()
+    bound = torch.tensor([[0, 1, 0, 1]])
+    module.cp_position_ids = bound
+
+    assert gdn_attention.resolve_position_ids(module, {}) is bound
+
+
+def test_gdn_position_ids_fall_back_when_the_keyword_is_none():
+    # A decoder-layer signature that defaults position_ids to None and forwards it anyway
+    # would otherwise mask the bound value.
+    module = torch.nn.Identity()
+    bound = torch.tensor([[0, 1, 0, 1]])
+    module.cp_position_ids = bound
+
+    assert gdn_attention.resolve_position_ids(module, {"position_ids": None}) is bound
+
+
+def test_gdn_position_ids_are_none_when_nothing_bound():
+    assert gdn_attention.resolve_position_ids(torch.nn.Identity(), {}) is None
+
+
+def test_gdn_missing_boundaries_warns_once(monkeypatch: pytest.MonkeyPatch):
+    # Losing the boundaries is silent otherwise, but this sits in a per-layer forward, so
+    # warning every call would bury the log it is supposed to surface.
+    messages = []
+    monkeypatch.setattr(gdn_attention, "_warned_missing_boundaries", False)
+    monkeypatch.setattr(gdn_attention.logger, "warning_rank0", messages.append)
+
+    gdn_attention._warn_missing_boundaries("position_ids did not reach the module")
+    gdn_attention._warn_missing_boundaries("this transformers has no prepare_fa_kwargs_from_position_ids")
+
+    assert len(messages) == 1
+    assert "position_ids did not reach the module" in messages[0]
+
+
+def test_gdn_cu_seqlens_marks_packed_document_boundaries(monkeypatch: pytest.MonkeyPatch):
+    local_position_ids = torch.tensor([[0, 1, 2, 3]])
+    remote_position_ids = torch.tensor([[0, 1, 2, 3]])
+
+    def fake_all_gather(outputs, tensor, **_):
+        outputs[0].copy_(tensor)
+        outputs[1].copy_(remote_position_ids)
+
+    monkeypatch.setattr(gdn_attention.dist, "all_gather", fake_all_gather)
+    cu_seqlens = gdn_attention.packed_cu_seqlens(local_position_ids, object(), 2)
+
+    assert cu_seqlens.tolist() == [0, 4, 8]
+
+
+def test_gdn_cu_seqlens_is_none_for_one_unbroken_sequence(monkeypatch: pytest.MonkeyPatch):
+    # An unpacked run has nothing for the kernels to separate, and claiming otherwise would
+    # demand flash-linear-attention from every sequence-parallel job.
+    local_position_ids = torch.tensor([[0, 1, 2, 3]])
+
+    def fake_all_gather(outputs, tensor, **_):
+        outputs[0].copy_(tensor)
+        outputs[1].copy_(torch.tensor([[4, 5, 6, 7]]))
+
+    monkeypatch.setattr(gdn_attention.dist, "all_gather", fake_all_gather)
+
+    assert gdn_attention.packed_cu_seqlens(local_position_ids, object(), 2) is None
+
+
+def test_gdn_cu_seqlens_ignores_true_mrope_position_ids(monkeypatch: pytest.MonkeyPatch):
+    mrope_position_ids = torch.tensor([[[0, 1, 2]], [[0, 1, 1]], [[0, 1, 0]]])
+    monkeypatch.setattr(gdn_attention.dist, "all_gather", lambda *_, **__: pytest.fail("gathered mRoPE ids"))
+
+    assert gdn_attention.packed_cu_seqlens(mrope_position_ids, object(), 2) is None
 
 
 def test_true_mrope_position_ids_are_not_used_as_packed_boundaries():
