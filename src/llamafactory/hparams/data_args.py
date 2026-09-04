@@ -113,6 +113,26 @@ class DataArguments:
         default=False,
         metadata={"help": "Enable sequence packing without cross-attention."},
     )
+    packing_strategy: Literal["length", "semantic_aware"] = field(
+        default="length",
+        metadata={
+            "help": (
+                "Strategy used to group sequences before packing. `length` (default) packs sequences "
+                "greedily by length only. `semantic_aware` first clusters sequences by embedding "
+                "similarity, then applies the length-based knapsack within each cluster."
+            )
+        },
+    )
+    packing_similarity_threshold: float = field(
+        default=0.7,
+        metadata={"help": "Cosine similarity threshold used to cluster sequences under `semantic_aware` packing."},
+    )
+    packing_embedding_model: str = field(
+        default="sentence-transformers/all-MiniLM-L6-v2",
+        metadata={
+            "help": "Sentence embedding model used to compute sequence similarity under `semantic_aware` packing."
+        },
+    )
     tool_format: str | None = field(
         default=None,
         metadata={"help": "Tool format to use for constructing function calling examples."},
@@ -196,6 +216,12 @@ class DataArguments:
 
         if self.neat_packing:
             self.packing = True
+
+        if self.packing_strategy == "semantic_aware":
+            self.packing = True
+
+        if not (0 < self.packing_similarity_threshold <= 1):
+            raise ValueError("`packing_similarity_threshold` should be in the range (0, 1].")
 
         if self.packing:
             self.cutoff_len -= 1  # avoid pad_to_multiple_of, needs improve

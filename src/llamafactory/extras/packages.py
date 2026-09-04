@@ -110,6 +110,10 @@ def is_safetensors_available():
     return _is_package_available("safetensors")
 
 
+def is_sentence_transformers_available():
+    return _is_package_available("sentence_transformers")
+
+
 def is_sglang_available():
     return _is_package_available("sglang")
 
