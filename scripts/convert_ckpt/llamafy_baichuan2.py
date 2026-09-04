@@ -102,7 +102,7 @@ def llamafy_baichuan2(
     try:
         os.makedirs(output_dir, exist_ok=False)
     except Exception as e:
-        raise print("Output dir already exists", e)
+        raise ValueError("Output dir already exists") from e
 
     save_weight(input_dir, output_dir, shard_size, save_safetensors)
     save_config(input_dir, output_dir)

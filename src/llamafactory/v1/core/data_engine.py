@@ -165,7 +165,7 @@ class DataEngine(Dataset):
             int: Dataset length.
         """
         if self.streaming:
-            return -1
+            raise ValueError("Streaming dataset does not support len().")
         else:
             return len(self.data_index)
 
