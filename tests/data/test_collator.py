@@ -364,3 +364,44 @@ def test_4d_attention_mask():
 
 if __name__ == "__main__":
     test_multimodal_collator()
+
+
+def test_packing_rope_single_subseq_slices_without_crashing(monkeypatch):
+    """Regression test for the ``sample_idx=`` keyword crash (#10497).
+
+    The ``num_sub_seqs <= 1`` branch of the packed mrope path must pass the batch
+    index positionally to ``_slice_mm_inputs_for_sample``, like the packed ``> 1``
+    branch does.
+    """
+    model_args, data_args, *_ = get_infer_args(
+        {"model_name_or_path": "Qwen/Qwen2-VL-2B-Instruct", "template": "qwen2_vl"}
+    )
+    tokenizer_module = load_tokenizer(model_args)
+    template = get_template_and_fix_tokenizer(tokenizer_module["tokenizer"], data_args)
+    config = AutoConfig.from_pretrained(model_args.model_name_or_path)
+    with torch.device("meta"):
+        model = AutoModelForImageTextToText.from_config(config)
+
+    collator = MultiModalDataCollatorForSeq2Seq(
+        template=template,
+        model=model,
+        label_pad_token_id=IGNORE_INDEX,
+        **tokenizer_module,
+    )
+
+    def fake_rope(features, mm_inputs):
+        seq_len = features["input_ids"].shape[1]
+        features["position_ids"] = torch.zeros(3, 1, seq_len, dtype=torch.long)
+        features["rope_deltas"] = torch.zeros(1, 1, dtype=torch.long)
+
+    monkeypatch.setattr(collator, "_compute_rope_position_ids", fake_rope)
+
+    features = {
+        "input_ids": torch.tensor([[0, 1, 2, 3]]),
+        "attention_mask": torch.tensor([[1, 1, 1, 1]]),
+    }
+    # packing_params_list=[{}] has no sequence_boundaries, so num_sub_seqs == 1
+    # and the single-subsequence branch (which held the bug) is exercised.
+    collator._compute_rope_position_ids_with_packing(features, {}, [{}], [0], [0], [0], False)
+
+    assert features["position_ids"].shape == (3, 1, 4)
