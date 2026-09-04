@@ -141,9 +141,6 @@ class SharegptDatasetConverter(DatasetConverter):
             self.dataset_attr.function_tag: Role.FUNCTION.value,
             self.dataset_attr.system_tag: Role.SYSTEM.value,
         }
-        odd_tags = (self.dataset_attr.user_tag, self.dataset_attr.observation_tag)
-        even_tags = (self.dataset_attr.assistant_tag, self.dataset_attr.function_tag)
-        accept_tags = (odd_tags, even_tags)
         messages = example[self.dataset_attr.messages]
         if (
             self.dataset_attr.system_tag
@@ -156,19 +153,45 @@ class SharegptDatasetConverter(DatasetConverter):
             system = example[self.dataset_attr.system] if self.dataset_attr.system else ""
 
         aligned_messages = []
+        tool_responses = []
         broken_data = False
-        for turn_idx, message in enumerate(messages):
-            if message[self.dataset_attr.role_tag] not in accept_tags[turn_idx % 2]:
+        for message in messages:
+            role = message[self.dataset_attr.role_tag]
+            content = message[self.dataset_attr.content_tag]
+
+            if role not in tag_mapping:
                 logger.warning_rank0(f"Invalid role tag in {messages}.")
                 broken_data = True
                 break
 
+            if role == self.dataset_attr.observation_tag:
+                tool_responses.append(content)
+                continue
+            elif len(tool_responses) > 0:
+                observation_content = "\n</tool_response>\n<tool_response>\n".join(tool_responses)
+                aligned_messages.append(
+                    {
+                        "role": Role.OBSERVATION.value,
+                        "content": observation_content,
+                    }
+                )
+                tool_responses = []
+
             aligned_messages.append(
                 {
-                    "role": tag_mapping[message[self.dataset_attr.role_tag]],
-                    "content": message[self.dataset_attr.content_tag],
+                    "role": tag_mapping[role],
+                    "content": content,
                 }
             )
+
+        odd_tags = (Role.USER.value, Role.OBSERVATION.value)
+        even_tags = (Role.ASSISTANT.value, Role.FUNCTION.value)
+        accept_tags = (odd_tags, even_tags)
+        for turn_idx, message in enumerate(aligned_messages):
+            if message["role"] not in accept_tags[turn_idx % 2]:
+                logger.warning_rank0(f"Invalid role tag in {messages}.")
+                broken_data = True
+                break
 
         if (not self.dataset_attr.ranking and len(aligned_messages) % 2 != 0) or (
             self.dataset_attr.ranking and len(aligned_messages) % 2 == 0
@@ -193,9 +216,10 @@ class SharegptDatasetConverter(DatasetConverter):
         ):  # pairwise example
             chosen = example[self.dataset_attr.chosen]
             rejected = example[self.dataset_attr.rejected]
+            response_tags = (self.dataset_attr.assistant_tag, self.dataset_attr.function_tag)
             if (
-                chosen[self.dataset_attr.role_tag] not in accept_tags[-1]
-                or rejected[self.dataset_attr.role_tag] not in accept_tags[-1]
+                chosen[self.dataset_attr.role_tag] not in response_tags
+                or rejected[self.dataset_attr.role_tag] not in response_tags
             ):
                 logger.warning_rank0(f"Invalid role tag in {[chosen, rejected]}.")
                 broken_data = True
