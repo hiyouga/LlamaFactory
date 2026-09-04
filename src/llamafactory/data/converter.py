@@ -75,6 +75,21 @@ class DatasetConverter:
 
         return medias
 
+    def _extract_loss_mask(self, example: dict[str, Any], prompt: list[dict[str, str]], response: list[dict[str, str]]) -> Optional[list[int]]:
+        loss_mask = example.get("loss_mask")
+        if loss_mask is None:
+            return None
+        if not isinstance(loss_mask, list):
+            logger.warning_rank0_once("`loss_mask` should be a list. Ignore this field.")
+            return None
+        total_turns = len(prompt) + len(response)
+        if len(loss_mask) != total_turns:
+            logger.warning_rank0_once(
+                f"`loss_mask` length {len(loss_mask)} mismatches total turns {total_turns}. Ignore this field."
+            )
+            return None
+        return loss_mask
+
     @abstractmethod
     def __call__(self, example: dict[str, Any]) -> dict[str, Any]:
         r"""Convert a single example in the dataset to the standard format."""
@@ -127,6 +142,7 @@ class AlpacaDatasetConverter(DatasetConverter):
             "_images": self._find_medias(example[self.dataset_attr.images]) if self.dataset_attr.images else None,
             "_videos": self._find_medias(example[self.dataset_attr.videos]) if self.dataset_attr.videos else None,
             "_audios": self._find_medias(example[self.dataset_attr.audios]) if self.dataset_attr.audios else None,
+            "_loss_mask": self._extract_loss_mask(example, prompt, response),
         }
         return output
 
@@ -223,6 +239,7 @@ class SharegptDatasetConverter(DatasetConverter):
             "_images": self._find_medias(example[self.dataset_attr.images]) if self.dataset_attr.images else None,
             "_videos": self._find_medias(example[self.dataset_attr.videos]) if self.dataset_attr.videos else None,
             "_audios": self._find_medias(example[self.dataset_attr.audios]) if self.dataset_attr.audios else None,
+            "_loss_mask": self._extract_loss_mask(example, prompt, response),
         }
         return output
 
@@ -363,6 +380,7 @@ class OpenAIDatasetConverter(DatasetConverter):
             "_images": self._find_medias(example[self.dataset_attr.images]) if self.dataset_attr.images else None,
             "_videos": self._find_medias(example[self.dataset_attr.videos]) if self.dataset_attr.videos else None,
             "_audios": self._find_medias(example[self.dataset_attr.audios]) if self.dataset_attr.audios else None,
+            "_loss_mask": self._extract_loss_mask(example, prompt, response),
         }
         return output
 
