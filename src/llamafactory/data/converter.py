@@ -275,6 +275,11 @@ class OpenAIDatasetConverter(DatasetConverter):
                 )
                 tool_responses = []
 
+            if role not in tag_mapping:
+                logger.warning_rank0(f"Invalid role tag in {messages}.")
+                broken_data = True
+                break
+
             aligned_messages.append(
                 {
                     "role": tag_mapping[role],

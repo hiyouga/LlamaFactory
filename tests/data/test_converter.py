@@ -62,3 +62,23 @@ def test_sharegpt_converter():
         "_videos": None,
         "_audios": None,
     }
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
+def test_openai_converter_skips_invalid_role():
+    # A message that carries a role tag not present in tag_mapping must be
+    # treated as an abnormal example and skipped, not crash with a KeyError when
+    # the converter builds aligned_messages. The sharegpt converter already
+    # guards its build loop; the openai converter only validated afterwards.
+    dataset_attr = DatasetAttr("hf_hub", "llamafactory/tiny-supervised-dataset")
+    data_args = DataArguments()
+    example = {
+        "conversations": [
+            {"from": "human", "value": "Solve the math problem.\n3 + 4"},
+            {"from": "not_a_role", "value": "The answer is 7."},
+        ]
+    }
+    dataset_converter = get_dataset_converter("openai", dataset_attr, data_args)
+    result = dataset_converter(example)
+    assert result["_prompt"] == []
+    assert result["_response"] == []
