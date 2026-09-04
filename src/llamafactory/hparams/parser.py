@@ -641,6 +641,8 @@ def get_train_args(args: dict[str, Any] | list[str] | None = None) -> _TRAIN_CLS
         model_args.compute_dtype = torch.bfloat16
     elif training_args.fp16:
         model_args.compute_dtype = torch.float16
+    elif training_args.do_train and not getattr(training_args, "fp8", False):
+        model_args.compute_dtype = torch.float32
 
     data_args.packing = data_args.packing if data_args.packing is not None else finetuning_args.stage == "pt"
     model_args.device_map = {"": get_current_device()}
