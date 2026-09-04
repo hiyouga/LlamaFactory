@@ -27,6 +27,7 @@ from ..core.model_engine import ModelEngine
 from ..utils import logging
 from ..utils.constants import IGNORE_INDEX
 from ..utils.types import BatchInput, HFModel, Tensor
+from .dropout import disable_dropout_in_model
 
 
 logger = logging.get_logger(__name__)
@@ -96,6 +97,12 @@ class DPOTrainer(BaseTrainer):
     ) -> None:
         if args.cp_size > 1:
             raise NotImplementedError("DPO trainer currently only supports cp_size == 1.")
+
+        if args.disable_dropout:
+            # DPO compares policy and reference log-probabilities for the same sequence. Keeping
+            # dropout active makes both estimates stochastic (including the LoRA reference path,
+            # which reuses this model with adapters disabled) and injects noise into the objective.
+            disable_dropout_in_model(model)
 
         self.pref_loss = args.pref_loss
         self.pref_beta = args.pref_beta
