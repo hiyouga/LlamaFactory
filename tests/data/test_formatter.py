@@ -190,6 +190,20 @@ def test_llama3_multi_tool_extractor():
 
 
 @pytest.mark.runs_on(["cpu", "mps"])
+def test_llama3_tool_extractor_empty_returns_content():
+    # An empty tool array means no function calls; return the content string,
+    # matching the Qwen3.5/Seed/LFM2 extractors, not an empty list.
+    formatter = ToolFormatter(tool_format="llama3")
+    assert formatter.extract("[]") == "[]"
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
+def test_mistral_tool_extractor_empty_returns_content():
+    formatter = ToolFormatter(tool_format="mistral")
+    assert formatter.extract("[]") == "[]"
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
 def test_mistral_function_formatter():
     formatter = FunctionFormatter(slots=["[TOOL_CALLS] {{content}}", "</s>"], tool_format="mistral")
     tool_calls = json.dumps(FUNCTION)

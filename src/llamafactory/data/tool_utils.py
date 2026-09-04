@@ -452,9 +452,13 @@ class Llama3ToolUtils(ToolUtils):
 
         tools = [tools] if not isinstance(tools, list) else tools
         try:
-            return [FunctionCall(tool["name"], json.dumps(tool["parameters"], ensure_ascii=False)) for tool in tools]
+            results = [
+                FunctionCall(tool["name"], json.dumps(tool["parameters"], ensure_ascii=False)) for tool in tools
+            ]
         except KeyError:
             return content
+
+        return results if results else content
 
 
 class MiniMaxM1ToolUtils(ToolUtils):
@@ -657,9 +661,11 @@ class MistralToolUtils(ToolUtils):
 
         tools = [tools] if not isinstance(tools, list) else tools
         try:
-            return [FunctionCall(tool["name"], json.dumps(tool["arguments"], ensure_ascii=False)) for tool in tools]
+            results = [FunctionCall(tool["name"], json.dumps(tool["arguments"], ensure_ascii=False)) for tool in tools]
         except KeyError:
             return content
+
+        return results if results else content
 
 
 class QwenToolUtils(ToolUtils):
