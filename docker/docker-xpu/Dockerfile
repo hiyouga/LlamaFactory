@@ -1,111 +1,88 @@
-# LlamaFactory — Intel XPU (Arc / BMG)
-#
-# Base: Intel Deep Learning Essentials (DLE) 2026.1.0
-#   - oneAPI 2026.1 toolkit, oneCCL 2022.1, MPI 2021.18
-#   - torch 2.13.0+xpu
-#   - LlamaFactory installed on top
-#
-# IMPORTANT — DLE version must match the host Intel GPU driver:
-#   DLE 2026.1 → libze-intel-gpu 26.18.x → requires host driver ≥ 26.18
-#   DLE 2025.3 → libze-intel-gpu 25.18.x → only works with host driver ≤ 26.09
-#   Verify host: dpkg -l libze-intel-gpu1 | grep -oP '\d+\.\d+\.\d+'
-#
-# Build (from repo root):
-#   docker build -t llamafactory:xpu \
-#     -f docker/docker-xpu/Dockerfile .
-#
-# Or via docker compose (recommended):
-#   cd docker/docker-xpu && docker compose up -d
-#   docker compose exec llamafactory bash
-#
-# Run (manual):
-#   docker run -it --rm \
-#     --device /dev/dri \
-#     -v /dev/dri/by-path:/dev/dri/by-path \
-#     --group-add $(getent group render | cut -d: -f3) \
-#     --group-add $(getent group video  | cut -d: -f3) \
-#     --ipc=host \
-#     -v ~/.cache/huggingface:/root/.cache/huggingface \
-#     llamafactory:xpu bash
+# https://hub.docker.com/r/intel/deep-learning-essentials/tags
+# Unlike the CUDA/ROCm bases this image ships no PyTorch, and its version must match the
+# host Intel GPU driver — see README.md.
 
 ARG BASE_IMAGE=intel/deep-learning-essentials:2026.1.0-devel-ubuntu24.04
 FROM ${BASE_IMAGE}
 
+# Installation arguments
+ARG PIP_INDEX=https://pypi.org/simple
+ARG PYTORCH_INDEX=https://download.pytorch.org/whl/xpu
+# Must stay in the same compute-runtime series as the base image — see README.md ("ocloc").
+ARG OCLOC_VERSION=26.18.38308.1
+
+# Define environments
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PIP_ROOT_USER_ACTION=ignore
+# The base image's Python is distro-managed (PEP 668); nothing to protect in a container.
 ENV PIP_BREAK_SYSTEM_PACKAGES=1
-
-# Disable the LlamaFactory launcher's DDP "optimization" injection.
-# With OPTIM_TORCH=1 (the launcher default), launcher.py sets
-# PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True on every rank. On Intel XPU
-# that expandable-segments (VMM) allocator path trips an L0 driver bug: a 2-GPU
-# DDP run SIGSEGVs, and a 2-GPU FSDP2 SFT run hangs in the step-1 forward — same
-# root trigger, two signatures. Throughput impact of turning it off is negligible
-# on XPU (measured ±<1% noise). Force it off so the default CLI is stable on 2 GPUs.
+# expandable_segments trips a Level-Zero bug on XPU — see README.md ("Multi-GPU and OPTIM_TORCH").
 ENV OPTIM_TORCH=0
 
-SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+# Use Bash instead of default /bin/sh
+SHELL ["/bin/bash", "-c"]
+
+# Set the working directory
 WORKDIR /app
 
-# Python dev headers + a C/C++ toolchain.
-# The Intel Triton backend JIT-compiles a C driver (driver.c) at first XPU
-# kernel launch, which #include <Python.h> — without the matching -dev headers
-# it fails with "fatal error: 'Python.h' file not found". This breaks every
-# Triton-compiled path on XPU, including bitsandbytes 4-bit (QLoRA) quant.
-# Derive the exact dev package from the interpreter so it stays correct if the
-# base image bumps the Python minor version (e.g. python3.12 -> python3.13).
+# Install pip, Python dev headers and a C/C++ toolchain — see README.md ("Python.h: No such file or directory").
 RUN PY_MM="$(python3 -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')" && \
     apt-get update -y && \
     apt-get install -y --no-install-recommends \
-        "python${PY_MM}-dev" build-essential && \
+        "python${PY_MM}-dev" python3-pip build-essential && \
     apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Bootstrap pip (DLE has python3.12 but no pip)
-RUN curl -sS https://bootstrap.pypa.io/get-pip.py | python3 - --break-system-packages && \
-    python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel editables "hatchling>=1.18.0"
+# Install ocloc — pinned .deb rather than apt, see README.md ("ocloc and torch.compile").
+RUN wget -q "https://github.com/intel/compute-runtime/releases/download/${OCLOC_VERSION}/intel-ocloc_${OCLOC_VERSION}-0_amd64.deb" \
+        -O /tmp/intel-ocloc.deb && \
+    dpkg -i /tmp/intel-ocloc.deb && \
+    rm -f /tmp/intel-ocloc.deb
 
-# Install PyTorch XPU (torch 2.13.0 targets the oneAPI 2026.1 runtime in DLE 2026.1.0).
-# Pin the matching +xpu torchvision/torchaudio explicitly: if left unpinned, pip may
-# resolve the PLAIN (CPU) torchvision/torchaudio wheels, which are built against a
-# different torch ABI -> `RuntimeError: operator torchvision::nms does not exist`,
-# cascading through transformers (imports torchvision.io) -> peft -> llamafactory-cli.
-# torchvision 0.28.0 / torchaudio 2.11.0 are the versions paired with torch 2.13.0.
-RUN python3 -m pip install --no-cache-dir \
-        torch==2.13.0 torchvision==0.28.0+xpu torchaudio==2.11.0+xpu \
-        --index-url https://download.pytorch.org/whl/xpu
+# Change pip source — pip is deliberately not upgraded, see README.md ("How pip is installed").
+RUN pip config set global.index-url "${PIP_INDEX}" && \
+    pip config set global.extra-index-url "${PIP_INDEX}" && \
+    pip install --no-cache-dir packaging wheel setuptools editables "hatchling>=1.18.0"
 
-# Lock the torch XPU stack for EVERY subsequent pip install via a constraint file.
-# pyproject asks for plain ranges (torch>=2.4.0, torchvision>=0.19.0, ...) resolved
-# against the default PyPI index, and deepspeed/bitsandbytes declare torch as a dep —
-# any of these could otherwise swap our +xpu wheels for a plain CPU/CUDA build while
-# resolving. PIP_CONSTRAINT pins them so no later install can move torch off +xpu,
-# which removes the need for a second --force-reinstall repair layer (~1.6GB saved:
-# --force-reinstall duplicates the torch .so files into a new layer without reclaiming
-# the originals). The wheels installed above already satisfy the constraint, so no
-# extra download happens.
-RUN printf 'torch==2.13.0\ntorchvision==0.28.0+xpu\ntorchaudio==2.11.0+xpu\n' \
-        > /etc/pip-xpu-constraints.txt
-ENV PIP_CONSTRAINT=/etc/pip-xpu-constraints.txt
-
-# Install LlamaFactory + metrics deps (required).
-# NOTE: this project migrated to a flat pyproject.toml with NO
-# [project.optional-dependencies], so there is no `metrics` extra — pip would
-# silently drop it (WARNING: does not provide the extra 'metrics') and skip
-# nltk/jieba/rouge-chinese, breaking BLEU/ROUGE eval later. Install the metrics
-# deps explicitly via requirements/metrics.txt, matching docker/docker-cuda.
+# Copy the application into the image
 COPY . /app
-RUN python3 -m pip install --no-cache-dir -e . --no-build-isolation && \
-    python3 -m pip install --no-cache-dir -r requirements/metrics.txt
 
-# Optional accelerators (deepspeed / bitsandbytes). `|| true` so a build on a
-# host without the toolchain for these still produces a usable image.
-RUN DS_BUILD_OPS=0 python3 -m pip install --no-cache-dir -r requirements/deepspeed.txt || true && \
-    python3 -m pip install --no-cache-dir -r requirements/bitsandbytes.txt || true
+# Install PyTorch for XPU — all three wheels pinned as a set, see README.md ("Pinned torch stack")
+RUN pip install --no-cache-dir -r requirements/xpu.txt --index-url "${PYTORCH_INDEX}"
+
+# Install LLaMA Factory
+# metrics.txt is explicit because this project defines no extras, so `.[metrics]` would no-op.
+RUN pip install --no-cache-dir -e . --no-build-isolation && \
+    pip install --no-cache-dir -r requirements/metrics.txt
+
+# Optional accelerators — see README.md ("Optional accelerators").
+# py-cpuinfo must land first: deepspeed's own setup.py imports deepspeed/ops/adam/cpu_adam.py
+# during metadata generation (before pip installs deepspeed's declared deps), which needs it.
+# deepspeed is pinned separately from requirements/deepspeed.txt's <=0.18.4: that range's XPU
+# accelerator imports IPEX's DpcppBuildExtension unconditionally, which no longer exists on a
+# post-IPEX torch. Fixed upstream in 0.18.7 (plain torch.utils.cpp_extension.BuildExtension).
+RUN pip install --no-cache-dir py-cpuinfo && \
+    (DS_BUILD_OPS=0 pip install --no-cache-dir "deepspeed==0.19.6" \
+        || echo "WARNING: deepspeed install failed - deepspeed training unavailable in this image")
+RUN pip install --no-cache-dir -r requirements/bitsandbytes.txt \
+        || echo "WARNING: bitsandbytes install failed - 4-bit quantization (QLoRA) unavailable in this image"
 
 # Source the oneAPI environment in every interactive shell
 RUN echo "source /opt/intel/oneapi/setvars.sh --force" >> /root/.bashrc
 
+# Set up volumes
+# VOLUME [ "/root/.cache/huggingface", "/app/shared_data", "/app/output" ]
 
+# Expose port 7860 for LLaMA Board
+ENV GRADIO_SERVER_PORT=7860
 EXPOSE 7860
+
+# Expose port 8000 for API service
+ENV API_PORT=8000
 EXPOSE 8000
+
+# Reset pip config
+RUN pip config unset global.index-url && \
+    pip config unset global.extra-index-url
+
+# oneAPI must be on the loader path before torch can open its XPU backend
 CMD ["bash", "-c", "source /opt/intel/oneapi/setvars.sh --force && exec llamafactory-cli webui"]
