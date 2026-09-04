@@ -3424,6 +3424,17 @@ register_model_group(
 
 register_model_group(
     models={
+        "XingChen4-29B-A4B": {
+            DownloadSource.DEFAULT: "Tele-AI/XingChen4-29B-A4B",
+            DownloadSource.MODELSCOPE: "TeleAI/XingChen4-29B-A4B",
+        },
+    },
+    template="xingchen4",
+)
+
+
+register_model_group(
+    models={
         "VibeThinker-1.5B": {
             DownloadSource.DEFAULT: "WeiboAI/VibeThinker-1.5B",
             DownloadSource.MODELSCOPE: "WeiboAI/VibeThinker-1.5B",
