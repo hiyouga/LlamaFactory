@@ -152,6 +152,7 @@ class AttentionFunction(StrEnum):
     SDPA = "sdpa"
     FA2 = "fa2"
     FA3 = "fa3"
+    TRITON_GQA = "triton_gqa"
 
 
 class EngineName(StrEnum):
