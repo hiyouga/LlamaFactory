@@ -532,7 +532,7 @@ class MiniMaxM2ToolUtils(ToolUtils):
             prompt += "\n</invoke>"
             function_texts.append(prompt)
 
-        return "\n".join(function_texts)
+        return "<minimax:tool_call>\n" + "\n".join(function_texts) + "\n</minimax:tool_call>"
 
     @override
     @staticmethod

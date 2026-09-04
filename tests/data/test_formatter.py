@@ -303,6 +303,54 @@ def test_qwen_multi_tool_extractor():
 
 
 @pytest.mark.runs_on(["cpu", "mps"])
+def test_minimax2_function_formatter():
+    formatter = FunctionFormatter(slots=["{{content}}"], tool_format="minimax2")
+    tool_calls = json.dumps(FUNCTION)
+    assert formatter.apply(content=tool_calls) == [
+        "<minimax:tool_call>\n"
+        '<invoke name="tool_name">\n'
+        '<parameter name="foo">bar</parameter>\n'
+        '<parameter name="size">10</parameter>\n'
+        "</invoke>\n"
+        "</minimax:tool_call>"
+    ]
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
+def test_minimax2_multi_function_formatter():
+    formatter = FunctionFormatter(slots=["{{content}}"], tool_format="minimax2")
+    tool_calls = json.dumps([FUNCTION] * 2)
+    invoke = '<invoke name="tool_name">\n<parameter name="foo">bar</parameter>\n<parameter name="size">10</parameter>\n</invoke>'
+    assert formatter.apply(content=tool_calls) == [f"<minimax:tool_call>\n{invoke}\n{invoke}\n</minimax:tool_call>"]
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
+def test_minimax2_tool_extractor():
+    formatter = ToolFormatter(tool_format="minimax2")
+    result = (
+        "<minimax:tool_call>\n"
+        '<invoke name="test_tool">\n'
+        '<parameter name="foo">bar</parameter>\n'
+        '<parameter name="size">10</parameter>\n'
+        "</invoke>\n"
+        "</minimax:tool_call>"
+    )
+    assert formatter.extract(result) == [("test_tool", """{"foo": "bar", "size": 10}""")]
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
+def test_minimax2_tool_round_trip():
+    formatter = FunctionFormatter(slots=["{{content}}"], tool_format="minimax2")
+    tool_formatter = ToolFormatter(tool_format="minimax2")
+    original = {"name": "my_func", "arguments": {"arg1": "hello", "arg2": 42, "arg3": True}}
+    formatted = formatter.apply(content=json.dumps(original))
+    extracted = tool_formatter.extract(formatted[0])
+    assert len(extracted) == 1
+    assert extracted[0][0] == original["name"]
+    assert json.loads(extracted[0][1]) == original["arguments"]
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
 def test_lfm2_function_formatter():
     formatter = FunctionFormatter(slots=["{{content}}<|im_end|>\n"], tool_format="lfm2")
     tool_calls = json.dumps(FUNCTION)
