@@ -4,6 +4,7 @@ services:
       dockerfile: ./docker/docker-xpu/Dockerfile
       context: ../..
       args:
+        PIP_INDEX: https://pypi.org/simple
         # The DLE base image determines which Intel GPU runtime (libze-intel-gpu)
         # is shipped. The runtime version must be >= the host driver version,
         # otherwise torch.xpu.device_count() returns 0:
