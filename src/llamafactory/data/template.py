@@ -65,7 +65,7 @@ class Template:
         tools: Optional[str] = None,
     ) -> tuple[list[int], list[int]]:
         r"""Return a single pair of token ids representing prompt and response respectively."""
-        encoded_messages = self._encode(tokenizer, messages, system, tools)
+        encoded_messages, _ = self._encode(tokenizer, messages, system, tools)
         prompt_ids = []
         for encoded_ids in encoded_messages[:-1]:
             prompt_ids += encoded_ids
@@ -82,7 +82,7 @@ class Template:
         discarding_history_cot: bool = False,  # only effect reasoning template
     ) -> list[tuple[list[int], list[int]]]:
         r"""Return multiple pairs of token ids representing prompts and responses respectively."""
-        encoded_messages = self._encode(tokenizer, messages, system, tools)
+        encoded_messages, _ = self._encode(tokenizer, messages, system, tools)
         return [(encoded_messages[i], encoded_messages[i + 1]) for i in range(0, len(encoded_messages), 2)]
 
     def extract_tool(self, content: str) -> Union[str, list["FunctionCall"]]:
@@ -135,28 +135,57 @@ class Template:
         messages: list[dict[str, str]],
         system: Optional[str],
         tools: Optional[str],
-    ) -> list[list[int]]:
+    ) -> tuple[list[list[int]], set[int]]:
         r"""Encode formatted inputs to pairs of token ids.
 
         Turn 0: prefix + system + query        resp
         Turn t: query                          resp.
         """
+        processed_messages = self._process_messages(messages)
+        if processed_messages is not None:
+            messages = processed_messages
+
+        rendered_messages = self._render(messages, system, tools)
+        self._process_rendered_messages(rendered_messages, messages)
+        processed_response_indices = self._process_thought_boundaries(rendered_messages, messages)
+        encoded_messages = [self._convert_elements_to_ids(tokenizer, elements) for elements in rendered_messages]
+        return encoded_messages, processed_response_indices
+
+    def _process_messages(self, messages: list[dict[str, str]]) -> Optional[list[dict[str, str]]]:
+        r"""Return model-specific messages before rendering, or use the original messages."""
+        return None
+
+    def _format_system_and_tools(self, system: str, tools: Optional[str]) -> Optional["SLOTS"]:
+        r"""Return model-specific system and tool elements, or use the default formatter."""
+        return None
+
+    def _render(
+        self,
+        messages: list[dict[str, str]],
+        system: Optional[str],
+        tools: Optional[str],
+    ) -> list["SLOTS"]:
+        r"""Render messages into formatter elements before tokenization."""
         system = system or self.default_system
-        encoded_messages = []
+        rendered_messages = []
         for i, message in enumerate(messages):
             elements = []
 
             if i == 0:
                 elements += self.format_prefix.apply()
                 if system or tools:
-                    tool_text = self.format_tools.apply(content=tools)[0] if tools else ""
-                    if tools and not system:
-                        # Tool prompts that separate themselves from the system message with a
-                        # leading newline would otherwise emit a blank line when there is no
-                        # system message to separate from.
-                        tool_text = tool_text.lstrip("\n")
+                    system_and_tools = self._format_system_and_tools(system, tools)
+                    if system_and_tools is None:
+                        tool_text = self.format_tools.apply(content=tools)[0] if tools else ""
+                        if tools and not system:
+                            # Tool prompts that separate themselves from the system message with a
+                            # leading newline would otherwise emit a blank line when there is no
+                            # system message to separate from.
+                            tool_text = tool_text.lstrip("\n")
 
-                    elements += self.format_system.apply(content=(system + tool_text))
+                        system_and_tools = self.format_system.apply(content=(system + tool_text))
+
+                    elements += system_and_tools
 
             if message["role"] == Role.USER:
                 elements += self.format_user.apply(content=message["content"], idx=str(i // 2))
@@ -171,9 +200,19 @@ class Template:
             else:
                 raise NotImplementedError("Unexpected role: {}".format(message["role"]))
 
-            encoded_messages.append(self._convert_elements_to_ids(tokenizer, elements))
+            rendered_messages.append(elements)
 
-        return encoded_messages
+        return rendered_messages
+
+    def _process_rendered_messages(self, rendered_messages: list["SLOTS"], messages: list[dict[str, str]]) -> None:
+        r"""Apply model-specific changes to formatter output before tokenization."""
+        return None
+
+    def _process_thought_boundaries(
+        self, rendered_messages: list["SLOTS"], messages: list[dict[str, str]]
+    ) -> set[int]:
+        r"""Process model-specific thought boundaries and return the handled response indices."""
+        return set()
 
     @staticmethod
     def _add_or_replace_eos_token(tokenizer: "PreTrainedTokenizer", eos_token: str) -> None:
@@ -342,45 +381,12 @@ class Template:
 @dataclass
 class MossVLTemplate(Template):
     @override
-    def _encode(
-        self,
-        tokenizer: "PreTrainedTokenizer",
-        messages: list[dict[str, str]],
-        system: Optional[str],
-        tools: Optional[str],
-    ) -> list[list[int]]:
-        system = system or self.default_system
-        encoded_messages = []
-        for i, message in enumerate(messages):
-            elements = []
+    def _format_system_and_tools(self, system: str, tools: Optional[str]) -> "SLOTS":
+        tool_text = self.format_tools.apply(content=tools)[0] if tools else ""
+        if tools and not system:
+            tool_text = tool_text.lstrip("\n")
 
-            if i == 0:
-                elements += self.format_prefix.apply()
-                if system or tools:
-                    tool_text = self.format_tools.apply(content=tools)[0] if tools else ""
-                    if tools and not system:
-                        tool_text = tool_text.lstrip("\n")
-
-                    elements += self.format_system.apply(content=(system + tool_text))
-
-            if message["role"] == Role.USER:
-                elements += self.format_user.apply(content=message["content"], idx=str(i // 2))
-            elif message["role"] == Role.ASSISTANT:
-                elements += self.format_assistant.apply(content=message["content"])
-            elif message["role"] == Role.OBSERVATION:
-                elements += self.format_observation.apply(content=message["content"])
-            elif message["role"] == Role.FUNCTION:
-                elements += self.format_function.apply(
-                    content=message["content"],
-                    thought_words=self.thought_words,
-                    tool_call_words=self.tool_call_words,
-                )
-            else:
-                raise NotImplementedError("Unexpected role: {}".format(message["role"]))
-
-            encoded_messages.append(self._convert_elements_to_ids(tokenizer, elements))
-
-        return encoded_messages
+        return self.format_system.apply(content=(system + tool_text))
 
 
 @dataclass
@@ -388,15 +394,14 @@ class Llama2Template(Template):
     r"""A template that fuse the system message to first user message."""
 
     @override
-    def _encode(
+    def _render(
         self,
-        tokenizer: "PreTrainedTokenizer",
         messages: list[dict[str, str]],
         system: str,
         tools: str,
-    ) -> list[list[int]]:
+    ) -> list["SLOTS"]:
         system = system or self.default_system
-        encoded_messages = []
+        rendered_messages = []
         for i, message in enumerate(messages):
             elements = []
 
@@ -418,9 +423,9 @@ class Llama2Template(Template):
             else:
                 raise NotImplementedError("Unexpected role: {}".format(message["role"]))
 
-            encoded_messages.append(self._convert_elements_to_ids(tokenizer, elements))
+            rendered_messages.append(elements)
 
-        return encoded_messages
+        return rendered_messages
 
     def _get_jinja_template(self, tokenizer: "PreTrainedTokenizer") -> str:
         prefix = self._convert_slots_to_jinja(self.format_prefix.apply(), tokenizer)
@@ -457,6 +462,10 @@ class Llama2Template(Template):
 class ReasoningTemplate(Template):
     r"""A template that add thought to assistant message."""
 
+    def _process_history_thoughts(self, messages: list[dict[str, str]], is_inference: bool) -> bool:
+        r"""Process model-specific historical reasoning and return whether it was handled."""
+        return False
+
     @override
     def encode_oneturn(
         self,
@@ -466,15 +475,21 @@ class ReasoningTemplate(Template):
         tools: Optional[str] = None,
     ) -> tuple[list[int], list[int]]:
         messages = deepcopy(messages)
-        if not self.preserve_thinking:
+        if not self.preserve_thinking and not self._process_history_thoughts(messages, is_inference=True):
             for i in range(1, len(messages) - 2, 2):
                 messages[i]["content"] = self.remove_thought(messages[i]["content"])
 
         if self.enable_thinking is False:  # remove all cot
             messages[-1]["content"] = self.remove_thought(messages[-1]["content"])
 
-        prompt_ids, response_ids = super().encode_oneturn(tokenizer, messages, system, tools)
-        if (
+        encoded_messages, processed_response_indices = self._encode(tokenizer, messages, system, tools)
+        prompt_ids = []
+        for encoded_ids in encoded_messages[:-1]:
+            prompt_ids += encoded_ids
+
+        response_index = len(encoded_messages) - 1
+        response_ids = encoded_messages[response_index]
+        if response_index not in processed_response_indices and (
             self.thought_words[0].strip() not in messages[-1]["content"]
             and self.thought_words[1].strip() not in messages[-1]["content"]
         ):  # add empty cot
@@ -499,18 +514,18 @@ class ReasoningTemplate(Template):
             for i in range(1, len(messages), 2):
                 messages[i]["content"] = self.remove_thought(messages[i]["content"])
 
-        if discarding_history_cot:
+        if discarding_history_cot and not self._process_history_thoughts(messages, is_inference=False):
             for i in range(1, len(messages) - 2, 2):  # preserve the last cot
                 messages[i]["content"] = self.remove_thought(messages[i]["content"])
 
-        encoded_messages = self._encode(tokenizer, messages, system, tools)
+        encoded_messages, processed_response_indices = self._encode(tokenizer, messages, system, tools)
         if discarding_history_cot:
             turn_indices = [len(messages) - 2]
         else:
             turn_indices = range(0, len(messages), 2)
 
         for i in turn_indices:
-            if (
+            if i + 1 not in processed_response_indices and (
                 self.thought_words[0].strip() not in messages[i + 1]["content"]
                 and self.thought_words[1].strip() not in messages[i + 1]["content"]
             ):  # add empty cot
