@@ -16,11 +16,12 @@
 
 Init Phase:
 
-1. Init batch generator.
-2. Init optimizer (deepspeed).
-3. Shard model.
-4. Init optimizer (fsdp).
-5. Init lr scheduler.
+1. Init loss plugin.
+2. Init batch generator.
+3. Init optimizer (deepspeed).
+4. Shard model.
+5. Init optimizer (fsdp).
+6. Init lr scheduler.
 
 Train Phase:
 1. Train Loop
@@ -28,6 +29,7 @@ Train Phase:
 """
 
 from abc import abstractmethod
+from collections.abc import Callable
 
 import torch
 import torch.nn.functional as F
@@ -76,6 +78,17 @@ class BaseTrainer:
         self.cp_size = DistributedInterface().get_world_size(Dim.CP)
         self.model_input_names = self.renderer.processor.model_input_names
         self._uses_mrope = model_uses_mrope(self.model.config)
+
+        self._loss_callback: Callable[[HFModel, BatchInput], Tensor] | None = None
+        if self.args.chunk_loss_size is not None:
+            from ..plugins.model_plugins.chunk_loss import LossPlugin
+
+            self._loss_callback = LossPlugin("chunk_loss")(
+                self.model,
+                chunk_size=self.args.chunk_loss_size,
+                device=self.device,
+                uses_mrope=self._uses_mrope,
+            )
 
         self._create_batch_generator()
         # Calculate num_training_steps: max_steps takes priority if set
@@ -158,10 +171,10 @@ class BaseTrainer:
 
     def _create_batch_generator(self) -> None:
         if (
-            self.args.batching_strategy == BatchingStrategy.PADDING_FREE
+            self.args.batching_strategy in (BatchingStrategy.PADDING_FREE, BatchingStrategy.DYNAMIC_PADDING_FREE)
             and getattr(self.model.config, "_attn_implementation", None) != "flash_attention_2"
         ):
-            raise ValueError("`padding_free` requires `flash_attn: flash_attention_2`.")
+            raise ValueError(f"`{self.args.batching_strategy}` requires `flash_attn: flash_attention_2`.")
 
         self.train_batch_generator = BatchGenerator(
             dataset=self.train_dataset,
@@ -239,7 +252,11 @@ class BaseTrainer:
 
     @abstractmethod
     def compute_loss(self, batch: BatchInput) -> Tensor:
-        """Compute the scalar loss."""
+        """Compute the scalar loss.
+
+        Subclasses must dispatch to a context-parallel loss path when ``cp_size > 1``,
+        or reject context parallelism during initialization.
+        """
         ...
 
     def fit(self) -> None:
@@ -265,14 +282,7 @@ class BaseTrainer:
                 step_valid_tokens = DistributedInterface().all_reduce(step_valid_tokens, op=ReduceOp.SUM)
                 num_micro = len(micro_batches)
                 for i, micro_batch in enumerate(micro_batches):
-                    if self.args.cp_size > 1:
-                        from ..plugins.model_plugins.parallelization.sequence_parallel import (
-                            SequenceParallelLossPlugin,
-                        )
-
-                        loss = SequenceParallelLossPlugin("sequence_parallel_loss")(self.model, micro_batch)
-                    else:
-                        loss = self.compute_loss(micro_batch)
+                    loss = self.compute_loss(micro_batch)
                     mini_step_valid_tokens = compute_valid_tokens([micro_batch])
                     # fsdp uses mean reduction so we need to scale the loss by dp_size
                     loss = loss * mini_step_valid_tokens * self.dp_size / (step_valid_tokens + 1e-6)

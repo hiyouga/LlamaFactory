@@ -23,6 +23,14 @@ from ..utils.types import BatchInput, Tensor
 
 class SFTTrainer(BaseTrainer):
     def compute_loss(self, batch: BatchInput) -> Tensor:
+        if self._loss_callback is not None:
+            return self._loss_callback(self.model, batch)
+
+        if self.args.cp_size > 1:
+            from ..plugins.model_plugins.parallelization.sequence_parallel import SequenceParallelLossPlugin
+
+            return SequenceParallelLossPlugin("sequence_parallel_loss")(self.model, batch)
+
         shift_loss_weights = batch["loss_weights"].to(self.device, non_blocking=True)[..., 1:]
         log_probs = self.compute_log_probs(self.model, batch)
         loss = (-log_probs * shift_loss_weights).sum() / (shift_loss_weights.sum() + 1e-6)
