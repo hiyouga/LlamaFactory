@@ -103,6 +103,7 @@ class ChatCompletionRequest(BaseModel):
     top_p: float | None = None
     n: int = 1
     presence_penalty: float | None = None
+    repetition_penalty: float | None = None
     max_tokens: int | None = None
     stop: str | list[str] | None = None
     stream: bool = False
