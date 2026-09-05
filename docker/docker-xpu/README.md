@@ -137,7 +137,7 @@ ERROR: Cannot uninstall pip 24.0, RECORD file not found. Hint: The package was i
 
 ### Multi-GPU and `OPTIM_TORCH`
 
-The image sets `ENV OPTIM_TORCH=0`. The launcher's default (`OPTIM_TORCH=1`) sets `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`, whose allocator path trips a Level-Zero driver bug on 2-GPU XPU runs (DDP segfault, FSDP2 hang). Disabling it costs <1% throughput. Re-enable per-run with `OPTIM_TORCH=1 llamafactory-cli train ...` to test it.
+The image sets `ENV OPTIM_TORCH=0`. The launcher's default (`OPTIM_TORCH=1`) sets `PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True`, whose allocator path trips a Level-Zero driver bug on 2-GPU XPU runs (DDP segfault, FSDP2 hang). Disabling it costs <1% throughput. Re-enable per-run with `OPTIM_TORCH=1 llamafactory-cli train ...` to test it. It is tracked in intel, will be update or remove this ENV when it is resolve with PyTorch or level zero etc fixes.
 
 ### Optional accelerators
 
