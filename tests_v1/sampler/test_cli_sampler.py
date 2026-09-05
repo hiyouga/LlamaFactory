@@ -19,7 +19,7 @@ from llamafactory.v1.core.model_engine import ModelEngine
 from llamafactory.v1.samplers.cli_sampler import SyncSampler
 
 
-@pytest.mark.runs_on(["cuda", "npu"])
+@pytest.mark.runs_on(["cuda", "npu", "xpu"])
 def test_sync_sampler():
     model_args = ModelArguments(model="Qwen/Qwen3-4B-Instruct-2507")
     sample_args = SampleArguments()

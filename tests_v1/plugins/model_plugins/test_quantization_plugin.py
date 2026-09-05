@@ -34,7 +34,7 @@ def check_quantization_status(model):
     return quantized_info
 
 
-@pytest.mark.runs_on(["cuda"])
+@pytest.mark.runs_on(["cuda", "xpu"])
 @pytest.mark.parametrize("name, quantization_bit", [("bnb", 4), ("auto", 4)])
 def test_quantization_plugin(name, quantization_bit):
     model_args = ModelArguments(
