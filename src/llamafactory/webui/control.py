@@ -14,6 +14,7 @@
 
 import json
 import os
+import re
 from typing import Any
 
 from transformers.trainer_utils import get_last_checkpoint
@@ -157,6 +158,24 @@ def get_trainer_info(lang: str, output_path: os.PathLike, do_train: bool) -> tup
     return running_log, running_progress, running_info
 
 
+def _is_checkpoint_dir(path: str) -> bool:
+    r"""Whether a directory holds a saved checkpoint."""
+    return any(os.path.isfile(os.path.join(path, name)) for name in CHECKPOINT_NAMES)
+
+
+def _checkpoint_sort_key(checkpoint: str) -> tuple[str, int, int, str]:
+    r"""Order checkpoints by trailing step number so that checkpoint-200 precedes checkpoint-1000.
+
+    Names without a trailing step fall back to a lexicographic sort, after the numbered ones.
+    """
+    parent, name = os.path.split(checkpoint)
+    match = re.search(r"-(\d+)$", name)
+    if match:
+        return (parent, 0, int(match.group(1)), "")
+
+    return (parent, 1, 0, name)
+
+
 def list_checkpoints(model_name: str, finetuning_type: str) -> "gr.Dropdown":
     r"""List all available checkpoints.
 
@@ -167,12 +186,25 @@ def list_checkpoints(model_name: str, finetuning_type: str) -> "gr.Dropdown":
     if model_name:
         save_dir = get_save_dir(model_name, finetuning_type)
         if save_dir and os.path.isdir(save_dir):
-            for checkpoint in os.listdir(save_dir):
-                if os.path.isdir(os.path.join(save_dir, checkpoint)) and any(
-                    os.path.isfile(os.path.join(save_dir, checkpoint, name)) for name in CHECKPOINT_NAMES
-                ):
-                    checkpoints.append(checkpoint)
+            # a checkpoint sits either directly under save_dir (`<run_dir>`, the final save of a
+            # finished run) or one level deeper (`<run_dir>/checkpoint-<step>`, an intermediate
+            # save_steps save). Both should show up, so scan exactly those two levels rather than
+            # walking the tree: save dirs also hold `runs/`, `wandb/` and exported models, and
+            # list_checkpoints fires on every model / finetuning-type change in the UI.
+            for run_name in sorted(os.listdir(save_dir)):
+                run_dir = os.path.join(save_dir, run_name)
+                if not os.path.isdir(run_dir):
+                    continue
 
+                if _is_checkpoint_dir(run_dir):
+                    checkpoints.append(run_name)
+
+                for step_name in os.listdir(run_dir):
+                    step_dir = os.path.join(run_dir, step_name)
+                    if os.path.isdir(step_dir) and _is_checkpoint_dir(step_dir):
+                        checkpoints.append(os.path.join(run_name, step_name))
+
+    checkpoints = sorted(checkpoints, key=_checkpoint_sort_key)
     if finetuning_type in PEFT_METHODS:
         return gr.Dropdown(value=[], choices=checkpoints, multiselect=True)
     else:
