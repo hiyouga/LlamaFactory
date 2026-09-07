@@ -3425,8 +3425,8 @@ register_model_group(
 register_model_group(
     models={
         "XingChen4-29B-A4B": {
-            DownloadSource.DEFAULT: "Tele-AI/XingChen4-29B-A4B",
-            DownloadSource.MODELSCOPE: "TeleAI/XingChen4-29B-A4B",
+            DownloadSource.DEFAULT: "XingChen-AGI/XingChen4-29B-A4B",
+            DownloadSource.MODELSCOPE: "XingChen-AGI/XingChen4-29B-A4B",
         },
     },
     template="xingchen4",
