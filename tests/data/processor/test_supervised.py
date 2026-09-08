@@ -17,10 +17,14 @@ import random
 
 import pytest
 from datasets import load_dataset
-from transformers import AutoTokenizer
+from tokenizers import Tokenizer, models, pre_tokenizers
+from transformers import AutoTokenizer, PreTrainedTokenizerFast
 
+from llamafactory.data.processor.supervised import PackedSupervisedDatasetProcessor, SupervisedDatasetProcessor
+from llamafactory.data.template import TEMPLATES
 from llamafactory.extras.constants import IGNORE_INDEX
 from llamafactory.extras.packages import is_transformers_version_greater_than
+from llamafactory.hparams import DataArguments
 from llamafactory.train.test_utils import load_dataset_module
 
 
@@ -70,6 +74,49 @@ def test_supervised_single_turn(num_samples: int):
         ref_label_ids = [IGNORE_INDEX] * prompt_len + ref_input_ids[prompt_len:]
         assert train_dataset["input_ids"][index] == ref_input_ids
         assert train_dataset["labels"][index] == ref_label_ids
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
+@pytest.mark.parametrize("template_name", ["bailing", "hy_dense_7b", "llama2"])
+@pytest.mark.parametrize("num_turns", [1, 3])
+@pytest.mark.parametrize("mask_history", [False, True])
+@pytest.mark.parametrize("packed", [False, True])
+def test_supervised_eos_history_labels(template_name: str, num_turns: int, mask_history: bool, packed: bool):
+    vocab = {"<unk>": 0, "<s>": 1, "</s>": 2}
+    vocab.update({char: index + 3 for index, char in enumerate(sorted(pre_tokenizers.ByteLevel.alphabet()))})
+    backend = Tokenizer(models.BPE(vocab=vocab, merges=[], unk_token="<unk>"))
+    backend.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
+    tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=backend, unk_token="<unk>", bos_token="<s>", eos_token="</s>", pad_token="<unk>"
+    )
+    template = TEMPLATES[template_name]
+    messages = []
+    responses = []
+    for turn in range(num_turns):
+        pair = [{"role": "user", "content": f"Question {turn}"}, {"role": "assistant", "content": f"Answer {turn}"}]
+        messages.extend(pair)
+        _, target_ids = template.encode_oneturn(tokenizer, pair)
+        responses.append(target_ids + ([tokenizer.eos_token_id] if template.efficient_eos else []))
+
+    data_args = DataArguments(cutoff_len=512, mask_history=mask_history, packing=packed, neat_packing=packed)
+    processor_cls = PackedSupervisedDatasetProcessor if packed else SupervisedDatasetProcessor
+    processor = processor_cls(template, tokenizer, None, data_args)
+    examples = {
+        "_prompt": [messages[:-1]],
+        "_response": [messages[-1:]],
+        "_system": [None],
+        "_tools": [None],
+        "_images": [None],
+        "_videos": [None],
+        "_audios": [None],
+    }
+    result = processor.preprocess_dataset(examples)
+    labels = result["labels"][0]
+    assert len(labels) == len(result["input_ids"][0])
+    # Compare exactly the target tokens consumed by shifted causal-LM loss.
+    trained_tokens = [token for token in labels[1:] if token != IGNORE_INDEX]
+    expected_responses = responses[-1:] if mask_history else responses
+    assert trained_tokens == [token for response in expected_responses for token in response]
 
 
 @pytest.mark.runs_on(["cpu", "mps"])
