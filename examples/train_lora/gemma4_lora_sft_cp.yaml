@@ -1,0 +1,47 @@
+### model
+model_name_or_path: google/gemma-4-31b-it
+trust_remote_code: true
+flash_attn: triton_gqa
+
+### method
+stage: sft
+do_train: true
+finetuning_type: lora
+lora_rank: 8
+lora_target: all
+deepspeed: examples/deepspeed/ds_z3_config.json
+ulysses_context_parallel_size: 4
+freeze_vision_tower: true
+freeze_multi_modal_projector: true
+
+### dataset
+dataset: identity,alpaca_en_demo
+template: gemma4
+cutoff_len: 32768
+packing: false
+preprocessing_num_workers: 16
+dataloader_num_workers: 4
+dataloader_drop_last: true
+
+### output
+output_dir: saves/gemma4-31b/lora/sft-cp4
+logging_steps: 1
+save_steps: 100
+overwrite_output_dir: true
+report_to: none
+
+### train
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 1
+average_tokens_across_devices: true
+learning_rate: 1.0e-4
+num_train_epochs: 1.0
+lr_scheduler_type: cosine
+warmup_ratio: 0.1
+bf16: true
+ddp_timeout: 180000000
+
+# Install the maintained fork's v0.2.0 release:
+# pip install "gemma-triton-flash-attn[hf] @ git+https://github.com/StevenShi-23/gemma-triton-flash-attn.git@v0.2.0"
+# Then launch on eight GPUs:
+# FORCE_TORCHRUN=1 llamafactory-cli train examples/train_lora/gemma4_lora_sft_cp.yaml

@@ -38,6 +38,7 @@ LlamaFactory Docs
    advanced/distributed/fsdp
    advanced/distributed/deepspeed
    advanced/distributed/parallel-dp-tp-ep-sp-cp
+   advanced/distributed/gemma4-context-parallel
    advanced/distributed/fsdpturbo-ep-efsdp
    advanced/custom-kernels/triton
    advanced/custom-kernels/fused-operators

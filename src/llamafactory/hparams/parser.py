@@ -32,7 +32,7 @@ from transformers.training_args import ParallelMode
 from transformers.utils import is_torch_bf16_gpu_available, is_torch_npu_available
 
 from ..extras import logging
-from ..extras.constants import CHECKPOINT_NAMES, EngineName
+from ..extras.constants import CHECKPOINT_NAMES, AttentionFunction, EngineName
 from ..extras.misc import check_dependencies, check_version, get_current_device, is_env_enabled
 from ..extras.packages import is_mcore_adapter_available, is_megatron_bridge_available
 from .data_args import DataArguments
@@ -90,6 +90,7 @@ if is_mcore_adapter_available() and is_env_enabled("USE_MCA"):
 else:
     _TRAIN_MCA_ARGS = []
     _TRAIN_MCA_CLS = tuple()
+
 
 _TRAIN_MBRIDGE_ARGS = [
     ModelArguments,
@@ -265,6 +266,10 @@ def _check_extra_dependencies(
     if model_args.enable_liger_kernel:
         check_version("liger-kernel", mandatory=True)
 
+    if model_args.flash_attn == AttentionFunction.TRITON_GQA:
+        check_version("transformers>=5.5.0")
+        check_version("gemma-triton-flash-attn>=0.2.0", mandatory=True)
+
     if model_args.mixture_of_depths is not None:
         check_version("mixture-of-depth>=1.1.6", mandatory=True)
 
@@ -416,6 +421,9 @@ def get_train_args(args: dict[str, Any] | list[str] | None = None) -> _TRAIN_CLS
 
     # Check arguments
     if finetuning_args.stage != "sft":
+        if getattr(training_args, "ulysses_context_parallel_size", 1) > 1:
+            raise ValueError("`ulysses_context_parallel_size > 1` currently supports the SFT stage only.")
+
         if training_args.predict_with_generate:
             raise ValueError("`predict_with_generate` cannot be set as True except SFT.")
 

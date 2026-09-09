@@ -140,7 +140,17 @@ class Fp8Arguments:
 
 
 @dataclass
-class TrainingArguments(ProfilerArguments, Fp8Arguments, RayArguments, BaseTrainingArguments):
+class ParallelArguments:
+    r"""Arguments pertaining to distributed parallelism."""
+
+    ulysses_context_parallel_size: int = field(
+        default=1,
+        metadata={"help": "Number of ranks in each Ulysses context-parallel group."},
+    )
+
+
+@dataclass
+class TrainingArguments(ParallelArguments, ProfilerArguments, Fp8Arguments, RayArguments, BaseTrainingArguments):
     r"""Arguments pertaining to the trainer."""
 
     overwrite_output_dir: bool = field(
@@ -151,3 +161,5 @@ class TrainingArguments(ProfilerArguments, Fp8Arguments, RayArguments, BaseTrain
     def __post_init__(self):
         RayArguments.__post_init__(self)
         BaseTrainingArguments.__post_init__(self)
+        if self.ulysses_context_parallel_size < 1:
+            raise ValueError("`ulysses_context_parallel_size` must be greater than 0.")
