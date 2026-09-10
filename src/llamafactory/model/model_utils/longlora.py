@@ -317,7 +317,7 @@ def llama_sdpa_attention_forward(
     if attention_mask is not None:
         causal_mask = causal_mask[:, :, :, : key_states.shape[-2]]
 
-    if query_states.device.type == "cuda" and causal_mask is not None:  # avoid pytorch bug
+    if query_states.device.type in ("cuda", "npu") and causal_mask is not None:  # avoid pytorch bug
         query_states = query_states.contiguous()
         key_states = key_states.contiguous()
         value_states = value_states.contiguous()
