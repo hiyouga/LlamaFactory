@@ -3424,12 +3424,12 @@ register_model_group(
 
 register_model_group(
     models={
-        "XingChen4-29B-A4B": {
-            DownloadSource.DEFAULT: "XingChen-AGI/XingChen4-29B-A4B",
-            DownloadSource.MODELSCOPE: "XingChen-AGI/XingChen4-29B-A4B",
+        "Xing4.0-29B-A4B": {
+            DownloadSource.DEFAULT: "XingChen-AGI/Xing4.0-29B-A4B",
+            DownloadSource.MODELSCOPE: "XingChen-AGI/Xing4.0-29B-A4B",
         },
     },
-    template="xingchen4",
+    template="xing4_0",
 )
 
 

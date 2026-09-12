@@ -2566,7 +2566,7 @@ register_template(
 
 
 register_template(
-    name="xingchen4",
+    name="xing4_0",
     format_user=StringFormatter(slots=["<_user>{{content}}<_bot></think>"]),
     format_assistant=StringFormatter(slots=["{{content}}", {"eos_token"}, "\n"]),
     format_system=StringFormatter(slots=["<_system>{{content}}"]),
