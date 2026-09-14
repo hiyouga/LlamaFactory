@@ -974,7 +974,7 @@ register_template(
     format_prefix=EmptyFormatter(slots=[{"bos_token"}]),
     stop_words=["<｜hy_eos｜>"],
     replace_eos=True,
-    thought_words=("<think>", "</think>"),
+    thought_words=("<think:opensource>", "</think:opensource>"),
     template_class=ReasoningTemplate,
 )
 
