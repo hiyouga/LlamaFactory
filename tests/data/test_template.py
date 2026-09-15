@@ -85,6 +85,7 @@ def _check_template(
     prompt_str: str,
     answer_str: str,
     messages: list[dict[str, str]] = MESSAGES,
+    system: str | None = None,
 ) -> None:
     r"""Check template.
 
@@ -94,16 +95,18 @@ def _check_template(
         prompt_str: the string corresponding to the prompt part.
         answer_str: the string corresponding to the answer part.
         messages: the list of messages.
+        system: the optional system message.
 
     """
     tokenizer = AutoTokenizer.from_pretrained(model_id)
-    content_str = tokenizer.apply_chat_template(messages, tokenize=False)
-    content_ids = tokenizer.apply_chat_template(messages, tokenize=True)
+    reference_messages = ([{"role": "system", "content": system}] if system else []) + messages
+    content_str = tokenizer.apply_chat_template(reference_messages, tokenize=False)
+    content_ids = tokenizer.apply_chat_template(reference_messages, tokenize=True)
     if is_transformers_version_greater_than("5.0.0"):
         content_ids = content_ids["input_ids"]
 
     template = get_template_and_fix_tokenizer(tokenizer, DataArguments(template=template_name))
-    prompt_ids, answer_ids = template.encode_oneturn(tokenizer, messages)
+    prompt_ids, answer_ids = template.encode_oneturn(tokenizer, messages, system=system)
     assert content_str == prompt_str + answer_str
     assert content_ids == prompt_ids + answer_ids
     _check_tokenization(tokenizer, (prompt_ids, answer_ids), (prompt_str, answer_str))
@@ -404,6 +407,41 @@ def test_phi4_template():
     )
     answer_str = f"{MESSAGES[3]['content']}<|im_end|>"
     _check_template("microsoft/phi-4", "phi4", prompt_str, answer_str)
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
+def test_llama3_chinese_template_consistency():
+    target_models = {
+        "Llama-3-8B-Chinese-Chat": "shenzhi-wang/Llama3-8B-Chinese-Chat",
+        "Llama-3-70B-Chinese-Chat": "shenzhi-wang/Llama3-70B-Chinese-Chat",
+    }
+    unaffected_models = ["Llama-3.1-8B-Chinese-Chat", "Llama-3.1-70B-Chinese-Chat"]
+    for model_name in target_models:
+        assert DEFAULT_TEMPLATE[model_name] == "llama3_zh"
+    for model_name in unaffected_models:
+        assert DEFAULT_TEMPLATE[model_name] == "llama3"
+
+    assert TEMPLATES["llama3_zh"].default_system == "You are a helpful assistant."
+    assert TEMPLATES["llama3"].default_system == ""
+
+    messages = [
+        {"role": "user", "content": "A box contains 12 red markers and 8 blue markers."},
+        {"role": "assistant", "content": "There are 20 markers."},
+        {"role": "user", "content": "If 5 are removed, how many remain?"},
+        {"role": "assistant", "content": "15 markers remain."},
+    ]
+    model_id = target_models["Llama-3-8B-Chinese-Chat"]
+    for system in (None, "You are a concise math assistant."):
+        system_text = system or "You are a helpful assistant."
+        prompt_str = (
+            f"<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n\n{system_text}<|eot_id|>"
+            f"<|start_header_id|>user<|end_header_id|>\n\n{messages[0]['content']}<|eot_id|>"
+            f"<|start_header_id|>assistant<|end_header_id|>\n\n{messages[1]['content']}<|eot_id|>"
+            f"<|start_header_id|>user<|end_header_id|>\n\n{messages[2]['content']}<|eot_id|>"
+            "<|start_header_id|>assistant<|end_header_id|>\n\n"
+        )
+        answer_str = f"{messages[3]['content']}<|eot_id|>"
+        _check_template(model_id, "llama3_zh", prompt_str, answer_str, messages=messages, system=system)
 
 
 @pytest.mark.runs_on(["cpu", "mps"])
