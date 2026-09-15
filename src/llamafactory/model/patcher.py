@@ -492,8 +492,8 @@ def patch_model(
         ]:
             if is_torch_npu_available():
                 patch_qwen3_5_forward_npu(model)
-            elif is_torch_cuda_available() and model_args.flash_attn == "fa2":
-                # this is the patch for packing/neat_packing for GPU GDN. And when setting packing, flash_attn must be fa2.
+            elif is_torch_cuda_available() and model_args.flash_attn in ("fa2", "fa3", "fa4"):
+                # Pass packed sequence boundaries to GPU GDN for all supported FlashAttention versions.
                 patch_qwen3_5_forward_gpu(model)
 
     if not model_args.use_unsloth:

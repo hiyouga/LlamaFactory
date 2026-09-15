@@ -12,17 +12,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
 import inspect
 import os
 from collections import Counter
+from types import SimpleNamespace
 
 import pytest
 import torch
 from PIL import Image
-from transformers import AutoConfig, AutoModelForImageTextToText
+from tokenizers import Tokenizer
+from tokenizers.models import WordLevel
+from transformers import AutoConfig, AutoModelForImageTextToText, PreTrainedTokenizerFast
 
 from llamafactory.data import get_template_and_fix_tokenizer
-from llamafactory.data.collator import MultiModalDataCollatorForSeq2Seq, prepare_4d_attention_mask
+from llamafactory.data.collator import (
+    MultiModalDataCollatorForSeq2Seq,
+    SFTDataCollatorWith4DAttentionMask,
+    prepare_4d_attention_mask,
+)
+from llamafactory.data.template import TEMPLATES
 from llamafactory.extras.constants import IGNORE_INDEX
 from llamafactory.extras.packages import is_transformers_version_greater_than
 from llamafactory.hparams import get_infer_args
@@ -30,6 +39,115 @@ from llamafactory.model import load_tokenizer
 
 
 TINY_LLAMA3 = os.getenv("TINY_LLAMA3", "llamafactory/tiny-random-Llama-3")
+
+
+@pytest.fixture
+def sft_collator_factory():
+    r"""Construct a real collator with a small tokenizer that needs no downloads."""
+    vocab = {"[PAD]": 0, "[UNK]": 1, **{f"t{i}": i for i in range(2, 32)}}
+    tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=Tokenizer(WordLevel(vocab, unk_token="[UNK]")),
+        pad_token="[PAD]",
+        unk_token="[UNK]",
+    )
+
+    def make(attn_implementation, **kwargs):
+        options = {"block_diag_attn": True, "neat_packing": True, **kwargs}
+        return SFTDataCollatorWith4DAttentionMask(
+            tokenizer=tokenizer,
+            template=TEMPLATES["default"],
+            pad_to_multiple_of=8,
+            attn_implementation=attn_implementation,
+            **options,
+        )
+
+    return make
+
+
+@pytest.fixture
+def packed_sft_features():
+    return [
+        {
+            "input_ids": [2, 3, 4, 5, 6, 0, 0],
+            "attention_mask": [1, 1, 2, 2, 2, 0, 0],
+            "labels": [IGNORE_INDEX, 3, IGNORE_INDEX, 5, 6, IGNORE_INDEX, IGNORE_INDEX],
+            "position_ids": [0, 1, 0, 1, 2, 0, 0],
+            "token_type_ids": [0, 0, 1, 1, 1, 0, 0],
+        }
+    ]
+
+
+@pytest.mark.parametrize("implementation", ["flash_attention_2", "flash_attention_3", "flash_attention_4"])
+def test_sft_collator_flash_neat_packing(sft_collator_factory, packed_sft_features, implementation):
+    batch = sft_collator_factory(implementation)(copy.deepcopy(packed_sft_features))
+    assert batch["attention_mask"] is None
+    for key in ("input_ids", "labels", "position_ids", "token_type_ids"):
+        expected = torch.tensor([packed_sft_features[0][key][:5]])
+        torch.testing.assert_close(batch[key], expected)
+
+
+@pytest.mark.parametrize("implementation", ["eager", "sdpa", None, "kernels-community/vllm-flash-attn3"])
+def test_sft_collator_non_flash_block_mask(sft_collator_factory, packed_sft_features, implementation):
+    batch = sft_collator_factory(implementation)(packed_sft_features)
+    mask = batch["attention_mask"]
+    assert mask.shape == (1, 1, 8, 8)
+    assert mask[0, 0, 1, 0] == 0
+    assert mask[0, 0, 2, 0] == torch.finfo(mask.dtype).min  # no cross-sample attention
+    assert mask[0, 0, 2, 3] == torch.finfo(mask.dtype).min  # no future attention
+    assert mask[0, 0, 4, 3] == 0
+    assert (mask[..., 5:] == torch.finfo(mask.dtype).min).all()
+    torch.testing.assert_close(batch["position_ids"], torch.tensor([[0, 1, 0, 1, 2, 0, 0, 0]]))
+
+
+@pytest.mark.parametrize("implementation", ["flash_attention_2", "flash_attention_3", "flash_attention_4"])
+def test_sft_collator_flash_without_neat_packing(sft_collator_factory, implementation):
+    features = [
+        {"input_ids": [2, 3, 4], "attention_mask": [1, 1, 1], "labels": [2, 3, 4]},
+        {"input_ids": [5], "attention_mask": [1], "labels": [5]},
+    ]
+    batch = sft_collator_factory(implementation, neat_packing=False)(features)
+    torch.testing.assert_close(
+        batch["attention_mask"], torch.tensor([[1, 1, 1, 0, 0, 0, 0, 0], [1, 0, 0, 0, 0, 0, 0, 0]])
+    )
+
+
+@pytest.mark.parametrize("implementation", ["flash_attention_2", "flash_attention_3", "flash_attention_4"])
+@pytest.mark.parametrize("has_dummy_image", [False, True])
+def test_sft_collator_flash_multimodal_alignment(sft_collator_factory, monkeypatch, implementation, has_dummy_image):
+    # Isolate SFT postprocessing from model-specific image/position preprocessing.
+    features = {
+        "input_ids": torch.tensor([[2, 3, 4, 5, 6, 0, 0, 0]]),
+        "labels": torch.tensor([[2, 3, 4, 5, 6, -100, -100, -100]]),
+        "attention_mask": torch.tensor([[1, 1, 2, 2, 2, 0, 0, 0]]),
+        "position_ids": torch.arange(24).reshape(3, 1, 8),
+        "cross_attention_mask": torch.ones(1, 8, 2, 1),
+        "pixel_values": torch.ones(2, 3, 4, 4),
+        "has_dummy_image": has_dummy_image,
+    }
+    monkeypatch.setattr(MultiModalDataCollatorForSeq2Seq, "__call__", lambda self, items: copy.deepcopy(features))
+    batch = sft_collator_factory(implementation, compute_dtype=torch.bfloat16)([])
+    length = 8 if has_dummy_image else 5
+    assert batch["attention_mask"] is None
+    assert "has_dummy_image" not in batch
+    torch.testing.assert_close(batch["input_ids"], features["input_ids"][:, :length])
+    torch.testing.assert_close(batch["labels"], features["labels"][:, :length])
+    torch.testing.assert_close(batch["position_ids"], features["position_ids"][..., :length])
+    assert batch["cross_attention_mask"].shape == (1, length, 2, 1)
+    torch.testing.assert_close(batch["pixel_values"], features["pixel_values"].to(torch.bfloat16))
+
+
+@pytest.mark.parametrize("implementation", ["flash_attention_2", "flash_attention_3", "flash_attention_4"])
+@pytest.mark.parametrize("model_type", ["gemma4", "gpt_oss"])
+def test_sft_collator_flash_model_restrictions(sft_collator_factory, implementation, model_type):
+    with pytest.raises(ValueError, match="Neat packing is not supported"):
+        sft_collator_factory(implementation, model=SimpleNamespace(config=SimpleNamespace(model_type=model_type)))
+
+
+@pytest.mark.parametrize("implementation", ["flash_attention_2", "flash_attention_3", "flash_attention_4"])
+def test_sft_collator_flash_packed_batch_size(sft_collator_factory, packed_sft_features, implementation):
+    features = copy.deepcopy(packed_sft_features) + copy.deepcopy(packed_sft_features)
+    with pytest.raises(AssertionError, match="bsz should be 1"):
+        sft_collator_factory(implementation)(features)
 
 
 @pytest.mark.runs_on(["cpu", "mps"])

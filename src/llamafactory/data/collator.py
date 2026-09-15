@@ -18,7 +18,7 @@
 import copy
 import inspect
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 import numpy as np
 import torch
@@ -26,7 +26,7 @@ import torch.nn.functional as F
 from peft import PeftModel
 from transformers import DataCollatorForSeq2Seq
 
-from ..extras.constants import AUDIO_PLACEHOLDER, IGNORE_INDEX, IMAGE_PLACEHOLDER, MROPE_MODELS
+from ..extras.constants import AUDIO_PLACEHOLDER, IGNORE_INDEX, IMAGE_PLACEHOLDER, MROPE_MODELS, is_flash_attention
 from ..extras.packages import is_pillow_available
 
 
@@ -503,19 +503,19 @@ class SFTDataCollatorWith4DAttentionMask(MultiModalDataCollatorForSeq2Seq):
     r"""Data collator for 4d attention mask."""
 
     block_diag_attn: bool = False
-    attn_implementation: Literal["eager", "sdpa", "flash_attention_2"] = "eager"
+    attn_implementation: Optional[str] = "eager"
     compute_dtype: "torch.dtype" = torch.float32
     neat_packing: bool = False
 
     def __post_init__(self):
         super().__post_init__()
-        if self.neat_packing and self.attn_implementation == "flash_attention_2":
+        if self.neat_packing and is_flash_attention(self.attn_implementation):
             if self.model is not None and getattr(self.model.config, "model_type", None) in ["gemma4", "gpt_oss"]:
                 raise ValueError("Neat packing is not supported for gemma4, gpt_oss models for now.")
 
     @staticmethod
     def _unpad_packed_features(features: dict[str, Any]) -> None:
-        r"""Trim padded positions for packed FA2 batches."""
+        r"""Trim padded positions for packed FlashAttention batches."""
         attention_mask = features.get("attention_mask")
         if not torch.is_tensor(attention_mask) or attention_mask.dim() != 2 or attention_mask.size(0) != 1:
             return
@@ -530,7 +530,11 @@ class SFTDataCollatorWith4DAttentionMask(MultiModalDataCollatorForSeq2Seq):
             if not torch.is_tensor(value):
                 continue
 
-            if key == "position_ids" and value.size(-1) == seq_len:
+            if key == "position_ids" and value.size(-1) <= seq_len:
+                # Tokenizer padding does not extend position_ids along with input_ids.
+                pad_len = seq_len - value.size(-1)
+                if pad_len > 0:
+                    value = F.pad(value, (0, pad_len), value=0)
                 features[key] = value.index_select(-1, non_padding_indices)
             elif (
                 key == "cross_attention_mask" and value.dim() >= 2 and value.size(0) == 1 and value.size(1) == seq_len
@@ -542,10 +546,10 @@ class SFTDataCollatorWith4DAttentionMask(MultiModalDataCollatorForSeq2Seq):
     def __call__(self, features: list[dict[str, Any]]) -> dict[str, "torch.Tensor"]:
         features = super().__call__(features)
         has_dummy_image = features.pop("has_dummy_image", False)
-        if self.block_diag_attn and self.attn_implementation != "flash_attention_2":
+        if self.block_diag_attn and not is_flash_attention(self.attn_implementation):
             features["attention_mask"] = prepare_4d_attention_mask(features["attention_mask"], self.compute_dtype)
 
-        if self.neat_packing and self.attn_implementation == "flash_attention_2":  # FIXME compatibility fa3/fa4
+        if self.neat_packing and is_flash_attention(self.attn_implementation):
             assert features["input_ids"].shape[0] == 1, "bsz should be 1 for neat packing"
             if not has_dummy_image:
                 self._unpad_packed_features(features)
@@ -554,7 +558,7 @@ class SFTDataCollatorWith4DAttentionMask(MultiModalDataCollatorForSeq2Seq):
         else:
             # `DataCollatorForSeq2Seq(pad_to_multiple_of=...)` pads `input_ids`/`attention_mask`
             # but leaves `position_ids` untouched (it is not in `model_input_names`). On the
-            # non-FA2 packing path we do not unpad, so `position_ids` stays shorter than
+            # non-FlashAttention packing path we do not unpad, so `position_ids` stays shorter than
             # `input_ids`, which makes cos/sin shorter than query and crashes
             # `apply_rotary_pos_emb`. Right-pad `position_ids` to the padded length to match.
             position_ids = features.get("position_ids")

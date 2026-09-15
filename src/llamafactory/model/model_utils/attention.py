@@ -12,10 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import functools
+import inspect
 from typing import TYPE_CHECKING
+
+import torch
 
 from ...extras import logging
 from ...extras.constants import AttentionFunction
+from ...extras.misc import check_version
 from ...extras.packages import is_torch_version_greater_than
 
 
@@ -26,6 +31,36 @@ if TYPE_CHECKING:
 
 
 logger = logging.get_logger(__name__)
+
+
+def _patch_fa4_varlen() -> None:
+    r"""Normalize the scalar sequence lengths passed by transformers to FA4's integer API.
+
+    Transformers can pass tensors on padding/position-id paths. FA4 b30 protects its JIT
+    cache keys from these tensors, but its TVM-FFI forward still requires a Python integer.
+    """
+    import flash_attn.cute as cute_package
+    from flash_attn.cute import interface
+
+    original = interface.flash_attn_varlen_func
+    if getattr(original, "_llamafactory_int_seqlen_patched", False):
+        return
+
+    signature = inspect.signature(original)
+
+    @functools.wraps(original)
+    def flash_attn_varlen_with_int_seqlen(*args, **kwargs):
+        bound = signature.bind(*args, **kwargs)
+        for name in ("max_seqlen_q", "max_seqlen_k"):
+            value = bound.arguments.get(name)
+            if isinstance(value, torch.Tensor):
+                bound.arguments[name] = int(value.item())
+
+        return original(*bound.args, **bound.kwargs)
+
+    flash_attn_varlen_with_int_seqlen._llamafactory_int_seqlen_patched = True
+    interface.flash_attn_varlen_func = flash_attn_varlen_with_int_seqlen
+    cute_package.flash_attn_varlen_func = flash_attn_varlen_with_int_seqlen
 
 
 def configure_attn_implementation(config: "PretrainedConfig", model_args: "ModelArguments") -> None:
@@ -90,6 +125,21 @@ def configure_attn_implementation(config: "PretrainedConfig", model_args: "Model
             return
 
         requested_attn_implementation = "flash_attention_3"
+    elif model_args.flash_attn == AttentionFunction.FA4:
+        try:
+            from transformers.utils import is_flash_attn_4_available
+        except ImportError:
+            logger.warning_rank0("This transformers version does not support FlashAttention-4; please upgrade.")
+            return
+
+        if not is_flash_attn_4_available():
+            logger.warning_rank0("FlashAttention-4 is not installed or unavailable.")
+            return
+
+        # Earlier releases have incorrect backward results for some head dimensions on Blackwell.
+        check_version("flash-attn-4>=4.0.0b30", mandatory=True)
+        _patch_fa4_varlen()
+        requested_attn_implementation = "flash_attention_4"
     else:
         raise NotImplementedError(f"Unknown attention type: {model_args.flash_attn}")
 
@@ -123,6 +173,8 @@ def print_attn_implementation(config: "PretrainedConfig") -> None:
         logger.info_rank0("Using FlashAttention-2 for faster training and inference.")
     elif attn_implementation == "flash_attention_3":
         logger.info_rank0("Using FlashAttention-3 for faster training and inference.")
+    elif attn_implementation == "flash_attention_4":
+        logger.info_rank0("Using FlashAttention-4 for faster training and inference.")
     elif attn_implementation == "sdpa":
         logger.info_rank0("Using torch SDPA for faster training and inference.")
     else:

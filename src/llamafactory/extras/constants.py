@@ -152,6 +152,12 @@ class AttentionFunction(StrEnum):
     SDPA = "sdpa"
     FA2 = "fa2"
     FA3 = "fa3"
+    FA4 = "fa4"
+
+
+def is_flash_attention(implementation: str | None) -> bool:
+    r"""Whether an implementation uses the native FlashAttention packed-batch contract."""
+    return isinstance(implementation, str) and implementation.startswith("flash_attention_")
 
 
 class EngineName(StrEnum):

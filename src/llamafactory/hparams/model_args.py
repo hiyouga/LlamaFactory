@@ -116,7 +116,7 @@ class BaseModelArguments:
     )
     flash_attn: AttentionFunction = field(
         default=AttentionFunction.AUTO,
-        metadata={"help": "Enable FlashAttention for faster training and inference."},
+        metadata={"help": "Enable FlashAttention for faster training and inference (auto/disabled/sdpa/fa2/fa3/fa4)."},
     )
     shift_attn: bool = field(
         default=False,
