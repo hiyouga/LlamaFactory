@@ -245,6 +245,57 @@ def test_gemma4_plugin():
 
 
 @pytest.mark.runs_on(["cpu", "mps"])
+def test_glm4v_plugin():
+    tokenizer_module = _load_tokenizer_module(model_name_or_path="zai-org/GLM-4.1V-9B-Thinking")
+    processor = tokenizer_module["processor"]
+    glm4v_plugin = get_mm_plugin(name="glm4v", image_token="<|image|>", video_token="<|video|>")
+    merge_length: int = getattr(processor, "image_processor").merge_size ** 2
+
+    def _video(num_frames: int, frame_seqlen: int = 4) -> str:
+        frames = "".join(
+            f"<|begin_of_image|>{'<|image|>' * frame_seqlen}<|end_of_image|>{timestamp}"
+            for timestamp in range(num_frames)
+        )
+        return f"<|begin_of_video|>{frames}<|end_of_video|>"
+
+    # the video processor merges frames in pairs, so 4 frames become 2 and 8 frames become 4
+    videos = [
+        [Image.new("RGB", (32, 32), (255, 255, 255))] * 4,
+        [Image.new("RGB", (32, 32), (255, 255, 255))] * 8,
+    ]
+    assert glm4v_plugin.process_messages(VIDEO_MESSAGES, NO_IMAGES, videos[:1], NO_AUDIOS, processor) == [
+        {key: value.replace("<video>", _video(2)) for key, value in message.items()} for message in VIDEO_MESSAGES
+    ]
+
+    messages = [
+        {"role": "user", "content": "Compare these videos: <video> and <video>."},
+        {"role": "assistant", "content": "They are different."},
+    ]
+    processed_messages = glm4v_plugin.process_messages(messages, NO_IMAGES, videos, NO_AUDIOS, processor)
+    assert processed_messages == [
+        {"role": "user", "content": f"Compare these videos: {_video(2)} and {_video(4)}."},
+        {"role": "assistant", "content": "They are different."},
+    ]
+
+    # the placeholder budget must match what the vision tower emits, or training fails on a shape mismatch
+    video_grid_thw = glm4v_plugin._get_mm_inputs(NO_IMAGES, videos, NO_AUDIOS, processor)["video_grid_thw"]
+    assert processed_messages[0]["content"].count("<|image|>") == sum(
+        int(grid.prod()) // merge_length for grid in video_grid_thw
+    )
+
+    # a timestamp list shorter than the frame count repeats its tail rather than shortening the prompt
+    assert glm4v_plugin._get_frame_timestamps({"timestamps": [[0, 1]]}, 0, 4) == [0, 1, 1, 1]
+    assert glm4v_plugin._get_frame_timestamps({}, 0, 2) == [0, 0]
+
+    # the metadata only drives prompt expansion, the model batch must not carry it
+    assert set(
+        glm4v_plugin.get_mm_inputs(
+            NO_IMAGES, videos, NO_AUDIOS, NO_IMGLENS, [2], NO_AUDLENS, BATCH_IDS, processor
+        ).keys()
+    ) == {"pixel_values_videos", "video_grid_thw"}
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
 @pytest.mark.skipif(not is_transformers_version_greater_than("4.52.0"), reason="Requires transformers>=4.52.0")
 def test_internvl_plugin():
     image_seqlen = 256

@@ -2807,12 +2807,50 @@ class GLM4VPlugin(Qwen2VLPlugin):
             )
             # prepare video metadata
             video_metadata = [
-                {"fps": 2, "duration": duration, "total_frames": len(video)}
+                {
+                    "fps": getattr(processor, "video_fps", 2.0),
+                    "duration": duration,
+                    "total_num_frames": len(video),
+                }
                 for video, duration in zip(video_data["videos"], video_data["durations"])
             ]
-            mm_inputs.update(video_processor(images=None, videos=video_data["videos"], video_metadata=video_metadata))
+            mm_inputs.update(
+                video_processor(
+                    videos=video_data["videos"],
+                    video_metadata=video_metadata,
+                    return_metadata=True,
+                )
+            )
 
         return mm_inputs
+
+    @staticmethod
+    def _get_frame_timestamps(mm_inputs: dict[str, Any], video_index: int, num_frames: int) -> list[float]:
+        """Return the timestamp shown next to each kept frame of the given video.
+
+        transformers<4.57 answers with a `timestamps` key holding one already merged list per
+        video, later versions answer with `video_metadata` whose `timestamps` list one entry per
+        frame, which mrope merges in pairs. Pad the tail the way the reference processor does so a
+        shorter timestamp list never shortens the prompt.
+        """
+        timestamps = mm_inputs.get("timestamps")
+        if timestamps is not None:
+            if hasattr(timestamps, "tolist"):
+                timestamps = timestamps.tolist()
+
+            selected = list(timestamps[video_index]) if video_index < len(timestamps) else []
+        else:
+            video_metadata = mm_inputs.get("video_metadata") or []
+            if video_index < len(video_metadata):
+                selected = list(video_metadata[video_index].timestamps[::2])  # mrope
+            else:
+                selected = []
+
+        selected = selected[:num_frames]
+        while len(selected) < num_frames:
+            selected.append(selected[-1] if selected else 0)
+
+        return selected
 
     @override
     def process_messages(
@@ -2834,29 +2872,10 @@ class GLM4VPlugin(Qwen2VLPlugin):
             mm_inputs = self._get_mm_inputs(images, videos, audios, processor)
             image_grid_thw = mm_inputs.get("image_grid_thw", [])
             video_grid_thw = mm_inputs.get("video_grid_thw", [])
-            num_frames = video_grid_thw[0][0] if len(video_grid_thw) > 0 else 0  # hard code for now
-            timestamps = mm_inputs.get("timestamps", [])
-
-            if hasattr(timestamps, "tolist"):
-                timestamps = timestamps.tolist()
-
-            if not timestamps:
-                timestamps_list = []
-            elif isinstance(timestamps[0], list):
-                timestamps_list = timestamps[0]
-            else:
-                timestamps_list = timestamps
-
-            unique_timestamps = timestamps_list.copy()
-            selected_timestamps = unique_timestamps[:num_frames]
-            while len(selected_timestamps) < num_frames:
-                selected_timestamps.append(selected_timestamps[-1] if selected_timestamps else 0)
-
         else:
+            mm_inputs = {}
             image_grid_thw = [None] * len(images)
             video_grid_thw = [None] * len(videos)
-            num_frames = 0
-            selected_timestamps = [0]
 
         for message in messages:
             content = message["content"]
@@ -2868,18 +2887,18 @@ class GLM4VPlugin(Qwen2VLPlugin):
                 num_image_tokens += 1
 
             while VIDEO_PLACEHOLDER in content:
-                video_structure = ""
-                for frame_index in range(num_frames):
-                    video_seqlen = (
-                        video_grid_thw[num_video_tokens][1:].prod() // merge_length if self.expand_mm_tokens else 1
-                    )
-                    timestamp_sec = selected_timestamps[frame_index]
-                    frame_structure = (
-                        f"<|begin_of_image|>{self.image_token * video_seqlen}<|end_of_image|>{timestamp_sec}"
-                    )
-                    video_structure += frame_structure
-
-                if not self.expand_mm_tokens:
+                if self.expand_mm_tokens:
+                    video_grid = video_grid_thw[num_video_tokens]
+                    num_frames = int(video_grid[0])
+                    frame_seqlen = int(video_grid[1:].prod()) // merge_length
+                    timestamps = self._get_frame_timestamps(mm_inputs, num_video_tokens, num_frames)
+                    video_structure = ""
+                    for frame_index in range(num_frames):
+                        video_structure += (
+                            f"<|begin_of_image|>{self.image_token * frame_seqlen}<|end_of_image|>"
+                            f"{int(timestamps[frame_index])}"
+                        )
+                else:
                     video_structure = self.video_token
 
                 content = content.replace(VIDEO_PLACEHOLDER, f"<|begin_of_video|>{video_structure}<|end_of_video|>", 1)
@@ -2904,6 +2923,7 @@ class GLM4VPlugin(Qwen2VLPlugin):
         self._validate_input(processor, images, videos, audios)
         mm_inputs = self._get_mm_inputs(images, videos, audios, processor)
         mm_inputs.pop("timestamps", None)
+        mm_inputs.pop("video_metadata", None)
         return mm_inputs
 
 
