@@ -2570,7 +2570,12 @@ register_template(
     format_user=StringFormatter(slots=["<_user>{{content}}<_bot></think>"]),
     format_assistant=StringFormatter(slots=["{{content}}", {"eos_token"}, "\n"]),
     format_system=StringFormatter(slots=["<_system>{{content}}"]),
-    format_observation=StringFormatter(slots=["<_observation>{{content}}<_bot></think>"]),
+    format_observation=StringFormatter(
+        slots=["<_observation><tool_response>{{content}}</tool_response><_bot></think>"]
+    ),
+    default_system=(
+        "你是中国电信星辰语义大模型，英文名是 Xing，你是由中电信人工智能科技有限公司研发的人工智能助手。\n"
+    ),
     thought_words=("<think>\n", "</think>"),
     tool_call_words=("<tool_call>", "</tool_call>"),
     always_emit_system=True,
