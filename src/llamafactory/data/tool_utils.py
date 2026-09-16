@@ -55,6 +55,14 @@ GLM4_MOE_TOOL_PROMPT = (
     "\n...\n</tool_call>\n"
 )
 
+GLM5_NEXT_TOOL_PROMPT = (
+    "<|system|>\n# Tools\n\nYou may call one or more functions to assist with the user query.\n\n"
+    "You are provided with function signatures within <tools></tools> XML tags:\n<tools>\n{tool_text}"
+    "</tools>\n\nFor each function call, output the function name and arguments within the following XML format:\n"
+    "<tool_call>{{function-name}}<arg_key>{{arg-key-1}}</arg_key><arg_value>{{arg-value-1}}</arg_value>"
+    "<arg_key>{{arg-key-2}}</arg_key><arg_value>{{arg-value-2}}</arg_value>...</tool_call>"
+)
+
 LLAMA3_TOOL_PROMPT = (
     "Cutting Knowledge Date: December 2023\nToday Date: {date}\n\n"
     "You have access to the following functions. To call a function, please respond with JSON for a function call. "
@@ -804,6 +812,44 @@ class GLM4MOEToolUtils(QwenToolUtils):
         return "\n".join(function_texts)
 
 
+class GLM5NextToolUtils(GLM4MOEToolUtils):
+    r"""GLM5-Next tool using template."""
+
+    @override
+    @staticmethod
+    def tool_formatter(tools: list[dict[str, Any]]) -> str:
+        if not isinstance(tools, list):
+            raise ValueError("glm5_next tools must be a JSON list.")
+        tool_text = ""
+        for tool in tools:
+            tool = tool.get("function", tool)
+            if tool.get("defer_loading", False):
+                continue
+            tool = {key: value for key, value in tool.items() if key not in {"strict", "defer_loading"}}
+            tool_text += json.dumps(tool, ensure_ascii=False) + "\n"
+
+        return GLM5_NEXT_TOOL_PROMPT.format(tool_text=tool_text)
+
+    @override
+    @staticmethod
+    def function_formatter(functions: list["FunctionCall"]) -> str:
+        if not functions:
+            raise ValueError("glm5_next function messages must contain at least one call.")
+        calls = []
+        for name, arguments in functions:
+            if not isinstance(name, str) or not re.fullmatch(r"[^\s<>]+", name):
+                raise ValueError("Invalid glm5_next function name.")
+            arguments = json.loads(arguments)
+            if not isinstance(arguments, dict):
+                raise ValueError("glm5_next function arguments must be a JSON object.")
+            text = "<tool_call>" + name
+            for key, value in arguments.items():
+                value = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+                text += f"<arg_key>{key}</arg_key><arg_value>{value}</arg_value>"
+            calls.append(text + "</tool_call>")
+        return "".join(calls)
+
+
 class SeedToolUtils(ToolUtils):
     r"""Seed tool using template."""
 
@@ -986,6 +1032,7 @@ TOOLS = {
     "qwen3_5": Qwen35ToolUtils(),
     "qwen3_8": Qwen38ToolUtils(),
     "glm4_moe": GLM4MOEToolUtils(),
+    "glm5_next": GLM5NextToolUtils(),
     "seed_oss": SeedToolUtils(),
     "ling": LingToolUtils(),
 }
