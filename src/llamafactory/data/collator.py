@@ -26,6 +26,7 @@ import torch.nn.functional as F
 from peft import PeftModel
 from transformers import DataCollatorForSeq2Seq
 
+from ..extras import logging
 from ..extras.constants import AUDIO_PLACEHOLDER, IGNORE_INDEX, IMAGE_PLACEHOLDER, MROPE_MODELS
 from ..extras.packages import is_pillow_available
 
@@ -38,6 +39,9 @@ if TYPE_CHECKING:
     from transformers import ProcessorMixin
 
     from .template import Template
+
+
+logger = logging.get_logger(__name__)
 
 
 def _slice_mm_inputs_for_sample(
@@ -221,10 +225,24 @@ class MultiModalDataCollatorForSeq2Seq(DataCollatorForSeq2Seq):
 
         if has_dummy_image:
             # for [0, seq_len] = [0, unpadded_length + right_padding_length + fake_input_ids_len + collator_padding_length]
-            # FIXME: maybe right_padding_length is large, with improper max_cutoff_len
             unpadded_length = int(features["attention_mask"][0].bool().sum().item())
             right_padding_length = int((packing_params_list[0] or {}).get("right_padding_length") or 0)
-            fake_input_padding_length = max(0, seq_len - unpadded_length - right_padding_length)
+            max_valid_right_padding = seq_len - unpadded_length
+            if right_padding_length < 0:
+                raise ValueError(
+                    "Invalid packing metadata: "
+                    f"seq_len={seq_len}, unpadded_length={unpadded_length}, "
+                    f"right_padding_length={right_padding_length}; expected a non-negative right_padding_length."
+                )
+            elif right_padding_length > max_valid_right_padding:
+                logger.warning_rank0_once(
+                    "Invalid packing metadata: "
+                    f"seq_len={seq_len}, unpadded_length={unpadded_length}, "
+                    f"right_padding_length={right_padding_length}; expected right_padding_length <= "
+                    f"{max_valid_right_padding}. Clamping dummy-image padding to zero. Check max_cutoff_len."
+                )
+
+            fake_input_padding_length = max(0, max_valid_right_padding - right_padding_length)
             # avoid continual cuseqlens breaking varlen attention @kuangdd
             # https://github.com/hiyouga/LlamaFactory/issues/10452
             dummy_image_right_padding_mrope = (

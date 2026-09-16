@@ -15,6 +15,7 @@
 import inspect
 import os
 from collections import Counter
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -320,6 +321,61 @@ def test_multimodal_collator_with_packing():
     batch_input = data_collator(features)  # [3, bsz, seq_len]
     valid_len = expected_position_ids.shape[-1]
     assert batch_input["position_ids"][1:, :, :valid_len].eq(expected_position_ids).all()
+
+
+def _make_dummy_image_packing_collator() -> MultiModalDataCollatorForSeq2Seq:
+    data_collator = object.__new__(MultiModalDataCollatorForSeq2Seq)
+    data_collator.tokenizer = SimpleNamespace(padding_side="right")
+
+    def compute_rope_position_ids(features, mm_inputs):
+        del mm_inputs
+        features["position_ids"] = torch.zeros((3, 1, features["input_ids"].size(1)), dtype=torch.long)
+
+    data_collator._compute_rope_position_ids = compute_rope_position_ids
+    return data_collator
+
+
+def _compute_dummy_image_packing_positions(right_padding_length: int) -> dict[str, torch.Tensor]:
+    data_collator = _make_dummy_image_packing_collator()
+    features = {
+        "input_ids": torch.tensor([[10, 11, 0, 0]]),
+        "attention_mask": torch.tensor([[1, 1, 0, 0]]),
+    }
+    data_collator._compute_rope_position_ids_with_packing(
+        features=features,
+        mm_inputs={},
+        packing_params_list=[{"sequence_boundaries": [0, 2, 4], "right_padding_length": right_padding_length}],
+        batch_imglens=[1],
+        batch_vidlens=[0],
+        batch_audlens=[0],
+        has_dummy_image=True,
+    )
+    return features
+
+
+def test_multimodal_packing_accepts_max_right_padding_length():
+    features = _compute_dummy_image_packing_positions(right_padding_length=2)
+
+    assert features["position_ids"].shape == (3, 1, 4)
+    assert features["attention_mask"].shape == (1, 4)
+
+
+def test_multimodal_packing_rejects_negative_right_padding_length():
+    with pytest.raises(
+        ValueError,
+        match=r"seq_len=4, unpadded_length=2, right_padding_length=-1",
+    ):
+        _compute_dummy_image_packing_positions(-1)
+
+
+def test_multimodal_packing_warns_and_clamps_excessive_right_padding_length(caplog):
+    with caplog.at_level("WARNING", logger="llamafactory.data.collator"):
+        features = _compute_dummy_image_packing_positions(right_padding_length=3)
+
+    assert "seq_len=4, unpadded_length=2, right_padding_length=3" in caplog.text
+    assert "Clamping dummy-image padding to zero" in caplog.text
+    assert features["position_ids"].shape == (3, 1, 4)
+    assert features["attention_mask"].shape == (1, 4)
 
 
 @pytest.mark.runs_on(["cpu"])
