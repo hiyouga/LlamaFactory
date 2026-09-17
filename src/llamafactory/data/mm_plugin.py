@@ -1806,6 +1806,14 @@ class MiniCPMV4_6Plugin(BasePlugin):
         mm_inputs = {}
 
         if len(images) != 0:
+            # Pre-load images into PIL objects so the (torchvision-backed) image_processor passes
+            # them through unchanged, instead of decoding paths via torchvision (which is built
+            # without libjpeg on ROCm). See _regularize_images.
+            images = self._regularize_images(
+                images,
+                image_max_pixels=getattr(processor, "image_max_pixels", 1024 * 1024),
+                image_min_pixels=getattr(processor, "image_min_pixels", 32 * 32),
+            )["images"]
             # The image_processor ignores downsample_mode; target_sizes are always based on patch_size.
             # downsample_mode only affects the token divisor in _build_v4_6_placeholder and model forward.
             mm_inputs.update(image_processor(images, return_tensors="pt"))
