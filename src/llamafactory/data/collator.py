@@ -259,11 +259,11 @@ class MultiModalDataCollatorForSeq2Seq(DataCollatorForSeq2Seq):
 
             if num_sub_seqs <= 1:
                 sample_features = {
-                    "input_ids": features["input_ids"],
+                    "input_ids": features["input_ids"][sample_idx : sample_idx + 1],
                     "attention_mask": features["attention_mask"][sample_idx : sample_idx + 1],
                 }
                 mm_inputs_for_sample = _slice_mm_inputs_for_sample(
-                    mm_inputs, batch_imglens, batch_vidlens, sample_idx=sample_idx
+                    mm_inputs, batch_imglens, batch_vidlens, batch_idx=sample_idx
                 )
                 self._compute_rope_position_ids(sample_features, mm_inputs_for_sample)
                 all_position_ids.append(sample_features["position_ids"])

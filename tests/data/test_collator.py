@@ -271,6 +271,50 @@ def _get_expected_position_ids(
 
 
 @pytest.mark.runs_on(["cpu", "mps"])
+def test_multimodal_collator_single_sequence_packing_slices_mm_inputs():
+    collator = object.__new__(MultiModalDataCollatorForSeq2Seq)
+    seen_calls = []
+
+    def fake_compute_rope_position_ids(features, mm_inputs):
+        assert features["input_ids"].shape == features["attention_mask"].shape
+        seen_calls.append(
+            {
+                "input_ids": features["input_ids"].clone(),
+                "attention_mask": features["attention_mask"].clone(),
+                "image_grid_thw": mm_inputs["image_grid_thw"].clone(),
+            }
+        )
+        features["position_ids"] = features["input_ids"].clone()
+        features["rope_deltas"] = torch.zeros(features["input_ids"].size(0))
+
+    collator._compute_rope_position_ids = fake_compute_rope_position_ids
+    features = {
+        "input_ids": torch.tensor([[0, 1, 2], [3, 4, 5]]),
+        "attention_mask": torch.tensor([[1, 1, 1], [1, 1, 0]]),
+    }
+    mm_inputs = {"image_grid_thw": torch.tensor([[1, 4, 4], [1, 8, 8]])}
+
+    collator._compute_rope_position_ids_with_packing(
+        features=features,
+        mm_inputs=mm_inputs,
+        packing_params_list=[{"sequence_boundaries": [0, 3]}, {"sequence_boundaries": [0, 3]}],
+        batch_imglens=[1, 1],
+        batch_vidlens=[0, 0],
+        batch_audlens=[0, 0],
+        has_dummy_image=False,
+    )
+
+    assert features["position_ids"].eq(torch.tensor([[0, 1, 2], [3, 4, 5]])).all()
+    assert len(seen_calls) == 2
+    assert seen_calls[0]["input_ids"].eq(torch.tensor([[0, 1, 2]])).all()
+    assert seen_calls[0]["attention_mask"].eq(torch.tensor([[1, 1, 1]])).all()
+    assert seen_calls[0]["image_grid_thw"].eq(torch.tensor([[1, 4, 4]])).all()
+    assert seen_calls[1]["input_ids"].eq(torch.tensor([[3, 4, 5]])).all()
+    assert seen_calls[1]["attention_mask"].eq(torch.tensor([[1, 1, 0]])).all()
+    assert seen_calls[1]["image_grid_thw"].eq(torch.tensor([[1, 8, 8]])).all()
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
 def test_multimodal_collator_with_packing():
     model_args, data_args, *_ = get_infer_args(
         {"model_name_or_path": "Qwen/Qwen2-VL-2B-Instruct", "template": "qwen2_vl"}
