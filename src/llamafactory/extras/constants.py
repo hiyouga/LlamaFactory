@@ -15,6 +15,7 @@
 import os
 from collections import OrderedDict, defaultdict
 from enum import StrEnum, unique
+from typing import Optional
 
 from peft.utils import SAFETENSORS_WEIGHTS_NAME as SAFE_ADAPTER_WEIGHTS_NAME
 from peft.utils import WEIGHTS_NAME as ADAPTER_WEIGHTS_NAME
@@ -152,6 +153,26 @@ class AttentionFunction(StrEnum):
     SDPA = "sdpa"
     FA2 = "fa2"
     FA3 = "fa3"
+
+
+_FLASH_ATTENTION_IMPL_PREFIX = "flash_attention"
+
+
+def is_flash_attention(attn_implementation: Optional[str]) -> bool:
+    r"""Return True if the given ``_attn_implementation`` string is any FlashAttention variant.
+
+    Transformers exposes FlashAttention under names like ``"flash_attention_2"``,
+    ``"flash_attention_3"`` (and future ``"flash_attention_4"``). Some paths (e.g.
+    ``gpt_oss``) substitute a kernel identifier for FA3, which never contains the
+    ``flash_attention`` prefix — those cases are intentionally NOT matched here so
+    that callers can handle them with their own model-specific logic.
+
+    Returns:
+        ``True`` for ``"flash_attention_2"`` / ``"flash_attention_3"`` / ``"flash_attention_4"``
+        / any ``"flash_attention_*"`` string. ``False`` for ``None``, ``"eager"``,
+        ``"sdpa"``, custom kernel ids, etc.
+    """
+    return isinstance(attn_implementation, str) and attn_implementation.startswith(_FLASH_ATTENTION_IMPL_PREFIX)
 
 
 class EngineName(StrEnum):

@@ -26,7 +26,7 @@ import torch.nn.functional as F
 from peft import PeftModel
 from transformers import DataCollatorForSeq2Seq
 
-from ..extras.constants import AUDIO_PLACEHOLDER, IGNORE_INDEX, IMAGE_PLACEHOLDER, MROPE_MODELS
+from ..extras.constants import AUDIO_PLACEHOLDER, IGNORE_INDEX, IMAGE_PLACEHOLDER, MROPE_MODELS, is_flash_attention
 from ..extras.packages import is_pillow_available
 
 
@@ -503,13 +503,15 @@ class SFTDataCollatorWith4DAttentionMask(MultiModalDataCollatorForSeq2Seq):
     r"""Data collator for 4d attention mask."""
 
     block_diag_attn: bool = False
-    attn_implementation: Literal["eager", "sdpa", "flash_attention_2"] = "eager"
+    attn_implementation: Literal["eager", "sdpa", "flash_attention_2", "flash_attention_3", "flash_attention_4"] = (
+        "eager"
+    )
     compute_dtype: "torch.dtype" = torch.float32
     neat_packing: bool = False
 
     def __post_init__(self):
         super().__post_init__()
-        if self.neat_packing and self.attn_implementation == "flash_attention_2":
+        if self.neat_packing and is_flash_attention(self.attn_implementation):
             if self.model is not None and getattr(self.model.config, "model_type", None) in ["gemma4", "gpt_oss"]:
                 raise ValueError("Neat packing is not supported for gemma4, gpt_oss models for now.")
 
@@ -542,10 +544,10 @@ class SFTDataCollatorWith4DAttentionMask(MultiModalDataCollatorForSeq2Seq):
     def __call__(self, features: list[dict[str, Any]]) -> dict[str, "torch.Tensor"]:
         features = super().__call__(features)
         has_dummy_image = features.pop("has_dummy_image", False)
-        if self.block_diag_attn and self.attn_implementation != "flash_attention_2":
+        if self.block_diag_attn and not is_flash_attention(self.attn_implementation):
             features["attention_mask"] = prepare_4d_attention_mask(features["attention_mask"], self.compute_dtype)
 
-        if self.neat_packing and self.attn_implementation == "flash_attention_2":  # FIXME compatibility fa3/fa4
+        if self.neat_packing and is_flash_attention(self.attn_implementation):  # fixed: any FA version
             assert features["input_ids"].shape[0] == 1, "bsz should be 1 for neat packing"
             if not has_dummy_image:
                 self._unpad_packed_features(features)
