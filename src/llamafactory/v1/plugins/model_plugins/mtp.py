@@ -632,10 +632,18 @@ def load_mtp_weights(model: "PreTrainedModel", model_path: str) -> None:
     mtp_state = _read_mtp_tensors(local_dir)
     if mtp_state:
         model.load_state_dict(mtp_state, strict=False)
-        logger.info_rank0(f"Loaded {len(mtp_state)} MTP weight tensor(s) from {local_dir}.")
-    else:
         logger.info_rank0(
-            f"No MTP weights found in {local_dir}; MTP heads keep their random initialization."
+            f"Loaded {len(mtp_state)} mtp.* weight tensor(s) from the `model:` path ({local_dir})."
+        )
+    else:
+        # NOTE: this only means the *base* `model:` path carries no mtp.* tensors — which is
+        # the normal case when fine-tuning from a base checkpoint. It does NOT mean trained
+        # MTP weights are lost: when `resume_from_checkpoint` is set, the full mtp.* state
+        # (and optimizer) is restored right after by the DCP checkpoint load.
+        logger.info_rank0(
+            f"No mtp.* weights in the `model:` path ({local_dir}) — MTP heads keep their random "
+            "initialization. Expected when training from a base checkpoint; when resuming, the "
+            "trained mtp.* weights are restored right after by the DCP checkpoint load."
         )
 
 
