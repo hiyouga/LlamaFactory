@@ -27,7 +27,7 @@ from ..extras.misc import check_version, infer_optim_dtype
 from ..extras.packages import is_transformers_version_greater_than
 from .model_utils.attention import configure_attn_implementation, print_attn_implementation
 from .model_utils.checkpointing import prepare_model_for_training
-from .model_utils.embedding import resize_embedding_layer
+from .model_utils.embedding import apply_embedding_freeze, get_embedding_vocab_size, resize_embedding_layer
 from .model_utils.kv_cache import configure_kv_cache
 from .model_utils.longlora import configure_longlora
 from .model_utils.moe import add_z3_leaf_module, configure_moe
@@ -461,6 +461,9 @@ def patch_model(
         prepare_valuehead_model(model)
 
     if model_args.resize_vocab:
+        # Record the original vocab size before resizing (for the embedding freeze below).
+        orig_vocab_size = get_embedding_vocab_size(model)
+
         # Pass the explicit list of newly added tokens so their exact embedding rows can be
         # located and initialized, even when they land in a model's pre-existing padding zone.
         new_tokens = (model_args.add_tokens or []) + (model_args.add_special_tokens or [])
@@ -472,6 +475,10 @@ def patch_model(
             new_special_tokens_config=getattr(model_args, "_special_token_descriptions", None),
             init_special_tokens=model_args.init_special_tokens,
         )
+
+        # Freeze original embeddings if requested (only train the newly added tokens).
+        if is_trainable and model_args.freeze_original_embeddings:
+            apply_embedding_freeze(model, orig_vocab_size)
 
     if is_trainable:
         if getattr(model.config, "model_type", None) == "gemma3n":

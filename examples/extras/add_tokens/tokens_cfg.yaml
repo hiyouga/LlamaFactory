@@ -1,3 +1,14 @@
+# New special tokens with descriptions, used by `new_special_tokens_config`.
+#
+# Format: each entry maps a token string to a short natural-language description.
+#   "<token>": "description text"
+#
+# The token strings are added to the tokenizer (as special tokens), and the
+# descriptions are used by the `description` / `description_noise` initialization
+# methods: each new token embedding is initialized from the mean embedding of its
+# description tokens. The descriptions are ignored by the `vocab_mean*` / `noise`
+# methods. The example tokens below describe a small SVG vocabulary.
+
 # SVG Container Tags
 "<|START_OF_SVG|>": "Marks the beginning of an SVG document"
 "<|END_OF_SVG|>": "Marks the end of an SVG document"
