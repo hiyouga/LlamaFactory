@@ -1,0 +1,49 @@
+### model
+# Nanbeige4.2-Base full SFT → chat model.
+# Prefer Nanbeige/Nanbeige4.2-3B (Instruct) when possible; Base needs ChatML specials first.
+model_name_or_path: Nanbeige/Nanbeige4.2-3B-Base
+trust_remote_code: true
+use_fast_tokenizer: false
+add_special_tokens: <|im_start|>,<|im_end|>,<|endoftext|>,<think>,</think>
+
+### method
+stage: sft
+do_train: true
+finetuning_type: full
+deepspeed: examples/deepspeed/ds_z3_config.json  # choices: [ds_z0_config.json, ds_z2_config.json, ds_z3_config.json]
+
+### dataset
+dataset: identity,alpaca_en_demo
+template: nanbeige_nothink  # use `nanbeige` for thinking-style SFT
+cutoff_len: 2048
+max_samples: 1000
+preprocessing_num_workers: 16
+dataloader_num_workers: 4
+
+### output
+output_dir: saves/nanbeige42-3b-base/full/sft
+logging_steps: 10
+save_steps: 500
+plot_loss: true
+overwrite_output_dir: true
+save_only_model: false
+report_to: none  # choices: [none, wandb, tensorboard, swanlab, mlflow]
+
+### train
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 2
+learning_rate: 1.0e-5
+num_train_epochs: 3.0
+lr_scheduler_type: cosine
+warmup_ratio: 0.1
+bf16: true
+ddp_timeout: 180000000
+resume_from_checkpoint: null
+# Note: num_loops=2 roughly doubles forward compute. Multi-GPU + ZeRO-3 recommended.
+
+### eval
+# eval_dataset: alpaca_en_demo
+# val_size: 0.1
+# per_device_eval_batch_size: 1
+# eval_strategy: steps
+# eval_steps: 500
