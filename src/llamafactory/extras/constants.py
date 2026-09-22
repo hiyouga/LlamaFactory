@@ -1558,6 +1558,32 @@ register_model_group(
 
 register_model_group(
     models={
+        "LightOnOCR-2-1B": {
+            DownloadSource.DEFAULT: "lightonai/LightOnOCR-2-1B",
+        },
+        "LightOnOCR-2-1B-base": {
+            DownloadSource.DEFAULT: "lightonai/LightOnOCR-2-1B-base",
+        },
+        "LightOnOCR-2-1B-bbox": {
+            DownloadSource.DEFAULT: "lightonai/LightOnOCR-2-1B-bbox",
+        },
+        "LightOnOCR-2-1B-bbox-base": {
+            DownloadSource.DEFAULT: "lightonai/LightOnOCR-2-1B-bbox-base",
+        },
+        "LightOnOCR-2-1B-bbox-soup": {
+            DownloadSource.DEFAULT: "lightonai/LightOnOCR-2-1B-bbox-soup",
+        },
+        "LightOnOCR-2-1B-ocr-soup": {
+            DownloadSource.DEFAULT: "lightonai/LightOnOCR-2-1B-ocr-soup",
+        },
+    },
+    template="lighton_ocr",
+    multimodal=True,
+)
+
+
+register_model_group(
+    models={
         "Llama-7B": {
             DownloadSource.DEFAULT: "huggyllama/llama-7b",
             DownloadSource.MODELSCOPE: "skyline2006/llama-7b",

@@ -339,6 +339,13 @@ _register_composite_model(
 
 
 _register_composite_model(
+    model_type="lighton_ocr",
+    projector_key="model.vision_projection",
+    vision_model_keys=["vision_encoder"],
+)
+
+
+_register_composite_model(
     model_type="mistral3",
     projector_keys=["model.multi_modal_projector"],
 )

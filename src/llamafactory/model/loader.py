@@ -32,6 +32,7 @@ from ..extras.misc import count_parameters, skip_check_imports, try_download_mod
 from ..extras.packages import is_torch_version_greater_than
 from .adapter import init_adapter
 from .model_utils.liger_kernel import apply_liger_kernel
+from .model_utils.lightonocr import patch_lightonocr_configs
 from .model_utils.misc import register_autoclass
 from .model_utils.mod import convert_pretrained_model_to_mod, load_mod_pretrained_model
 from .model_utils.unsloth import load_unsloth_peft_model, load_unsloth_pretrained_model
@@ -60,6 +61,15 @@ def _get_init_kwargs(model_args: "ModelArguments") -> dict[str, Any]:
     """
     skip_check_imports()
     model_args.model_name_or_path = try_download_model_from_other_hub(model_args)
+
+    # Auto-patch LightOnOCR-2 configs (model_type + processor patch_size)
+    patch_lightonocr_configs(
+        model_args.model_name_or_path,
+        cache_dir=model_args.cache_dir,
+        token=model_args.hf_hub_token,
+        revision=model_args.model_revision,
+    )
+
     return {
         "trust_remote_code": model_args.trust_remote_code,
         "cache_dir": model_args.cache_dir,
