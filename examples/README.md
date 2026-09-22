@@ -216,6 +216,13 @@ llamafactory-cli webchat examples/inference/qwen3_lora_sft.yaml
 llamafactory-cli api examples/inference/qwen3_lora_sft.yaml
 ```
 
+#### Compare fine-tuning methods
+```bash
+python scripts/finetuning_comparison/cli_yaml_compare.py \
+    --first examples/train_lora/qwen3_lora_sft.yaml \
+    --second examples/train_qlora/qwen3_lora_sft_bnb_npu.yaml
+```
+
 ### Extras
 
 #### Full-Parameter Fine-Tuning using GaLore
