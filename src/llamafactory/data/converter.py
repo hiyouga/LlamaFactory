@@ -167,6 +167,7 @@ class SharegptDatasetConverter(DatasetConverter):
                 {
                     "role": tag_mapping[message[self.dataset_attr.role_tag]],
                     "content": message[self.dataset_attr.content_tag],
+                    "loss": message.get("loss", True),
                 }
             )
 

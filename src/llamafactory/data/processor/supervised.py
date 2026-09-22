@@ -69,7 +69,7 @@ class SupervisedDatasetProcessor(DatasetProcessor):
         if self.data_args.mask_history:
             encoded_pairs = encoded_pairs[::-1]  # high priority for last turns
 
-        for turn_idx, (source_ids, target_ids) in enumerate(encoded_pairs):
+        for turn_idx, (source_ids, target_ids, should_compute_loss) in enumerate(encoded_pairs):
             if total_length >= self.data_args.cutoff_len:
                 break
 
@@ -88,6 +88,8 @@ class SupervisedDatasetProcessor(DatasetProcessor):
                 source_label = [IGNORE_INDEX] * source_len
 
             if self.data_args.mask_history and turn_idx != 0:  # train on the last turn only
+                target_label = [IGNORE_INDEX] * target_len
+            elif not should_compute_loss:  # per-message loss control
                 target_label = [IGNORE_INDEX] * target_len
             else:
                 target_label = target_ids
