@@ -95,25 +95,32 @@ def load_tokenizer(model_args: "ModelArguments") -> "TokenizerModule":
     patch_tokenizer(tokenizer, model_args)
 
     try:
-        processor = AutoProcessor.from_pretrained(
-            model_args.model_name_or_path,
-            use_fast=model_args.use_fast_tokenizer,
-            **init_kwargs,
-        )
-    except ValueError:  # try another one
-        processor = AutoProcessor.from_pretrained(
-            model_args.model_name_or_path,
-            use_fast=not model_args.use_fast_tokenizer,
-            **init_kwargs,
-        )
+        try:
+            processor = AutoProcessor.from_pretrained(
+                model_args.model_name_or_path,
+                use_fast=model_args.use_fast_tokenizer,
+                **init_kwargs,
+            )
+        except ValueError:  # try another one
+            processor = AutoProcessor.from_pretrained(
+                model_args.model_name_or_path,
+                use_fast=not model_args.use_fast_tokenizer,
+                **init_kwargs,
+            )
     except Exception as e:
-        logger.info_rank0(f"Failed to load processor: {e}.")
+        logger.warning_rank0(
+            f"Failed to load processor: {e}. "
+            "If your model expects a multi-modal processor, please verify the model files are complete "
+            "(e.g. `preprocessor_config.json`) and that your `transformers` version supports this model."
+        )
         processor = None
 
     # Avoid load tokenizer, see:
     # https://github.com/huggingface/transformers/blob/v4.40.0/src/transformers/models/auto/processing_auto.py#L324
     if processor is not None and "Processor" not in processor.__class__.__name__:
-        logger.debug("The loaded processor is not an instance of Processor. Dropping it.")
+        logger.info_rank0(
+            f"The loaded processor ({processor.__class__.__name__}) is not an instance of Processor. Dropping it."
+        )
         processor = None
 
     if processor is not None:

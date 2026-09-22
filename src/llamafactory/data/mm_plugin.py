@@ -174,17 +174,34 @@ class MMPluginMixin:
                 "This model does not support audio input. Please check whether the correct `template` is used."
             )
 
-        if self.image_token is not None and processor is None:
-            raise ValueError("Processor was not found, please check and update your model file.")
+        if (
+            self.image_token is not None or self.video_token is not None or self.audio_token is not None
+        ) and processor is None:
+            raise ValueError(
+                "Processor was not found. The selected `template` expects a multi-modal processor, "
+                "but none could be loaded for this model. Please verify that the model files are complete "
+                "(e.g. `preprocessor_config.json`), upgrade `transformers` to a version that supports this "
+                "model, or choose a text-only template if you do not need multi-modal inputs. "
+                "See the warning emitted by `load_tokenizer` for the underlying error."
+            )
 
         if self.image_token is not None and image_processor is None:
-            raise ValueError("Image processor was not found, please check and update your model file.")
+            raise ValueError(
+                "Image processor was not found. Please verify that the model files include the image "
+                "preprocessor configuration and that your `transformers` version supports this model."
+            )
 
         if self.video_token is not None and video_processor is None:
-            raise ValueError("Video processor was not found, please check and update your model file.")
+            raise ValueError(
+                "Video processor was not found. Please verify that the model files include the video "
+                "preprocessor configuration and that your `transformers` version supports this model."
+            )
 
         if self.audio_token is not None and feature_extractor is None:
-            raise ValueError("Audio feature extractor was not found, please check and update your model file.")
+            raise ValueError(
+                "Audio feature extractor was not found. Please verify that the model files include the "
+                "audio feature extractor configuration and that your `transformers` version supports this model."
+            )
 
     def _validate_messages(
         self,
