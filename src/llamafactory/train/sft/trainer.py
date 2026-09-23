@@ -148,7 +148,7 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
         return super()._get_train_sampler(*args, **kwargs)
 
     @override
-    def compute_loss(self, model, inputs, *args, **kwargs):
+    def compute_loss(self, model, inputs, return_outputs=False, *args, **kwargs):
         if self.finetuning_args.use_asft_loss:
             with torch.no_grad():
                 ref_outputs = self.ref_model(
@@ -157,9 +157,10 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
                 )
                 ref_logits = ref_outputs.logits
             outputs = model(**inputs)
-            return self.compute_loss_func(outputs, inputs["labels"], ref_logits)
+            loss = self.compute_loss_func(outputs, inputs["labels"], ref_logits)
+            return (loss, outputs) if return_outputs else loss
         else:
-            return super().compute_loss(model, inputs, *args, **kwargs)
+            return super().compute_loss(model, inputs, return_outputs, *args, **kwargs)
 
     @override
     def prediction_step(
