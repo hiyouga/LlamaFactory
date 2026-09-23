@@ -18,9 +18,7 @@
 import math
 from typing import TYPE_CHECKING, Optional
 
-from transformers import DataCollatorForLanguageModeling
-
-from ...data import get_dataset, get_template_and_fix_tokenizer
+from ...data import PretrainDataCollatorWithPadding, get_dataset, get_template_and_fix_tokenizer
 from ...extras.ploting import plot_loss
 from ...model import load_model, load_tokenizer
 from ..trainer_utils import create_modelcard_and_push
@@ -45,7 +43,7 @@ def run_pt(
     template = get_template_and_fix_tokenizer(tokenizer, data_args)
     dataset_module = get_dataset(template, model_args, data_args, training_args, stage="pt", **tokenizer_module)
     model = load_model(tokenizer, model_args, finetuning_args, training_args.do_train)
-    data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
+    data_collator = PretrainDataCollatorWithPadding(tokenizer=tokenizer)
 
     # Initialize our Trainer
     trainer = CustomTrainer(
