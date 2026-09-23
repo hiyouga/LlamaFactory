@@ -344,6 +344,37 @@ def test_get_stop_token_ids():
 
 
 @pytest.mark.runs_on(["cpu", "mps"])
+def test_cohere2_force_system():
+    class CharTokenizer:
+        bos_token_id = -1
+
+        @staticmethod
+        def encode(text: str, add_special_tokens: bool = False) -> list[int]:
+            return [ord(char) for char in text]
+
+        @staticmethod
+        def decode(token_ids: list[int]) -> str:
+            return "".join("<BOS_TOKEN>" if token_id == -1 else chr(token_id) for token_id in token_ids)
+
+    tokenizer = CharTokenizer()
+    messages = [{"role": "user", "content": "Hello"}, {"role": "assistant", "content": "Hi"}]
+    template = TEMPLATES["cohere2"]
+
+    prompt_ids, answer_ids = template.encode_oneturn(tokenizer, messages)
+    assert tokenizer.decode(prompt_ids) == (
+        "<BOS_TOKEN><|START_OF_TURN_TOKEN|><|SYSTEM_TOKEN|><|END_OF_TURN_TOKEN|>"
+        "<|START_OF_TURN_TOKEN|><|USER_TOKEN|>Hello<|END_OF_TURN_TOKEN|>"
+        "<|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|><|START_RESPONSE|>"
+    )
+    assert tokenizer.decode(answer_ids) == "Hi<|END_RESPONSE|><|END_OF_TURN_TOKEN|>"
+
+    prompt_ids, _ = template.encode_oneturn(tokenizer, messages, system="Be concise.")
+    assert tokenizer.decode(prompt_ids).startswith(
+        "<BOS_TOKEN><|START_OF_TURN_TOKEN|><|SYSTEM_TOKEN|>Be concise.<|END_OF_TURN_TOKEN|>"
+    )
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
 @pytest.mark.skipif(not HF_TOKEN, reason="Gated model.")
 def test_gemma_template():
     prompt_str = (
@@ -354,6 +385,21 @@ def test_gemma_template():
     )
     answer_str = f"{MESSAGES[3]['content']}<end_of_turn>\n"
     _check_template("google/gemma-3-4b-it", "gemma", prompt_str, answer_str)
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
+@pytest.mark.skipif(not HF_TOKEN, reason="Gated model.")
+def test_cohere2_template():
+    prompt_str = (
+        "<BOS_TOKEN><|START_OF_TURN_TOKEN|><|SYSTEM_TOKEN|><|END_OF_TURN_TOKEN|>"
+        f"<|START_OF_TURN_TOKEN|><|USER_TOKEN|>{MESSAGES[0]['content']}<|END_OF_TURN_TOKEN|>"
+        f"<|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|><|START_RESPONSE|>{MESSAGES[1]['content']}"
+        "<|END_RESPONSE|><|END_OF_TURN_TOKEN|>"
+        f"<|START_OF_TURN_TOKEN|><|USER_TOKEN|>{MESSAGES[2]['content']}<|END_OF_TURN_TOKEN|>"
+        "<|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|><|START_RESPONSE|>"
+    )
+    answer_str = f"{MESSAGES[3]['content']}<|END_RESPONSE|><|END_OF_TURN_TOKEN|>"
+    _check_template("CohereLabs/c4ai-command-r7b-12-2024", "cohere2", prompt_str, answer_str)
 
 
 @pytest.mark.runs_on(["cpu", "mps"])
