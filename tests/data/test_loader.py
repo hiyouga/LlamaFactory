@@ -13,9 +13,13 @@
 # limitations under the License.
 
 import os
+from types import SimpleNamespace
 
 import pytest
 
+from llamafactory.data.loader import _load_single_dataset
+from llamafactory.data.parser import DatasetAttr
+from llamafactory.hparams import DataArguments
 from llamafactory.train.test_utils import load_dataset_module
 
 
@@ -38,6 +42,26 @@ TRAIN_ARGS = {
     "overwrite_output_dir": True,
     "fp16": True,
 }
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
+@pytest.mark.parametrize("num_workers", [0, 2])
+def test_streaming_local_file_with_dataloader_workers(tmp_path, num_workers):
+    data_file = tmp_path / "examples.jsonl"
+    data_file.write_text(
+        '{"instruction": "first", "output": "one"}\n'
+        '{"instruction": "second", "output": "two"}\n'
+        '{"instruction": "third", "output": "three"}\n',
+        encoding="utf-8",
+    )
+    dataset_attr = DatasetAttr("file", data_file.name)
+    data_args = DataArguments(dataset_dir=str(tmp_path), streaming=True)
+    model_args = SimpleNamespace(cache_dir=None, hf_hub_token=None)
+    training_args = SimpleNamespace(dataloader_num_workers=num_workers)
+
+    dataset = _load_single_dataset(dataset_attr, model_args, data_args, training_args)
+
+    assert len(list(dataset)) == 3
 
 
 @pytest.mark.runs_on(["cpu", "mps"])

@@ -140,7 +140,7 @@ def _load_single_dataset(
             streaming=data_args.streaming and dataset_attr.load_from != "file",
         )
         if data_args.streaming and dataset_attr.load_from == "file":
-            dataset = dataset.to_iterable_dataset(num_shards=training_args.dataloader_num_workers)
+            dataset = dataset.to_iterable_dataset(num_shards=max(1, training_args.dataloader_num_workers))
 
     if dataset_attr.num_samples is not None and not data_args.streaming:
         target_num = dataset_attr.num_samples
