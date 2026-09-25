@@ -36,6 +36,7 @@ TOOLS = [
         },
     }
 ]
+OPENAI_TOOLS = [{"type": "function", "function": TOOLS[0]}]
 
 
 @pytest.mark.runs_on(["cpu", "mps"])
@@ -272,6 +273,17 @@ def test_qwen_tool_formatter():
         """<tool_call></tool_call> XML tags:\n<tool_call>\n{"name": <function-name>, """
         """"arguments": <args-json-object>}\n</tool_call>"""
     ]
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
+@pytest.mark.parametrize("tools", [TOOLS, OPENAI_TOOLS])
+def test_qwen35_tool_formatter_uses_openai_tool_envelope(tools: list[dict]):
+    """Match the native Qwen3.5 Jinja input produced by Transformers and vLLM."""
+    formatter = ToolFormatter(tool_format="qwen3_5")
+    prompt = formatter.apply(content=json.dumps(tools))[0]
+    rendered_tool = json.loads(prompt.split("<tools>\n", 1)[1].split("\n</tools>", 1)[0])
+
+    assert rendered_tool == OPENAI_TOOLS[0]
 
 
 @pytest.mark.runs_on(["cpu", "mps"])

@@ -715,8 +715,8 @@ class Qwen35ToolUtils(ToolUtils):
     def tool_formatter(tools: list[dict[str, Any]]) -> str:
         tool_text = ""
         for tool in tools:
-            tool = tool.get("function", tool) if tool.get("type") == "function" else tool
-            tool_text += "\n" + json.dumps(tool, ensure_ascii=False)
+            wrapped_tool = tool if tool.get("type") == "function" else {"type": "function", "function": tool}
+            tool_text += "\n" + json.dumps(wrapped_tool, ensure_ascii=False)
 
         return QWEN35_TOOL_PROMPT.format(tool_text=tool_text)
 
