@@ -613,14 +613,18 @@ pip install https://github.com/jllllll/bitsandbytes-windows-webui/releases/downl
 # Docker Hub
 docker pull hiyouga/llamafactory:latest-910b-ubuntu
 docker pull hiyouga/llamafactory:latest-a3-ubuntu
+docker pull hiyouga/llamafactory:latest-950-ubuntu
 docker pull hiyouga/llamafactory:latest-910b-openeuler
 docker pull hiyouga/llamafactory:latest-a3-openeuler
+docker pull hiyouga/llamafactory:latest-950-openeuler
 
 # quay.io
 docker pull quay.io/ascend/llamafactory:latest-910b-ubuntu
 docker pull quay.io/ascend/llamafactory:latest-a3-ubuntu
+docker pull quay.io/ascend/llamafactory:latest-950-ubuntu
 docker pull quay.io/ascend/llamafactory:latest-910b-openeuler
 docker pull quay.io/ascend/llamafactory:latest-a3-openeuler
+docker pull quay.io/ascend/llamafactory:latest-950-openeuler
 ```
 
 #### 安装 BitsAndBytes

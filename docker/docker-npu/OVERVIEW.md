@@ -14,12 +14,14 @@ For installation and troubleshooting details, see the [English NPU installation 
 
 The following `latest` NPU image tags are available:
 
-| Hardware series | Operating system | Tag |
+| Product series | Operating system | Tag |
 | --- | --- | --- |
-| A2 | Ubuntu 22.04 | `latest-910b-ubuntu` |
-| A3 | Ubuntu 22.04 | `latest-a3-ubuntu` |
-| A2 | openEuler 24.03 | `latest-910b-openeuler` |
-| A3 | openEuler 24.03 | `latest-a3-openeuler` |
+| Atlas A2 products | Ubuntu 22.04 | `latest-910b-ubuntu` |
+| Atlas A3 products | Ubuntu 22.04 | `latest-a3-ubuntu` |
+| Atlas A2 products | openEuler 24.03 | `latest-910b-openeuler` |
+| Atlas A3 products | openEuler 24.03 | `latest-a3-openeuler` |
+| Ascend 950PR&950DT products | Ubuntu 22.04 | `latest-950-ubuntu` |
+| Ascend 950PR&950DT products | openEuler 24.03 | `latest-950-openeuler` |
 
 For historical NPU image tags and links to their corresponding archived Dockerfiles, see [Supported Tags](./supported_tags.md).
 
@@ -53,7 +55,7 @@ latest-<chip>-<os>
 
 | Field | Values | Description |
 | --- | --- | --- |
-| `chip` | `910b` or `a3` | Ascend chip model supported by the image |
+| `chip` | `910b`, `a3`, or `950` | Ascend chip model supported by the image |
 | `os` | `ubuntu` or `openeuler` | Container operating system family |
 
 Future NPU release images will use the full tag format below. Historical release images used earlier naming formats and do not follow this rule.
@@ -67,7 +69,7 @@ Future NPU release images will use the full tag format below. Historical release
 | `LlamaFactory-version` | `0.9.5` | LlamaFactory release version |
 | `CANN-version` | `9.1.0` | Parsed from the CANN base image tag |
 | `TorchNPU-version` | `2.10.0.post2` | Full TorchNPU version used by the image, including suffixes such as `.postN` |
-| `chip` | `910b` or `a3` | Ascend chip model supported by the image |
+| `chip` | `910b`, `a3`, or `950` | Ascend chip model supported by the image |
 | `os` | `ubuntu22.04` or `openeuler24.03` | Container operating system family and version |
 | `Python-version` | `py3.12` | Parsed from the CANN base image tag |
 
@@ -148,7 +150,7 @@ Available build arguments:
 
 ### Start with Docker Compose
 
-The preceding `docker build` command invokes the Dockerfile directly. It builds an image but does not start a container. Docker Compose does not use a separate build implementation: it reads the presets in `docker-compose.yml`, reuses the same Dockerfile, and selects a hardware-series and operating-system combination through a profile. Each `up -d` command below starts the selected container in the background. If the image is not available locally, Docker Compose builds it first:
+The preceding `docker build` command invokes the Dockerfile directly. It builds an image but does not start a container. Docker Compose does not use a separate build implementation: it reads the presets in `docker-compose.yml`, reuses the same Dockerfile, and selects a product-series and operating-system combination through a profile. Each `up -d` command below starts the selected container in the background. If the image is not available locally, Docker Compose builds it first:
 
 ```bash
 cd docker/docker-npu
@@ -164,16 +166,22 @@ docker compose --profile a2-openeuler up -d
 
 # A3 with openEuler
 docker compose --profile a3-openeuler up -d
+
+# 950PR&950DT with Ubuntu
+docker compose --profile 950-ubuntu up -d
+
+# 950PR&950DT with openEuler
+docker compose --profile 950-openeuler up -d
 ```
 
 To build an image with Docker Compose without starting a container, use `docker compose --profile <profile> build`.
 
 ## Hardware Support and Compatibility Notes
 
-- A2 images use the `910b` CANN base image; A3 images use the `a3` CANN base image.
-- The image build targets both x86-64 (`linux/amd64`) and AArch64 (`linux/arm64`) hosts. The CPU architecture is independent of whether the hardware series is A2 or A3.
+- A2 images use the `910b` CANN base image; A3 images use the `a3` CANN base image; 950PR&950DT images use the `950` CANN base image.
+- The image build targets both x86-64 (`linux/amd64`) and AArch64 (`linux/arm64`) hosts. The CPU architecture is independent of whether the product series is A2, A3, or 950PR&950DT.
 - Ubuntu 22.04 and openEuler 24.03 refer to the operating system inside the container.
-- Legacy NPU tags are replaced by the `latest-<910b|a3>-<ubuntu|openeuler>` format.
+- Legacy NPU tags are replaced by the `latest-<910b|a3|950>-<ubuntu|openeuler>` format.
 - Validate the exact driver, firmware, CANN, and SoC combination before production deployment.
 
 ## License and Disclaimer

@@ -14,12 +14,14 @@ LlamaFactory 昇腾 NPU 镜像面向华为昇腾 Atlas NPU，提供可直接使�
 
 当前提供以下 `latest` NPU 镜像 tag：
 
-| 硬件系列 | 操作系统 | Tag |
+| 产品系列 | 操作系统 | Tag |
 | --- | --- | --- |
-| A2 | Ubuntu 22.04 | `latest-910b-ubuntu` |
-| A3 | Ubuntu 22.04 | `latest-a3-ubuntu` |
-| A2 | openEuler 24.03 | `latest-910b-openeuler` |
-| A3 | openEuler 24.03 | `latest-a3-openeuler` |
+| Atlas A2 系列产品 | Ubuntu 22.04 | `latest-910b-ubuntu` |
+| Atlas A3 系列产品 | Ubuntu 22.04 | `latest-a3-ubuntu` |
+| Atlas A2 系列产品 | openEuler 24.03 | `latest-910b-openeuler` |
+| Atlas A3 系列产品 | openEuler 24.03 | `latest-a3-openeuler` |
+| Ascend 950PR&950DT 系列产品 | Ubuntu 22.04 | `latest-950-ubuntu` |
+| Ascend 950PR&950DT 系列产品 | openEuler 24.03 | `latest-950-openeuler` |
 
 历史版本的 NPU 镜像 Tag 及其对应的 Dockerfile 归档链接，请参阅 [Supported Tags](./supported_tags.md)。
 
@@ -53,7 +55,7 @@ latest-<芯片信息>-<操作系统>
 
 | 字段 | 可选值 | 说明 |
 | --- | --- | --- |
-| `芯片信息` | `910b` 或 `a3` | 镜像所适配的昇腾芯片型号 |
+| `芯片信息` | `910b`、`a3` 或 `950` | 镜像所适配的昇腾芯片型号 |
 | `操作系统` | `ubuntu` 或 `openeuler` | 容器操作系统类型 |
 
 后续发布的 NPU release 镜像将使用以下完整 tag 格式。历史 release 镜像使用旧的命名格式，不适用以下规则。
@@ -67,7 +69,7 @@ latest-<芯片信息>-<操作系统>
 | `LlamaFactory版本` | `0.9.5` | LlamaFactory release 版本号 |
 | `CANN版本` | `9.1.0` | 从 CANN 基础镜像 tag 中提取 |
 | `TorchNPU版本` | `2.10.0.post2` | 镜像使用的 TorchNPU 完整版本，包含 `.postN` 等后缀 |
-| `芯片信息` | `910b` 或 `a3` | 镜像所适配的昇腾芯片型号 |
+| `芯片信息` | `910b`、`a3` 或 `950` | 镜像所适配的昇腾芯片型号 |
 | `操作系统` | `ubuntu22.04` 或 `openeuler24.03` | 容器操作系统类型和版本 |
 | `Python版本` | `py3.12` | 从 CANN 基础镜像 tag 中提取 |
 
@@ -148,7 +150,7 @@ docker build \
 
 ### 通过 Docker Compose 启动
 
-前面的 `docker build` 命令直接调用 Dockerfile，只构建镜像，不启动容器。Docker Compose 不使用另一套构建逻辑：它读取 `docker-compose.yml` 中的预设配置，复用同一个 Dockerfile，并通过 profile 选择硬件系列和操作系统组合。下面的 `up -d` 会在后台启动容器；若本地镜像不存在，Docker Compose 会先构建镜像：
+前面的 `docker build` 命令直接调用 Dockerfile，只构建镜像，不启动容器。Docker Compose 不使用另一套构建逻辑：它读取 `docker-compose.yml` 中的预设配置，复用同一个 Dockerfile，并通过 profile 选择产品系列和操作系统组合。下面的 `up -d` 会在后台启动容器；若本地镜像不存在，Docker Compose 会先构建镜像：
 
 ```bash
 cd docker/docker-npu
@@ -164,16 +166,22 @@ docker compose --profile a2-openeuler up -d
 
 # A3 + openEuler
 docker compose --profile a3-openeuler up -d
+
+# 950PR&950DT + Ubuntu
+docker compose --profile 950-ubuntu up -d
+
+# 950PR&950DT + openEuler
+docker compose --profile 950-openeuler up -d
 ```
 
 如果只想通过 Docker Compose 构建镜像而不启动容器，请使用 `docker compose --profile <profile> build`。
 
 ## 硬件支持与兼容性说明
 
-- A2 镜像使用标记为 `910b` 的 CANN 基础镜像，A3 镜像使用标记为 `a3` 的 CANN 基础镜像。
-- 镜像构建目标同时包含 x86-64（`linux/amd64`）和 AArch64（`linux/arm64`）宿主机。CPU 架构与硬件系列是 A2 还是 A3 无关。
+- A2 镜像使用标记为 `910b` 的 CANN 基础镜像，A3 镜像使用标记为 `a3` 的 CANN 基础镜像，950PR&950DT 镜像使用标记为 `950` 的 CANN 基础镜像。
+- 镜像构建目标同时包含 x86-64（`linux/amd64`）和 AArch64（`linux/arm64`）宿主机。CPU 架构与产品系列是 A2、A3 还是 950PR&950DT 无关。
 - Ubuntu 22.04 和 openEuler 24.03 指容器内部的操作系统。
-- 旧式 NPU tag 已由 `latest-<910b|a3>-<ubuntu|openeuler>` 格式取代。
+- 旧式 NPU tag 已由 `latest-<910b|a3|950>-<ubuntu|openeuler>` 格式取代。
 - 正式部署前，请验证具体驱动、固件、CANN 和 SoC 组合的兼容性。
 
 ## 许可证与免责声明
