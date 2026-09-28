@@ -65,6 +65,31 @@ if TYPE_CHECKING:
 logger = logging.get_logger(__name__)
 
 
+def restore_tied_weights_state_dict(model: "torch.nn.Module", state_dict: dict[str, "torch.Tensor"]) -> None:
+    r"""Restore storage aliases that may be lost while gathering a distributed state dict."""
+    parameter_aliases: dict[int, list[str]] = {}
+    for name, parameter in model.named_parameters(remove_duplicate=False):
+        parameter_aliases.setdefault(id(parameter), []).append(name)
+
+    for names in parameter_aliases.values():
+        present_names = [name for name in names if name in state_dict]
+        if len(present_names) < 2:
+            continue
+
+        reference = state_dict[present_names[0]]
+        if not isinstance(reference, torch.Tensor):
+            continue
+
+        for name in present_names[1:]:
+            tensor = state_dict[name]
+            if (
+                isinstance(tensor, torch.Tensor)
+                and tensor.shape == reference.shape
+                and tensor.dtype == reference.dtype
+            ):
+                state_dict[name] = reference
+
+
 class DummyOptimizer(torch.optim.Optimizer):
     r"""A dummy optimizer used for the GaLore or APOLLO algorithm."""
 
