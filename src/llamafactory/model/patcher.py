@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import sys
 from types import MethodType
 from typing import TYPE_CHECKING, Any
 
@@ -85,6 +86,68 @@ def _check_fla_dependencies() -> None:
         ) from exc
 
 
+def _install_npu_gdn_kernel_on_layer(gdn_module, npu_kernel) -> bool:
+    """Set the per-layer override, where this transformers still reads one.
+
+    Up to transformers 5.14 the forward calls `self.chunk_gated_delta_rule`, so setting the
+    attribute is the override point, and it reaches only the model being patched.
+    """
+    if not hasattr(gdn_module, "chunk_gated_delta_rule"):
+        return False
+
+    gdn_module.chunk_gated_delta_rule = npu_kernel
+    return True
+
+
+def _install_npu_gdn_kernel_on_modeling(gdn_module, npu_kernel) -> str:
+    """Set the kernel on the modeling module, which is process-wide and not undone.
+
+    5.15 moved the call to the module-level `torch_chunk_gated_delta_rule` and dropped the
+    attribute, so no per-instance override point is left. Writing here reaches every model of
+    this architecture in the process: the intent for a training script, but worth being loud
+    about under the WebUI or the API server, where several models share one process.
+    """
+    modeling = sys.modules[type(gdn_module).__module__]
+    if not hasattr(modeling, "torch_chunk_gated_delta_rule"):
+        return ""
+
+    modeling.torch_chunk_gated_delta_rule = npu_kernel
+    return f"{modeling.__name__}.torch_chunk_gated_delta_rule"
+
+
+def _replace_gdn_kernel_for_npu(layers, npu_kernel, model_name: str) -> None:
+    gdn_modules = [layer.linear_attn for layer in layers if hasattr(layer, "linear_attn")]
+    patched = [module for module in gdn_modules if _install_npu_gdn_kernel_on_layer(module, npu_kernel)]
+
+    if patched:
+        logger.info_rank0(
+            f"Replaced chunk_gated_delta_rule with NPU-compatible implementation for {model_name} "
+            f"model ({len(patched)} layers)."
+        )
+        return
+
+    # Nothing per-layer to write to, so this is the module-level release. One write covers every
+    # layer, so it happens once rather than once per layer.
+    installed_at = ""
+    for gdn_module in gdn_modules:
+        installed_at = _install_npu_gdn_kernel_on_modeling(gdn_module, npu_kernel)
+        if installed_at:
+            break
+
+    if installed_at:
+        logger.warning_rank0(
+            f"Replaced chunk_gated_delta_rule with NPU-compatible implementation for {model_name} "
+            f"model (via {installed_at}). This transformers offers no per-layer override point, so "
+            "the replacement is process-wide: every model of this architecture loaded afterwards "
+            "gets it too, and it is not restored."
+        )
+    else:
+        logger.warning_rank0(
+            f"Could not install the NPU chunk_gated_delta_rule for {model_name}: this transformers "
+            "release exposes the kernel somewhere else. The run will use the default kernel."
+        )
+
+
 def patch_qwen3_5_forward_npu(model: "PreTrainedModel") -> None:
     """Patch for Qwen3.5 models on NPU by importing torch_npu to enable torch.cuda compatibility.
 
@@ -117,23 +180,13 @@ def patch_qwen3_5_forward_npu(model: "PreTrainedModel") -> None:
     if model.config.architectures[0] == "Qwen3_5MoeForConditionalGeneration":
         try:
             # Qwen3.5-MoE structure: model.model.language_model.layers
-            for layer in model.model.language_model.layers:
-                if hasattr(layer, "linear_attn"):
-                    layer.linear_attn.chunk_gated_delta_rule = npu_chunk_gated_delta_rule
-
-            logger.info_rank0(
-                "Replaced chunk_gated_delta_rule with NPU-compatible implementation for Qwen3.5-MoE model."
-            )
+            _replace_gdn_kernel_for_npu(model.model.language_model.layers, npu_chunk_gated_delta_rule, "Qwen3.5-MoE")
         except Exception as e:
             logger.warning_rank0(f"Failed to replace chunk_gated_delta_rule for NPU: {e}")
     elif model.config.architectures[0] == "Qwen3_5ForConditionalGeneration":
         try:
             # Qwen3.5 structure: model.model.layers
-            for layer in model.model.layers:
-                if hasattr(layer, "linear_attn"):
-                    layer.linear_attn.chunk_gated_delta_rule = npu_chunk_gated_delta_rule
-
-            logger.info_rank0("Replaced chunk_gated_delta_rule with NPU-compatible implementation for Qwen3.5 model.")
+            _replace_gdn_kernel_for_npu(model.model.layers, npu_chunk_gated_delta_rule, "Qwen3.5")
         except Exception as e:
             logger.warning_rank0(f"Failed to replace chunk_gated_delta_rule for NPU: {e}")
 
