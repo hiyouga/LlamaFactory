@@ -24,7 +24,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from peft import PeftModel
-from transformers import DataCollatorForSeq2Seq
+from transformers import DataCollatorForSeq2Seq, DataCollatorWithPadding
 
 from ..extras.constants import AUDIO_PLACEHOLDER, IGNORE_INDEX, IMAGE_PLACEHOLDER, MROPE_MODELS
 from ..extras.packages import is_pillow_available
@@ -38,6 +38,16 @@ if TYPE_CHECKING:
     from transformers import ProcessorMixin
 
     from .template import Template
+
+
+@dataclass
+class PretrainDataCollatorWithPadding(DataCollatorWithPadding):
+    r"""Build causal labels using the attention mask so a shared PAD/EOS token remains supervised."""
+
+    def __call__(self, features: list[dict[str, Any]]) -> dict[str, "torch.Tensor"]:
+        batch = super().__call__(features)
+        batch["labels"] = batch["input_ids"].masked_fill(batch["attention_mask"] == 0, IGNORE_INDEX)
+        return batch
 
 
 def _slice_mm_inputs_for_sample(
