@@ -3424,6 +3424,17 @@ register_model_group(
 
 register_model_group(
     models={
+        "Xing4.0-29B-A4B": {
+            DownloadSource.DEFAULT: "XingChen-AGI/Xing4.0-29B-A4B",
+            DownloadSource.MODELSCOPE: "XingChen-AGI/Xing4.0-29B-A4B",
+        },
+    },
+    template="xing4_0",
+)
+
+
+register_model_group(
+    models={
         "VibeThinker-1.5B": {
             DownloadSource.DEFAULT: "WeiboAI/VibeThinker-1.5B",
             DownloadSource.MODELSCOPE: "WeiboAI/VibeThinker-1.5B",

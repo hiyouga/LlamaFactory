@@ -31,7 +31,7 @@ Init workflow:
 
 import torch
 from accelerate import init_empty_weights
-from transformers import AutoConfig, AutoProcessor
+from transformers import AutoConfig, AutoProcessor, AutoTokenizer
 
 from ..accelerator.helper import DeviceType
 from ..accelerator.interface import DistributedInterface
@@ -97,10 +97,17 @@ class ModelEngine:
         NOTE: Transformers v5 always use fast tokenizer.
         https://github.com/huggingface/transformers/blob/v5.0.0rc1/src/transformers/models/auto/tokenization_auto.py#L642
         """
-        return AutoProcessor.from_pretrained(
-            self.args.model,
-            trust_remote_code=self.args.trust_remote_code,
-        )
+        try:
+            return AutoProcessor.from_pretrained(
+                self.args.model,
+                trust_remote_code=self.args.trust_remote_code,
+            )
+        except Exception:
+            logger.info_rank0("Failed to load processor, falling back to tokenizer.")
+            return AutoTokenizer.from_pretrained(
+                self.args.model,
+                trust_remote_code=self.args.trust_remote_code,
+            )
 
     def _sync_chat_template(self) -> None:
         """Sync chat_template and inject custom_chat_template."""
