@@ -16,7 +16,13 @@ import os
 
 import pytest
 
-from llamafactory.train.test_utils import compare_model, load_infer_model, load_reference_model, load_train_model
+from llamafactory.train.test_utils import (
+    compare_model,
+    compare_model_pissa,
+    load_infer_model,
+    load_reference_model,
+    load_train_model,
+)
 
 
 TINY_LLAMA3 = os.getenv("TINY_LLAMA3", "llamafactory/tiny-random-Llama-3")
@@ -49,11 +55,14 @@ INFER_ARGS = {
 }
 
 
-@pytest.mark.xfail(reason="PiSSA initialization is not stable in different platform.")
 def test_pissa_train():
     model = load_train_model(**TRAIN_ARGS)
     ref_model = load_reference_model(TINY_LLAMA_PISSA, TINY_LLAMA_PISSA, use_pissa=True, is_trainable=True)
-    compare_model(model, ref_model)
+    # Non-LoRA params (embeddings, norms, lm_head) must match exactly; skip LoRA-layer weights.
+    compare_model(model, ref_model, skip_keys=["lora_A", "lora_B", "base_layer"])
+    # SVD factors (lora_A/lora_B) are gauge-dependent and differ across platforms, so
+    # compare the invariant B@A update instead of the raw factors.
+    compare_model_pissa(model, ref_model)
 
 
 @pytest.mark.xfail(reason="Known connection error.")
