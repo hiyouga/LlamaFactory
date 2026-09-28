@@ -1939,6 +1939,18 @@ register_model_group(
 
 register_model_group(
     models={
+        "Muse-Glimmer-30B": {
+            DownloadSource.DEFAULT: "meta-models/Muse-Glimmer-30B",
+            DownloadSource.MODELSCOPE: "meta-models/Muse-Glimmer-30B",
+        },
+    },
+    template="muse_glimmer",
+    multimodal=True,
+)
+
+
+register_model_group(
+    models={
         "MiniCPM4-0.5B-Chat": {
             DownloadSource.DEFAULT: "openbmb/MiniCPM4-0.5B",
             DownloadSource.MODELSCOPE: "OpenBMB/MiniCPM4-0.5B",

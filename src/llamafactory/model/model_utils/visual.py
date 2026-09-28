@@ -354,6 +354,15 @@ _register_composite_model(
 
 
 _register_composite_model(
+    model_type="muse_glimmer",
+    projector_keys=["multi_modal_projector"],
+    vision_model_keys=["perception_encoder"],
+    language_model_keys=["text_decoder", "lm_head"],
+    lora_conflict_keys=["perception_encoder"],
+)
+
+
+_register_composite_model(
     model_type="mllama",
     vision_model_keys=["vision_model"],
 )
