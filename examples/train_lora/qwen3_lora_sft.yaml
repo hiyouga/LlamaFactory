@@ -10,7 +10,7 @@ lora_rank: 8
 lora_target: all
 
 ### dataset
-dataset: identity,alpaca_en_demo
+dataset: identity
 template: qwen3_nothink
 cutoff_len: 2048
 max_samples: 1000
