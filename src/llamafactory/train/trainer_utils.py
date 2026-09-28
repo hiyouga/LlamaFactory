@@ -891,9 +891,17 @@ def get_swanlab_callback(finetuning_args: "FinetuningArguments") -> "TrainerCall
     return swanlab_callback
 
 
-def get_placement_group(num_workers: int) -> tuple["PlacementGroup", dict[str, int]]:
-    r"""Get the Ray placement group for distributed training."""
-    bundle = {"CPU": 10}
+def get_placement_group(
+    num_workers: int, num_cpus_per_worker: int = 1
+) -> tuple["PlacementGroup", dict[str, int]]:
+    r"""Get the Ray placement group for distributed training.
+
+    Args:
+        num_workers: Number of training workers (not total cluster devices).
+        num_cpus_per_worker: Number of CPUs to reserve per worker bundle. Defaults to 1
+            to avoid scheduling failures on machines with fewer CPUs per GPU.
+    """
+    bundle = {"CPU": num_cpus_per_worker}
     device_name = get_device_name().upper()
     if device_name != "CPU":
         bundle[device_name] = 1
@@ -910,9 +918,14 @@ def get_ray_remote_config_for_worker(
     world_size: int,
     master_addr: str,
     master_port: str,
+    num_cpus: int = 1,
     env: dict[str, str] = None,
 ) -> dict[str, Any]:
-    r"""Get the remote config for a Ray worker."""
+    r"""Get the remote config for a Ray worker.
+
+    Args:
+        num_cpus: Number of CPUs per worker. Defaults to 1 to match the placement group bundle.
+    """
     env_vars = {
         "RANK": str(rank),
         "WORLD_SIZE": str(world_size),
@@ -928,7 +941,7 @@ def get_ray_remote_config_for_worker(
             placement_group_bundle_index=bundle_idx,
         ),
         "runtime_env": {"env_vars": env},
-        "num_cpus": 10,
+        "num_cpus": num_cpus,
     }
 
     device_name = get_device_name()
@@ -946,8 +959,20 @@ def get_ray_head_node_ip() -> str:
     return head_ip
 
 
-def sort_placement_group_by_node_ip(placement_group: "PlacementGroup", master_addr: str = None) -> list[int]:
-    r"""Sort the placement group bundles by their node IP addresses."""
+def sort_placement_group_by_node_ip(
+    placement_group: "PlacementGroup", master_addr: str = None
+) -> tuple[list[int], str]:
+    r"""Sort the placement group bundles by their node IP addresses.
+
+    When ``master_addr`` is provided, bundles on that node are placed first so that
+    rank 0 runs on the same node as the TCPStore / NCCL master.  If no bundle lands
+    on ``master_addr`` (e.g. head node has no GPU), the function falls back to the
+    IP of rank 0's bundle and updates ``master_addr`` accordingly, preventing an
+    NCCL initialization hang.
+
+    Returns:
+        A tuple of (sorted_bundle_indices, effective_master_addr).
+    """
 
     @ray.remote
     def _get_node_ip():
@@ -974,5 +999,15 @@ def sort_placement_group_by_node_ip(placement_group: "PlacementGroup", master_ad
         if preferred_indices:
             remaining = [i for i in sorted_bundle_indices if i not in preferred_indices]
             sorted_bundle_indices = preferred_indices + remaining
+        else:
+            # Head node has no accelerator devices, so no bundles were placed there.
+            # Use the IP of the first bundle (rank 0) as the effective master_addr
+            # so that MASTER_ADDR points to the node where rank 0 actually runs.
+            rank0_ip = bundle_ips[sorted_bundle_indices[0]]
+            logger.warning(
+                f"No bundles were placed on master_addr={master_addr} (head node may lack accelerator "
+                f"devices). Falling back to rank 0 node IP ({rank0_ip}) as master_addr."
+            )
+            master_addr = rank0_ip
 
-    return sorted_bundle_indices
+    return sorted_bundle_indices, master_addr
