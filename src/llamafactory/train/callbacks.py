@@ -33,7 +33,14 @@ from typing_extensions import override
 
 from ..extras import logging
 from ..extras.constants import TRAINER_LOG, V_HEAD_SAFE_WEIGHTS_NAME, V_HEAD_WEIGHTS_NAME
-from ..extras.misc import get_peak_memory, is_env_enabled, is_torch_cuda_available, is_torch_npu_available, use_ray
+from ..extras.misc import (
+    get_peak_memory,
+    is_env_enabled,
+    is_torch_cuda_available,
+    is_torch_npu_available,
+    is_torch_supa_available,
+    use_ray,
+)
 from ..extras.packages import is_safetensors_available
 
 
@@ -504,6 +511,8 @@ class ModuleProfilerCallback(TrainerCallback):
     @staticmethod
     def _get_accelerator():
         """Detect available accelerator and return (event_factory, synchronize_fn)."""
+        if is_torch_supa_available():
+            return torch.supa.Event, torch.supa.synchronize
         if is_torch_cuda_available():
             return torch.cuda.Event, torch.cuda.synchronize
         if is_torch_npu_available():

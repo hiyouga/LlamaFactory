@@ -49,3 +49,4 @@ LlamaFactory v1 文档
    :caption: Multi-Backend
 
    multi-backend/npu/index
+   multi-backend/supa/index

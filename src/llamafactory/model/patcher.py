@@ -483,7 +483,6 @@ def patch_model(
         prepare_model_for_training(model, model_args)
         autocast_projector_dtype(model, model_args)
         add_z3_leaf_module(model)
-
         if getattr(model.config, "model_type", None) in [
             "qwen3_5",
             "qwen3_5_moe",

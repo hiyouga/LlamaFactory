@@ -79,13 +79,14 @@ def get_unsloth_gradient_checkpointing_func() -> Callable:
             ctx.save_for_backward(saved_hidden_states)
             ctx.forward_function = forward_function
             ctx.args = args
+            ctx.device = hidden_states.device  # keep the accelerator device (cuda/npu/supa/...)
             return outputs
 
         @staticmethod
         @torch.cuda.amp.custom_bwd
         def backward(ctx: "torch.autograd.Function", grad_output: "torch.Tensor") -> "torch.Tensor":
             (hidden_states,) = ctx.saved_tensors
-            hidden_states = hidden_states.to("cuda", non_blocking=True).detach()
+            hidden_states = hidden_states.to(ctx.device, non_blocking=True).detach()
             hidden_states.requires_grad_(True)
             with torch.enable_grad():
                 outputs = ctx.forward_function(hidden_states, *ctx.args)

@@ -15,6 +15,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import functools
 import gc
 import os
 import socket
@@ -38,9 +39,25 @@ from transformers.utils.versions import require_version
 from . import logging
 
 
-_is_fp16_available = is_torch_npu_available() or is_torch_cuda_available()
+@functools.lru_cache
+def is_torch_supa_available() -> bool:
+    """Check if the supa (SUPA PrivateUse1) accelerator is available."""
+    try:
+        import torch_supa  # noqa: F401  # registers the "supa" device
+
+        return hasattr(torch, "supa") and torch.supa.is_available()
+    except Exception:
+        return False
+
+
+_is_fp16_available = is_torch_npu_available() or is_torch_supa_available() or is_torch_cuda_available()
 try:
-    _is_bf16_available = is_torch_bf16_gpu_available() or (is_torch_npu_available() and torch.npu.is_bf16_supported())
+    if is_torch_supa_available():
+        _is_bf16_available = torch.supa.is_bf16_supported()
+    else:
+        _is_bf16_available = is_torch_bf16_gpu_available() or (
+            is_torch_npu_available() and torch.npu.is_bf16_supported()
+        )
 except Exception:
     _is_bf16_available = False
 
@@ -147,6 +164,8 @@ def get_current_device() -> "torch.device":
         device = "xpu:{}".format(os.getenv("LOCAL_RANK", "0"))
     elif is_torch_npu_available():
         device = "npu:{}".format(os.getenv("LOCAL_RANK", "0"))
+    elif is_torch_supa_available():
+        device = "supa:{}".format(os.getenv("LOCAL_RANK", "0"))
     elif is_torch_mps_available():
         device = "mps:{}".format(os.getenv("LOCAL_RANK", "0"))
     elif is_torch_cuda_available():
@@ -163,6 +182,8 @@ def get_device_name() -> str:
         device = "xpu"
     elif is_torch_npu_available():
         device = "npu"
+    elif is_torch_supa_available():
+        device = "supa"
     elif is_torch_mps_available():
         device = "mps"
     elif is_torch_cuda_available():
@@ -190,6 +211,8 @@ def get_device_count() -> int:
         return torch.xpu.device_count()
     elif is_torch_npu_available():
         return torch.npu.device_count()
+    elif is_torch_supa_available():
+        return torch.supa.device_count()
     elif is_torch_mps_available():
         return torch.mps.device_count()
     elif is_torch_cuda_available():
@@ -211,6 +234,8 @@ def get_current_memory() -> tuple[int, int]:
         return torch.xpu.mem_get_info()
     elif is_torch_npu_available():
         return torch.npu.mem_get_info()
+    elif is_torch_supa_available():
+        return torch.supa.mem_get_info()
     elif is_torch_mps_available():
         return torch.mps.current_allocated_memory(), torch.mps.recommended_max_memory()
     elif is_torch_cuda_available():
@@ -225,6 +250,8 @@ def get_peak_memory() -> tuple[int, int]:
         return torch.xpu.max_memory_allocated(), torch.xpu.max_memory_reserved()
     elif is_torch_npu_available():
         return torch.npu.max_memory_allocated(), torch.npu.max_memory_reserved()
+    elif is_torch_supa_available():
+        return torch.supa.max_memory_allocated(), torch.supa.max_memory_reserved()
     elif is_torch_mps_available():
         return torch.mps.current_allocated_memory(), -1
     elif is_torch_cuda_available():
@@ -251,7 +278,11 @@ def infer_optim_dtype(model_dtype: Optional["torch.dtype"]) -> "torch.dtype":
 def is_accelerator_available() -> bool:
     r"""Check if the accelerator is available."""
     return (
-        is_torch_xpu_available() or is_torch_npu_available() or is_torch_mps_available() or is_torch_cuda_available()
+        is_torch_xpu_available()
+        or is_torch_npu_available()
+        or is_torch_supa_available()
+        or is_torch_mps_available()
+        or is_torch_cuda_available()
     )
 
 
@@ -285,6 +316,8 @@ def torch_gc() -> None:
         torch.xpu.empty_cache()
     elif is_torch_npu_available():
         torch.npu.empty_cache()
+    elif is_torch_supa_available():
+        torch.supa.empty_cache()
     elif is_torch_mps_available():
         torch.mps.empty_cache()
     elif is_torch_cuda_available():
