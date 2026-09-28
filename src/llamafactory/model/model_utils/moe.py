@@ -176,6 +176,7 @@ def configure_moe(config: "PretrainedConfig", model_args: "ModelArguments", is_t
         "phimoe",
         "qwen2_moe",
         "qwen3_moe",
+        "qwen3_5_moe",
     ]:
         setattr(config, "output_router_logits", True)
 
@@ -195,6 +196,7 @@ def configure_moe(config: "PretrainedConfig", model_args: "ModelArguments", is_t
         "phimoe",
         "qwen2_moe",
         "qwen3_moe",
+        "qwen3_5_moe",
     ]:
         setattr(config, "router_aux_loss_coef", model_args.moe_aux_loss_coef)
 
