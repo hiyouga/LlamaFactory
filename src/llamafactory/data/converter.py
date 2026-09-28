@@ -282,6 +282,18 @@ class OpenAIDatasetConverter(DatasetConverter):
                 }
             )
 
+        # Flush trailing tool responses (a conversation that ends on observation messages)
+        # which the in-loop flush above only handles when a later non-observation message follows.
+        if len(tool_responses) > 0:
+            _content = "\n</tool_response>\n<tool_response>\n".join(tool_responses)
+            aligned_messages.append(
+                {
+                    "role": Role.OBSERVATION.value,
+                    "content": _content,
+                }
+            )
+            tool_responses = []
+
         odd_tags = (Role.USER.value, Role.OBSERVATION.value)
         even_tags = (Role.ASSISTANT.value, Role.FUNCTION.value)
         accept_tags = (odd_tags, even_tags)
