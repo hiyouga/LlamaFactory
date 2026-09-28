@@ -91,6 +91,30 @@ def test_default_tool_formatter():
 
 
 @pytest.mark.runs_on(["cpu", "mps", "xpu"])
+def test_default_tool_formatter_without_parameters():
+    formatter = ToolFormatter(tool_format="default")
+    tools = [
+        {"name": "get_time", "description": "time_desc"},
+        {"type": "function", "function": {"name": "get_date", "parameters": {"type": "object"}}},
+    ]
+    assert formatter.apply(content=json.dumps(tools)) == [
+        "You have access to the following tools:\n"
+        "> Tool Name: get_time\n"
+        "Tool Description: time_desc\n"
+        "Tool Args:\n\n"
+        "> Tool Name: get_date\n"
+        "Tool Description: \n"
+        "Tool Args:\n\n"
+        "Use the following format if using a tool:\n"
+        "```\n"
+        "Action: tool name (one of [get_time, get_date])\n"
+        "Action Input: the input to the tool, in a JSON format representing the kwargs "
+        """(e.g. ```{"input": "hello world", "num_beams": 5}```)\n"""
+        "```\n"
+    ]
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
 def test_default_tool_extractor():
     formatter = ToolFormatter(tool_format="default")
     result = """Action: test_tool\nAction Input: {"foo": "bar", "size": 10}"""
