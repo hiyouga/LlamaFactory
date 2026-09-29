@@ -62,3 +62,20 @@ def test_sharegpt_converter():
         "_videos": None,
         "_audios": None,
     }
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
+def test_a_user_role_is_not_kept_as_the_preferred_answer():
+    dataset_attr = DatasetAttr("hf_hub", "llamafactory/tiny-supervised-dataset")
+    dataset_attr.ranking = True
+    dataset_attr.chosen = "chosen"
+    dataset_attr.rejected = "rejected"
+    data_args = DataArguments()
+    example = {
+        "conversations": [{"from": "human", "value": "hi"}],
+        "chosen": {"from": "human", "value": "nope"},
+        "rejected": {"from": "gpt", "value": "hello"},
+    }
+    converted = get_dataset_converter("sharegpt", dataset_attr, data_args)(example)
+    assert converted["_prompt"] == []
+    assert converted["_response"] == []
