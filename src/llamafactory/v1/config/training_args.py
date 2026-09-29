@@ -144,6 +144,10 @@ class TrainingArguments:
         default=1,
         metadata={"help": "Log metrics every N optimizer steps."},
     )
+    disable_dropout: bool = field(
+        default=True,
+        metadata={"help": "Disable model dropout during DPO and reward model training."},
+    )
     chunk_loss_size: int | None = field(
         default=None,
         metadata={"help": "Maximum flattened token rows per Chunk Loss chunk. None disables Chunk Loss."},
