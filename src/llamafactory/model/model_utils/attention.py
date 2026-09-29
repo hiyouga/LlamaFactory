@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import torch
 from typing import TYPE_CHECKING
 
 from ...extras import logging
@@ -92,6 +93,16 @@ def configure_attn_implementation(config: "PretrainedConfig", model_args: "Model
         requested_attn_implementation = "flash_attention_3"
     else:
         raise NotImplementedError(f"Unknown attention type: {model_args.flash_attn}")
+
+    # Validate: FlashAttention requires half-precision dtype
+    if requested_attn_implementation in ("flash_attention_2", "flash_attention_3"):
+        if model_args.compute_dtype == torch.float32:
+            raise ValueError(
+                "flash_attn='{}' is incompatible with float32. ".format(model_args.flash_attn)
+                + "FlashAttention requires float16 or bfloat16. "
+                + "Please set bf16=true or fp16=true in training arguments, "
+                + "or set compute_dtype to float16 or bfloat16."
+            )
 
     if getattr(config, "model_type", None) == "internlm2":  # special case for custom models
         setattr(config, "attn_implementation", requested_attn_implementation)
