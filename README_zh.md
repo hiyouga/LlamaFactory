@@ -570,11 +570,21 @@ python -c "import torch; print(torch.cuda.is_available())"
 
 如果看到 `True` 则说明安装成功。
 
+AMD ROCm 用户请改为从 [AMD TheRock 索引](https://github.com/ROCm/TheRock/blob/main/RELEASES.md)安装 PyTorch。将 `gfx1201` 替换为您显卡对应的架构，可通过 `rocm-bootstrap-detect` 查询（使用 `pip install rocm-bootstrap` 安装），或参考 [GFX 架构对照表](https://github.com/ROCm/TheRock/blob/main/RELEASES.md#gfx-target-lookup-table)：
+
+```bash
+pip uninstall torch torchvision torchaudio
+pip install --index-url https://stable.repo.amd.com/rocm/whl-next/ "torch[device-gfx1201]" "torchvision[device-gfx1201]" torchaudio
+python -c "import torch; print(torch.cuda.is_available(), torch.version.hip)"
+```
+
+ROCm 版本同样使用 `torch.cuda` 接口，看到 `True` 即说明显卡可用。在 `gfx1101`、`gfx1102`、`gfx1150`、`gfx1151` 和 `gfx1200` 上，PyTorch 只有在设置 `set TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1` 后才会启用基于 AOTriton 的 flash 和 memory-efficient SDPA 后端。否则这些显卡上的 `scaled_dot_product_attention` 会回退到 math 后端，速度慢得多且显存占用高得多。
+
 若遇到类似 `Can't pickle local object` 的报错，请设置 `dataloader_num_workers: 0`。
 
 #### 安装 BitsAndBytes
 
-如果要在 Windows 平台上开启量化 LoRA（QLoRA），需要安装 bitsandbytes。
+如果要在 Windows 平台上开启量化 LoRA（QLoRA），需要安装 bitsandbytes。bitsandbytes 自 0.50.2 起的官方发布包同样包含 Windows 上的 ROCm 构建，因此 AMD 显卡也可直接使用。
 
 对于大多数用户，建议优先使用官方发布的最新版本：
 
