@@ -19,6 +19,7 @@ from typing import Optional
 from transformers import Seq2SeqTrainingArguments
 from transformers.training_args import _convert_str_dict
 
+from ..extras.constants import DEFAULT_RAY_NUM_CPUS_PER_WORKER
 from ..extras.misc import is_env_enabled, use_ray
 from ..extras.packages import is_mcore_adapter_available
 
@@ -43,6 +44,15 @@ class RayArguments:
     ray_num_workers: int = field(
         default=1,
         metadata={"help": "The number of workers for Ray training. Default is 1 worker."},
+    )
+    ray_num_cpus_per_worker: int = field(
+        default=DEFAULT_RAY_NUM_CPUS_PER_WORKER,
+        metadata={
+            "help": (
+                "The number of CPUs reserved for each Ray worker. Each worker runs its own dataloader "
+                "and dataset preprocessing, lower this value only if the nodes are CPU constrained."
+            )
+        },
     )
     ray_init_kwargs: dict | str | None = field(
         default=None,
