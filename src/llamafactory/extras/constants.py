@@ -36,6 +36,8 @@ CHOICES = ["A", "B", "C", "D"]
 
 DATA_CONFIG = "dataset_info.json"
 
+DEFAULT_RAY_NUM_CPUS_PER_WORKER = 10
+
 DEFAULT_TEMPLATE = defaultdict(str)
 
 FILEEXT2TYPE = {
