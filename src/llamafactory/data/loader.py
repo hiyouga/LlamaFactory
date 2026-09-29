@@ -21,6 +21,7 @@ from datasets import Dataset, DatasetDict, load_dataset, load_from_disk
 from ..extras import logging
 from ..extras.constants import FILEEXT2TYPE
 from ..extras.misc import check_version, has_tokenized_data
+from .collator_tokenized import TokenizedIdsCollator
 from .converter import align_dataset
 from .data_utils import get_dataset_module, merge_dataset, read_cloud_json, split_dataset
 from .parser import get_dataset_list
@@ -32,6 +33,7 @@ from .processor import (
     SupervisedDatasetProcessor,
     UnsupervisedDatasetProcessor,
 )
+from .tokenized_parquet import load_tokenized_parquet_dataset
 
 
 if TYPE_CHECKING:
@@ -240,6 +242,10 @@ def _get_preprocessed_dataset(
     if dataset is None:
         return None
 
+    # Bypass tokenizer for pre-tokenized pathway
+    if data_args.dataset_format == "tokenized_ids":
+        return dataset
+
     dataset_processor = _get_dataset_processor(
         data_args, stage, template, tokenizer, processor, do_generate=(training_args.predict_with_generate and is_eval)
     )
@@ -300,15 +306,30 @@ def get_dataset(
 
     # Load and preprocess dataset
     with training_args.main_process_first(desc="load dataset", local=(not data_args.data_shared_file_system)):
-        dataset = _get_merged_dataset(data_args.dataset, model_args, data_args, training_args, stage)
-        eval_dataset = _get_merged_dataset(
-            data_args.eval_dataset,
-            model_args,
-            data_args,
-            training_args,
-            stage,
-            return_dict=data_args.eval_on_each_dataset,
-        )
+        if data_args.dataset_format == "tokenized_ids":
+            # Load pre-tokenized parquet files
+            cols = data_args.dataset_columns or {}
+            ids_key = cols.get("ids", "input_ids")
+            mask_key = cols.get("mask", "attention_mask")
+            files = data_args.data_files
+            if isinstance(files, dict):
+                files = files.get("train", [])
+            if not isinstance(files, list) or len(files) == 0:
+                raise ValueError(
+                    "For dataset_format=tokenized_ids, provide non-empty data_files list (parquet paths)."
+                )
+            dataset = load_tokenized_parquet_dataset(files, ids_key=ids_key, mask_key=mask_key)
+            eval_dataset = None
+        else:
+            dataset = _get_merged_dataset(data_args.dataset, model_args, data_args, training_args, stage)
+            eval_dataset = _get_merged_dataset(
+                data_args.eval_dataset,
+                model_args,
+                data_args,
+                training_args,
+                stage,
+                return_dict=data_args.eval_on_each_dataset,
+            )
 
     with training_args.main_process_first(desc="pre-process dataset", local=(not data_args.data_shared_file_system)):
         # move front to make sure eval_dataset(if contain or split) can preprocessed appropriately
@@ -333,4 +354,9 @@ def get_dataset(
                 logger.info_rank0(f"Tokenized dataset is saved at {data_args.tokenized_path}.")
                 logger.info_rank0(f"Please launch the training with `tokenized_path: {data_args.tokenized_path}`.")
 
-        return get_dataset_module(dataset_dict)
+        module = get_dataset_module(dataset_dict)
+        # Replace collator for tokenized_ids
+        if data_args.dataset_format == "tokenized_ids":
+            collator = TokenizedIdsCollator(tokenizer=tokenizer, model=None)  # model attached later by trainer
+            module["data_collator"] = collator
+        return module
