@@ -98,6 +98,7 @@ def create_eval_tab(engine: "Engine") -> dict[str, "Component"]:
     stop_btn.click(engine.runner.set_abort)
     resume_btn.change(engine.runner.monitor, outputs=output_elems, concurrency_limit=None)
 
-    dataset.focus(list_datasets, [dataset_dir], [dataset], queue=False)
+    lang = engine.manager.get_elem_by_id("top.lang")
+    dataset.focus(list_datasets, [lang, dataset_dir], [dataset], queue=False)
 
     return elem_dict
