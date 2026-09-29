@@ -1,0 +1,80 @@
+### MTP end-to-end verification config
+#
+# Purpose: verify MTP (a) checkpoint save/resume, (b) Ulysses CP precision and
+# compatibility, on a small model in ~10 minutes. Fix `seed` / `global_batch_size` /
+# `bf16` so runs are comparable. Do NOT change data, seed, lr or steps between runs.
+#
+# Run matrix (override via OmegaConf CLI args, same yaml every time):
+#
+#   # Run A — CP off (baseline, dp=2)
+#   NPROC_PER_NODE=2 USE_V1=1 llamafactory-cli train examples/v1/train_full/train_full_mtp_verify.yaml \
+#       cp_size=1 output_dir=outputs/mtp_verify_cp1 2>&1 | tee run_cp1.log
+#
+#   # Run B — CP on (dp=1, cp=2)
+#   NPROC_PER_NODE=2 USE_V1=1 llamafactory-cli train examples/v1/train_full/train_full_mtp_verify.yaml \
+#       cp_size=2 output_dir=outputs/mtp_verify_cp2 2>&1 | tee run_cp2.log
+#
+#   PASS (CP precision): A vs B per-step `loss` and `mtp_loss` track each other closely
+#   (same order of magnitude as step-to-step movement; small float/attention-order noise
+#   is expected). A gross mismatch or NaN means the CP path is broken.
+#
+#   # Run C — resume from B's checkpoint-10 into a fresh output dir
+#   NPROC_PER_NODE=2 USE_V1=1 llamafactory-cli train examples/v1/train_full/train_full_mtp_verify.yaml \
+#       cp_size=2 output_dir=outputs/mtp_verify_resume \
+#       resume_from_checkpoint=outputs/mtp_verify_cp2/checkpoint-10 2>&1 | tee run_resume.log
+#
+#   PASS (save/load): the first logged step after resume continues B's loss/mtp_loss
+#   smoothly. A jump back to the initial high loss means mtp.* or the optimizer state
+#   was not restored. Keep `mtp_config` identical between runs (different num_layers/
+#   loss_scale changes the grafted FQNs and mismatches the checkpoint).
+#
+#   # Run D — HF export reload check (after B finishes; see PR docs for the snippet)
+#   outputs/mtp_verify_cp2 holds the final HF-format export (shared mtp.embed_tokens/
+#   output_layer stripped; mtp.layers/enorm/hnorm/e_proj/h_proj/final_layernorm saved).
+#   Reload it with apply_mtp + load_mtp_weights and run a forward (script below in the
+#   docs / chat transcript).
+#
+# `global_batch_size: 2` is REQUIRED for A vs B comparability: cp_size=1 on 2 GPUs gives
+# dp=2, cp_size=2 gives dp=1; without this field the effective batch (dp * micro_batch)
+# would differ between the two runs and the loss curves would not be comparable.
+
+model: Qwen/Qwen3-0.6B
+model_class: llm
+
+# MTP: 1 head, loss_scale 0.3 (total = lm_loss + 0.3 * mtp_loss).
+mtp_config:
+  name: mtp
+  num_layers: 1
+  loss_scale: 0.3
+
+flash_attn: flash_attention_2
+
+dist_config:
+  name: fsdp2
+  dcp_path: null
+
+# CP knobs are top-level fields (upstream #10762), not inside dist_config.
+cp_mode: ulysses
+cp_size: 2
+
+### data
+train_dataset: data/v1_sft_demo.yaml
+
+### training — fixed for comparability
+seed: 42
+bf16: false
+micro_batch_size: 1
+global_batch_size: 2
+cutoff_len: 512
+learning_rate: 1.0e-4
+max_steps: 30
+logging_steps: 1
+save_steps: 10
+output_dir: outputs/mtp_verify_cp2
+
+### resume (uncomment for a file-based resume instead of the CLI override)
+# resume_from_checkpoint: outputs/mtp_verify_cp2/checkpoint-10
+
+### sample
+sample_backend: hf
+max_new_tokens: 64
