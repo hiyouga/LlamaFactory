@@ -1,4 +1,4 @@
-# Copyright 2025 the KVCache.AI team, Approaching AI, and the LlamaFactory team.
+﻿# Copyright 2025 the KVCache.AI team, Approaching AI, and the LlamaFactory team.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,6 +14,7 @@
 
 import os
 import shutil
+import sys
 from typing import TYPE_CHECKING, Any, Optional
 
 import torch
@@ -70,6 +71,17 @@ def _training_function(config: dict[str, Any]) -> None:
     args = config.get("args")
     callbacks: list[Any] = config.get("callbacks")
     model_args, data_args, training_args, finetuning_args, generating_args = get_train_args(args)
+
+    # Windows multiprocessing fix: spawn start method cannot pickle local functions
+    # (e.g., PEFT's enable_input_require_grads closure), causing AttributeError at startup.
+    if sys.platform == "win32":
+        if training_args.dataloader_num_workers > 0:
+            logger.warning(
+                f"Windows detected: forcing dataloader_num_workers=0 "
+                f"(was {training_args.dataloader_num_workers}) "
+                f"to avoid multiprocessing pickling errors with spawn start method."
+            )
+            training_args.dataloader_num_workers = 0
 
     callbacks.append(LogCallback())
     if finetuning_args.pissa_convert:
@@ -369,3 +381,4 @@ def _ray_training_function(ray_args: "RayArguments", config: dict[str, Any]) -> 
 
     ray.get([worker._training_function.remote(config=config) for worker in workers])
     ray.shutdown()
+
