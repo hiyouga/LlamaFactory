@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from ...extras import logging
 from ...extras.constants import IGNORE_INDEX
+from ..data_utils import Role
 from .processor_utils import DatasetProcessor, greedy_knapsack, infer_seqlen
 
 
@@ -58,6 +59,7 @@ class SupervisedDatasetProcessor(DatasetProcessor):
         images: list["ImageInput"],
         videos: list["VideoInput"],
         audios: list["AudioInput"],
+        loss_mask: Optional[list[int]] = None,
     ) -> tuple[list[int], list[int]]:
         messages = self.template.mm_plugin.process_messages(prompt + response, images, videos, audios, self.processor)
         input_ids, labels = self.template.mm_plugin.process_token_ids(
@@ -68,6 +70,26 @@ class SupervisedDatasetProcessor(DatasetProcessor):
         total_length = len(input_ids) + (1 if self.template.efficient_eos else 0)
         if self.data_args.mask_history:
             encoded_pairs = encoded_pairs[::-1]  # high priority for last turns
+
+        assistant_loss_mask: Optional[list[int]] = None
+        if loss_mask is not None:
+            if len(loss_mask) != len(prompt) + len(response):
+                logger.warning_rank0_once(
+                    f"Dropped invalid `loss_mask` with length {len(loss_mask)} for example."
+                )
+            else:
+                assistant_loss_mask = []
+                for mask_value, message in zip(loss_mask, prompt + response):
+                    if message.get("role") == Role.ASSISTANT.value:
+                        assistant_loss_mask.append(1 if mask_value else 0)
+                if len(assistant_loss_mask) != len(encoded_pairs):
+                    logger.warning_rank0_once(
+                        "Mismatch between assistant turns and `loss_mask`. Ignoring provided mask."
+                    )
+                    assistant_loss_mask = None
+
+        if self.data_args.mask_history and assistant_loss_mask is not None:
+            assistant_loss_mask = assistant_loss_mask[::-1]  # align with reversed encoded_pairs
 
         for turn_idx, (source_ids, target_ids) in enumerate(encoded_pairs):
             if total_length >= self.data_args.cutoff_len:
@@ -92,6 +114,10 @@ class SupervisedDatasetProcessor(DatasetProcessor):
             else:
                 target_label = target_ids
 
+            if assistant_loss_mask is not None and turn_idx < len(assistant_loss_mask):
+                if assistant_loss_mask[turn_idx] == 0:
+                    target_label = [IGNORE_INDEX] * target_len
+
             if self.data_args.mask_history:  # reversed sequences
                 input_ids = source_ids + target_ids + input_ids
                 labels = source_label + target_label + labels
@@ -109,6 +135,7 @@ class SupervisedDatasetProcessor(DatasetProcessor):
         # build inputs with format `<bos> X Y <eos>` and labels with format `<ignore> ... <ignore> Y <eos>`
         # for multiturn examples, we only mask the prompt part in each prompt-response pair.
         model_inputs = defaultdict(list)
+        loss_masks = examples.get("_loss_mask")
         for i in range(len(examples["_prompt"])):
             if len(examples["_prompt"][i]) % 2 != 1 or len(examples["_response"][i]) != 1:
                 logger.warning_rank0(
@@ -116,6 +143,7 @@ class SupervisedDatasetProcessor(DatasetProcessor):
                 )
                 continue
 
+            example_loss_mask = loss_masks[i] if loss_masks else None
             input_ids, labels = self._encode_data_example(
                 prompt=examples["_prompt"][i],
                 response=examples["_response"][i],
@@ -124,6 +152,7 @@ class SupervisedDatasetProcessor(DatasetProcessor):
                 images=examples["_images"][i] or [],
                 videos=examples["_videos"][i] or [],
                 audios=examples["_audios"][i] or [],
+                loss_mask=example_loss_mask,
             )
             model_inputs["input_ids"].append(input_ids)
             model_inputs["attention_mask"].append([1] * len(input_ids))
@@ -152,6 +181,7 @@ class PackedSupervisedDatasetProcessor(SupervisedDatasetProcessor):
         batch_input_ids, batch_labels, batch_images, batch_videos, batch_audios = [], [], [], [], []
         lengths = []
         length2indexes = defaultdict(list)
+        loss_masks = examples.get("_loss_mask")
         for i in range(len(examples["_prompt"])):
             if len(examples["_prompt"][i]) % 2 != 1 or len(examples["_response"][i]) != 1:
                 logger.warning_rank0(
@@ -159,6 +189,7 @@ class PackedSupervisedDatasetProcessor(SupervisedDatasetProcessor):
                 )
                 continue
 
+            example_loss_mask = loss_masks[i] if loss_masks else None
             input_ids, labels = self._encode_data_example(
                 prompt=examples["_prompt"][i],
                 response=examples["_response"][i],
@@ -167,6 +198,7 @@ class PackedSupervisedDatasetProcessor(SupervisedDatasetProcessor):
                 images=examples["_images"][i] or [],
                 videos=examples["_videos"][i] or [],
                 audios=examples["_audios"][i] or [],
+                loss_mask=example_loss_mask,
             )
             length = len(input_ids)
             if length > self.data_args.cutoff_len:
