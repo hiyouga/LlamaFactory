@@ -25,6 +25,7 @@ from transformers import (
     AutoProcessor,
     AutoTokenizer,
 )
+from transformers.models.auto.tokenization_auto import get_tokenizer_config
 from trl import AutoModelForCausalLMWithValueHead
 
 from ..extras import logging
@@ -68,12 +69,45 @@ def _get_init_kwargs(model_args: "ModelArguments") -> dict[str, Any]:
     }
 
 
+def _pop_list_shaped_extra_special_tokens(model_args: "ModelArguments", init_kwargs: dict[str, Any]) -> list[str]:
+    r"""Work around transformers<5.0 crashing on list-shaped `extra_special_tokens`.
+
+    Some public checkpoints (e.g. Gemma-family, google/gemma-4-26B-A4B-it) ship
+    `extra_special_tokens` as a *list* in `tokenizer_config.json`. Every
+    transformers 4.55.0-4.57.6 release unconditionally calls `.keys()` on that
+    value in `_set_model_specific_special_tokens` and crashes with
+    `AttributeError: 'list' object has no attribute 'keys'`. The `isinstance`
+    guard fixing this only landed in the 5.0 rewrite, and we can't simply raise
+    our transformers floor to skip 4.x: `model_utils/longlora.py` and
+    `model/patcher.py` both mandate specific transformers<5.0 versions for their
+    own code paths, so 4.x has to keep working.
+
+    Instead, peek at the raw tokenizer config before `AutoTokenizer.from_pretrained`
+    even touches it. If the field is list-shaped, return its contents and let the
+    caller override the kwarg with an empty dict so the buggy code path never sees
+    the list -- the tokens themselves get re-added via `add_special_tokens` after
+    loading, so nothing is silently dropped.
+    """
+    try:
+        tokenizer_config = get_tokenizer_config(model_args.model_name_or_path, **init_kwargs)
+    except Exception:
+        return []
+
+    extra_special_tokens = tokenizer_config.get("extra_special_tokens")
+    if not isinstance(extra_special_tokens, list):
+        return []
+
+    init_kwargs["extra_special_tokens"] = {}
+    return [str(token) for token in extra_special_tokens]
+
+
 def load_tokenizer(model_args: "ModelArguments") -> "TokenizerModule":
     r"""Load pretrained tokenizer and optionally loads processor.
 
     Note: including inplace operation of model_args.
     """
     init_kwargs = _get_init_kwargs(model_args)
+    stray_extra_special_tokens = _pop_list_shaped_extra_special_tokens(model_args, init_kwargs)
     try:
         tokenizer = AutoTokenizer.from_pretrained(
             model_args.model_name_or_path,
@@ -91,6 +125,9 @@ def load_tokenizer(model_args: "ModelArguments") -> "TokenizerModule":
         )
     except Exception as e:
         raise OSError("Failed to load tokenizer.") from e
+
+    if stray_extra_special_tokens:
+        tokenizer.add_special_tokens({"additional_special_tokens": stray_extra_special_tokens})
 
     patch_tokenizer(tokenizer, model_args)
 
