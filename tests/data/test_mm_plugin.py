@@ -441,8 +441,10 @@ def test_moss_vl_plugin():
 def test_qwen3_vl_plugin():
     frame_seqlen = 1
     tokenizer_module = _load_tokenizer_module(model_name_or_path="Qwen/Qwen3-VL-30B-A3B-Instruct")
+    processor = tokenizer_module["processor"]
     qwen3_vl_plugin = get_mm_plugin(name="qwen3_vl", video_token="<|video_pad|>")
     check_inputs = {"plugin": qwen3_vl_plugin, **tokenizer_module}
+
     video_token = "<|video_pad|>" * frame_seqlen
     first_video = (
         f"<0.2 seconds><|vision_start|>{video_token}<|vision_end|>"
@@ -461,6 +463,10 @@ def test_qwen3_vl_plugin():
         {key: value.replace("<video>", first_video) for key, value in message.items()} for message in VIDEO_MESSAGES
     ]
     _check_plugin(**check_inputs)
+    model_mm_inputs = qwen3_vl_plugin.get_mm_inputs(
+        NO_IMAGES, VIDEOS, NO_AUDIOS, NO_IMGLENS, [len(VIDEOS)], NO_AUDLENS, BATCH_IDS, processor
+    )
+    assert "video_metadata" not in model_mm_inputs
     assert qwen3_vl_plugin.process_messages(messages, NO_IMAGES, videos, NO_AUDIOS, tokenizer_module["processor"]) == [
         {
             "role": "user",
