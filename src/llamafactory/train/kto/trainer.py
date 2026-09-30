@@ -176,6 +176,17 @@ class CustomKTOTrainer(KTOTrainer):
         if f"{prefix}cross_attention_mask" in batch:
             model_inputs["cross_attention_mask"] = batch[f"{prefix}cross_attention_mask"]
 
+        # mrope models (qwen2vl/qwen3.5 family): the collator precomputes position_ids /
+        # rope_deltas via get_rope_index. They must reach the forward — without them the
+        # model recomputes 3D positions itself, and on transformers >= 5.10 that path
+        # requires mm_token_type_ids and raises (the collator's dummy-image workaround
+        # puts image_grid_thw in every text-only batch, so the mrope path always runs).
+        if f"{prefix}position_ids" in batch:
+            model_inputs["position_ids"] = batch[f"{prefix}position_ids"]
+
+        if f"{prefix}rope_deltas" in batch:
+            model_inputs["rope_deltas"] = batch[f"{prefix}rope_deltas"]
+
         logits = model(**model_inputs, return_dict=True, use_cache=False).logits.to(torch.float32)
         logps, valid_length = get_batch_logps(logits=logits, labels=batch[f"{prefix}labels"])
         return logits, logps, logps / valid_length
