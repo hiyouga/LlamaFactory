@@ -219,6 +219,19 @@ register_model_group(
 
 register_model_group(
     models={
+        "Tiny-Aya-Global-Chat": {
+            DownloadSource.DEFAULT: "CohereLabs/tiny-aya-global",
+        },
+        "Tiny-Aya-Earth-Chat": {
+            DownloadSource.DEFAULT: "CohereLabs/tiny-aya-earth",
+        },
+    },
+    template="tiny_aya",
+)
+
+
+register_model_group(
+    models={
         "BLOOM-560M": {
             DownloadSource.DEFAULT: "bigscience/bloom-560m",
             DownloadSource.MODELSCOPE: "AI-ModelScope/bloom-560m",

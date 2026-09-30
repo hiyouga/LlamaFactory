@@ -407,6 +407,25 @@ def test_phi4_template():
 
 
 @pytest.mark.runs_on(["cpu", "mps", "xpu"])
+@pytest.mark.skipif(not HF_TOKEN, reason="Gated model.")
+@pytest.mark.parametrize("model_id", ["CohereLabs/tiny-aya-global", "CohereLabs/tiny-aya-earth"])
+def test_tiny_aya_template(model_id: str):
+    preamble = TEMPLATES["tiny_aya"].default_system
+    assert preamble.startswith("# System Preamble\n") and "# Default Preamble\n" in preamble
+    prompt_str = (
+        f"<BOS_TOKEN><|START_OF_TURN_TOKEN|><|SYSTEM_TOKEN|>{preamble}<|END_OF_TURN_TOKEN|>"
+        f"<|START_OF_TURN_TOKEN|><|USER_TOKEN|>{MESSAGES[0]['content']}<|END_OF_TURN_TOKEN|>"
+        f"<|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|><|START_RESPONSE|>{MESSAGES[1]['content']}<|END_RESPONSE|>"
+        "<|END_OF_TURN_TOKEN|>"
+        f"<|START_OF_TURN_TOKEN|><|USER_TOKEN|>{MESSAGES[2]['content']}<|END_OF_TURN_TOKEN|>"
+        "<|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|><|START_RESPONSE|>"
+    )
+    answer_str = f"{MESSAGES[3]['content']}<|END_RESPONSE|><|END_OF_TURN_TOKEN|>"
+    _check_template(model_id, "tiny_aya", prompt_str, answer_str)
+    assert DEFAULT_TEMPLATE["Tiny-Aya-Global-Chat"] == DEFAULT_TEMPLATE["Tiny-Aya-Earth-Chat"] == "tiny_aya"
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
 @pytest.mark.xfail(not HF_TOKEN, reason="Authorization.")
 def test_qwen2_5_template():
     prompt_str = (

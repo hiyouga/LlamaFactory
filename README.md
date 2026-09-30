@@ -338,6 +338,7 @@ Read technical notes:
 | [Seed (OSS/Coder)](https://huggingface.co/ByteDance-Seed)         | 8B/36B                           | seed_oss/seed_coder  |
 | [StarCoder 2](https://huggingface.co/bigcode)                     | 3B/7B/15B                        | -                    |
 | [TeleChat 2-2.5](https://huggingface.co/Tele-AI)                  | 3B/7B/35B/115B                   | telechat2            |
+| [Tiny Aya](https://huggingface.co/CohereLabs)                     | 3.35B                            | tiny_aya             |
 | [Yuan 2](https://huggingface.co/IEITYuan)                         | 2B/51B/102B                      | yuan                 |
 
 > [!NOTE]
