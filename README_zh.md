@@ -695,6 +695,9 @@ llamafactory-cli export examples/merge_lora/qwen3_lora_sft.yaml
 llamafactory-cli webui
 ```
 
+LLaMA Board 默认仅监听 `127.0.0.1`。如需对其他机器开放或在 Docker 容器中运行，请设置
+`GRADIO_SERVER_NAME=0.0.0.0`。
+
 ### 构建 Docker
 
 CUDA 用户：

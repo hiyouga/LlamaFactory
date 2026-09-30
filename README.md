@@ -695,6 +695,9 @@ See [examples/README.md](examples/README.md) for advanced usage (including distr
 llamafactory-cli webui
 ```
 
+By default, LLaMA Board only listens on `127.0.0.1`. To expose it to other machines or run it in
+Docker containers, set `GRADIO_SERVER_NAME=0.0.0.0`.
+
 ### Build Docker
 
 For CUDA users:
