@@ -1,0 +1,14 @@
+### Install model-specific dependencies: `pip install -r requirements/moss-vl.txt`
+### Note: DO NOT use quantized model or quantization_bit when merging lora adapters
+
+### model
+model_name_or_path: OpenMOSS-Team/MOSS-VL-Instruct-0708
+adapter_name_or_path: saves/moss-vl-11b/lora/sft
+template: moss_vl
+trust_remote_code: true
+
+### export
+export_dir: saves/moss_vl_sft_merged
+export_size: 5
+export_device: cpu  # choices: [cpu, auto]
+export_legacy_format: false

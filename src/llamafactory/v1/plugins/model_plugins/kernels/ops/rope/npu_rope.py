@@ -20,31 +20,32 @@ Init Phase:
 
 """
 
-import sys
+import importlib
 
 import torch
 
-from ......accelerator.helper import DeviceType
+from ......accelerator.helper import DeviceType, get_current_accelerator
 from ......utils.logging import get_logger
 from ......utils.types import HFModel
-from ...base import BaseKernel
-from ...registry import register_kernel
+from ...base import BaseKernel, KernelPlugin
 
 
 logger = get_logger(__name__)
 
 try:
     import torch_npu
-except ImportError:
-    pass
+except ImportError as exc:
+    _TORCH_NPU_IMPORT_ERROR = exc
+else:
+    _TORCH_NPU_IMPORT_ERROR = None
 
 
 def _apply_npu_rotary_emb(q, k, cos, sin):
     """Apply NPU-accelerated rotary embedding with automatic Partial RoPE detection.
 
-    This function automatically detects whether to use Partial RoPE or Full RoPE
-    based on the dimension ratio between ``cos/sin`` and ``q/k`` tensors, ensuring
-    compatibility with future model versions without hardcoding.
+    Partial RoPE is detected when the ``cos/sin`` width is smaller than the ``q/k``
+    head dimension. The leading rotary dimensions are transformed and any trailing
+    dimensions are passed through unchanged.
 
     Args:
         q (Tensor): Query tensor.
@@ -62,14 +63,14 @@ def _apply_npu_rotary_emb(q, k, cos, sin):
         q_rot, q_pass = q[..., :rotary_dim], q[..., rotary_dim:]
         k_rot, k_pass = k[..., :rotary_dim], k[..., rotary_dim:]
 
-        q_embed = torch_npu.npu_rotary_mul(q_rot, cos, sin).to(q.dtype)
-        k_embed = torch_npu.npu_rotary_mul(k_rot, cos, sin).to(k.dtype)
+        q_embed = torch_npu.npu_rotary_mul(q_rot, cos, sin, "half").to(q.dtype)
+        k_embed = torch_npu.npu_rotary_mul(k_rot, cos, sin, "half").to(k.dtype)
 
         q_embed = torch.cat([q_embed, q_pass], dim=-1)
         k_embed = torch.cat([k_embed, k_pass], dim=-1)
     else:
-        q_embed = torch_npu.npu_rotary_mul(q, cos, sin).to(q.dtype)
-        k_embed = torch_npu.npu_rotary_mul(k, cos, sin).to(k.dtype)
+        q_embed = torch_npu.npu_rotary_mul(q, cos, sin, "half").to(q.dtype)
+        k_embed = torch_npu.npu_rotary_mul(k, cos, sin, "half").to(k.dtype)
 
     return q_embed, k_embed
 
@@ -85,103 +86,110 @@ def _apply_rotary_pos_emb(q, k, cos, sin, position_ids=None, unsqueeze_dim=1):
         k (Tensor): Key tensor.
         cos (Tensor): Cosine part of embedding.
         sin (Tensor): Sine part of embedding.
-        position_ids (Tensor, optional): Position IDs. Defaults to ``None``.
+        position_ids (Tensor | int, optional): Ignored Transformers v4 position IDs, or the Transformers v5
+            ``unsqueeze_dim`` when supplied as the fifth positional argument.
         unsqueeze_dim (int): Dimension to unsqueeze cos and sin. Defaults to 1.
 
     Returns:
         tuple[Tensor, Tensor]: The embedded query and key tensors ``(q_embed, k_embed)``.
     """
+    # In transformers v5, the fifth positional argument is ``unsqueeze_dim``.
+    if isinstance(position_ids, int):
+        unsqueeze_dim = position_ids
+
     cos = cos.unsqueeze(unsqueeze_dim)
     sin = sin.unsqueeze(unsqueeze_dim)
 
     return _apply_npu_rotary_emb(q, k, cos, sin)
 
 
-def _apply_multimodal_rotary_pos_emb_qwen25_vl(q, k, cos, sin, mrope_section, unsqueeze_dim=1):
-    """Apply Rotary Position Embedding with multimodal sections (Qwen2-VL) on NPU.
-
-    This function supports Partial RoPE for multimodal inputs with automatic dimension
-    detection, ensuring compatibility with future model versions.
-
-    Args:
-        q (Tensor): Query tensor.
-        k (Tensor): Key tensor.
-        cos (Tensor): Cosine part of embedding.
-        sin (Tensor): Sine part of embedding.
-        mrope_section (list[int]): Multimodal RoPE section sizes.
-        unsqueeze_dim (int): Dimension to unsqueeze cos and sin. Defaults to 1.
-
-    Returns:
-        tuple[Tensor, Tensor]: The embedded query and key tensors ``(q_embed, k_embed)``.
-    """
-    mrope_section = mrope_section * 2
-    cos = torch.cat([m[i % 3] for i, m in enumerate(cos.split(mrope_section, dim=-1))], dim=-1).unsqueeze(
-        unsqueeze_dim
-    )
-    sin = torch.cat([m[i % 3] for i, m in enumerate(sin.split(mrope_section, dim=-1))], dim=-1).unsqueeze(
-        unsqueeze_dim
+def _default_rope_patch(module_type: str):
+    return (
+        (
+            f"transformers.models.{module_type}.modeling_{module_type}",
+            (("apply_rotary_pos_emb", _apply_rotary_pos_emb),),
+        ),
     )
 
-    return _apply_npu_rotary_emb(q, k, cos, sin)
+
+_MODEL_TYPE_TO_PATCHES = {
+    "qwen3": _default_rope_patch("qwen3"),
+    "qwen3_moe": _default_rope_patch("qwen3_moe"),
+    "qwen3_next": _default_rope_patch("qwen3_next"),
+    "qwen3_omni_moe": _default_rope_patch("qwen3_omni_moe"),
+    "qwen3_omni_moe_thinker": _default_rope_patch("qwen3_omni_moe"),
+    "qwen3_vl": _default_rope_patch("qwen3_vl"),
+    "qwen3_vl_moe": _default_rope_patch("qwen3_vl_moe"),
+    "qwen3_5": _default_rope_patch("qwen3_5"),
+    "qwen3_5_text": _default_rope_patch("qwen3_5"),
+    "qwen3_5_moe": _default_rope_patch("qwen3_5_moe"),
+    "qwen3_5_moe_text": _default_rope_patch("qwen3_5_moe"),
+}
 
 
-@register_kernel
+@KernelPlugin("npu_fused_rope").register()
 class NpuRoPEKernel(BaseKernel):
     """NPU Kernel for Rotary Position Embedding."""
 
-    _kernel_id = "npu_fused_rope"
-    _device = DeviceType.NPU
+    @staticmethod
+    def check_device() -> None:
+        current = get_current_accelerator().type
+        if current != DeviceType.NPU:
+            raise RuntimeError(f"NpuRoPEKernel requires NPU, current accelerator is {current}.")
 
-    @classmethod
-    def apply(cls, **kwargs) -> "HFModel":
-        """Apply RoPE acceleration by monkey-patching ``apply_rotary_pos_emb``.
+    @staticmethod
+    def check_deps() -> None:
+        if _TORCH_NPU_IMPORT_ERROR is not None:
+            raise RuntimeError("NpuRoPEKernel requires torch_npu.") from _TORCH_NPU_IMPORT_ERROR
 
-        Iterates through the model's modules to find attention layers, identifies
-        the module where they are defined, and replaces the original
-        ``apply_rotary_pos_emb`` function in that module's namespace with the
-        NPU-accelerated version.
+    @staticmethod
+    def _apply_model_patches(model_type: str) -> int:
+        patches = _MODEL_TYPE_TO_PATCHES.get(model_type)
+        if patches is None:
+            return 0
+
+        patched_count = 0
+        for module_name, replacements in patches:
+            try:
+                target_module = importlib.import_module(module_name)
+            except Exception as e:
+                logger.warning_rank0_once(f"Failed to import {module_name} for NPU RoPE kernel: {e}")
+                continue
+
+            for target_function_name, replacement in replacements:
+                if not hasattr(target_module, target_function_name):
+                    logger.warning_rank0_once(f"{module_name} has no {target_function_name}, skip NPU RoPE patch.")
+                    continue
+
+                if getattr(target_module, target_function_name) is replacement:
+                    continue
+
+                setattr(target_module, target_function_name, replacement)
+                patched_count += 1
+
+        return patched_count
+
+    @staticmethod
+    def _apply(**kwargs) -> "HFModel":
+        """Apply RoPE acceleration by monkey-patching rotary embedding functions.
+
+        Selects the target transformers modeling module from ``model.config.model_type``
+        and replaces its rotary embedding helper with the NPU-accelerated version.
 
         Args:
             **kwargs: Keyword arguments containing the model.
 
         Returns:
             HFModel: The model with patched RoPE functions.
-
-        Raises:
-            RuntimeError: If ``torch_npu`` is not available.
-            ValueError: If the model is not provided.
         """
-        if not cls.check_deps():
-            raise RuntimeError(f"torch_npu is not available but {cls.__name__} was called.")
+        model = kwargs["model"]
 
-        model = kwargs.get("model", None)
-        if model is None:
-            raise ValueError(f"HFModel instance is required for {cls.__name__}.")
+        model_type = getattr(model.config, "model_type", None)
+        if model_type not in _MODEL_TYPE_TO_PATCHES:
+            return model
 
-        _modules = set()
-        for module in model.modules():
-            if "Attention" in module.__class__.__name__:
-                module_name = module.__class__.__module__
-                if module_name in _modules:
-                    continue
-                try:
-                    target_module = sys.modules[module_name]
-                    if hasattr(target_module, "apply_rotary_pos_emb"):
-                        if getattr(target_module, "apply_rotary_pos_emb") is not _apply_rotary_pos_emb:
-                            setattr(target_module, "apply_rotary_pos_emb", _apply_rotary_pos_emb)
-                            _modules.add(module_name)
-                    if hasattr(target_module, "apply_multimodal_rotary_pos_emb"):
-                        if (
-                            getattr(target_module, "apply_multimodal_rotary_pos_emb")
-                            is not _apply_multimodal_rotary_pos_emb_qwen25_vl
-                        ):
-                            setattr(
-                                target_module,
-                                "apply_multimodal_rotary_pos_emb",
-                                _apply_multimodal_rotary_pos_emb_qwen25_vl,
-                            )
-                            _modules.add(module_name)
-                except Exception as e:
-                    logger.warning_rank0_once(f"Failed to apply RoPE kernel to module {module_name}: {e}")
+        patched_count = NpuRoPEKernel._apply_model_patches(model_type)
+        if patched_count:
+            logger.info_rank0(f"Applied NPU RoPE kernel to {patched_count} functions for model type: {model_type}.")
 
         return model

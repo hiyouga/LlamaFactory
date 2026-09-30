@@ -2,14 +2,15 @@ model: Qwen/Qwen3-0.6B
 trust_remote_code: true
 model_class: llm
 
-template: qwen3_nothink
+flash_attn: flash_attention_2
 
 # FSDP Config
 dist_config:
   name: fsdp2
   dcp_path: null
-  cp_mode: ulysses
-  cp_size: 2
+
+cp_mode: ulysses
+cp_size: 2
 
 ### data
 train_dataset: data/v1_sft_demo.yaml

@@ -539,6 +539,28 @@ LOCALES = {
             "info": "勾配クリッピングのためのノルム。",
         },
     },
+    "train_seed": {
+        "en": {
+            "label": "Seed",
+            "info": "Random seed for training.",
+        },
+        "ru": {
+            "label": "Seed",
+            "info": "Random seed for training.",
+        },
+        "zh": {
+            "label": "随机种子",
+            "info": "训练使用的随机种子。",
+        },
+        "ko": {
+            "label": "Seed",
+            "info": "Random seed for training.",
+        },
+        "ja": {
+            "label": "Seed",
+            "info": "Random seed for training.",
+        },
+    },
     "max_samples": {
         "en": {
             "label": "Max samples",
@@ -2706,6 +2728,45 @@ LOCALES = {
         },
         "ja": {
             "label": "温度",
+        },
+    },
+    "seed": {
+        "en": {
+            "label": "Generation seed (-1 for random)",
+        },
+        "ru": {
+            "label": "Generation seed (-1 = random)",
+        },
+        "zh": {
+            "label": "生成随机种子（-1 表示随机）",
+        },
+        "ko": {
+            "label": "Generation seed (-1 = random)",
+        },
+        "ja": {
+            "label": "Generation seed (-1 = random)",
+        },
+    },
+    "eval_seed": {
+        "en": {
+            "label": "Seed",
+            "info": "Random seed for evaluation and prediction.",
+        },
+        "ru": {
+            "label": "Seed",
+            "info": "Random seed for evaluation and prediction.",
+        },
+        "zh": {
+            "label": "随机种子",
+            "info": "评估和预测使用的随机种子。",
+        },
+        "ko": {
+            "label": "Seed",
+            "info": "Random seed for evaluation and prediction.",
+        },
+        "ja": {
+            "label": "Seed",
+            "info": "Random seed for evaluation and prediction.",
         },
     },
     "skip_special_tokens": {

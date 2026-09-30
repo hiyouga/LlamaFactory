@@ -56,7 +56,7 @@ class CompositeModel:
                     )
                     break
 
-            if project_module is not None:
+            if isinstance(project_module, torch.nn.Module):
                 mm_projectors.append(project_module)
 
         return mm_projectors
@@ -262,6 +262,15 @@ _register_composite_model(
 
 
 _register_composite_model(
+    model_type="glm5_next",
+    projector_keys=["model.visual.merger", "model.visual.downsample"],
+    vision_model_keys=["model.visual.patch_embed", "model.visual.blocks", "model.visual.post_layernorm"],
+    language_model_keys=["model.language_model", "lm_head"],
+    lora_conflict_keys=["patch_embed"],
+)
+
+
+_register_composite_model(
     model_type="glm_ocr",
     projector_keys=["visual.merger"],
     vision_model_keys=["visual.patch_embed", "visual.blocks"],
@@ -341,6 +350,15 @@ _register_composite_model(
 _register_composite_model(
     model_type="mistral3",
     projector_keys=["model.multi_modal_projector"],
+)
+
+
+_register_composite_model(
+    model_type="moss_vl",
+    projector_keys=["model.visual.merger", "model.separator_token"],
+    vision_model_keys=["model.visual.pos_embed", "model.visual.patch_embed", "model.visual.blocks"],
+    language_model_keys=["model.language_model", "lm_head"],
+    lora_conflict_keys=["patch_embed"],
 )
 
 

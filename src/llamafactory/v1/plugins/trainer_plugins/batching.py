@@ -1,4 +1,4 @@
-# Copyright 2025 the LlamaFactory team.
+# Copyright 2026 the LlamaFactory team.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from abc import ABC, abstractmethod
 from collections.abc import Callable
 from math import ceil
 from typing import Any
@@ -19,37 +20,41 @@ from typing import Any
 import torch
 from torch.utils.data import default_collate
 
+from ...core.utils.collation import pad_and_truncate
 from ...utils.constants import IGNORE_INDEX
-from ...utils.helper import pad_and_truncate
 from ...utils.objects import StatefulBuffer
-from ...utils.plugin import BasePlugin
+from ...utils.plugin import BasePlugin, ensure_methods_implemented
 from ...utils.types import BatchInfo, BatchInput, DataLoader, ModelInput
 
 
 class BatchingPlugin(BasePlugin):
-    def get_data_provider_batch_size(self, batch_info: BatchInfo) -> int:
-        """Return the raw data provider batch size for this batching strategy."""
-        return self["get_data_provider_batch_size"](batch_info)
+    """Plugin family for batching strategy method groups."""
 
-    def compute_length(self, data_provider: DataLoader, batch_info: BatchInfo) -> int:
-        """Compute the length of the batch generator.
 
-        The approximate length is used to calculate the lr schedule.
-        """
-        return self["compute_length"](data_provider, batch_info)
+class BaseBatcher(ABC):
+    def __init_subclass__(cls, **kwargs) -> None:
+        super().__init_subclass__(**kwargs)
+        ensure_methods_implemented(cls)
 
+    @staticmethod
+    @abstractmethod
+    def get_data_provider_batch_size(batch_info: BatchInfo) -> int: ...
+
+    @staticmethod
+    @abstractmethod
+    def compute_length(data_provider: DataLoader, batch_info: BatchInfo) -> int: ...
+
+    @staticmethod
+    @abstractmethod
     def fill_buffer(
-        self,
         buffer: StatefulBuffer,
         batch_info: BatchInfo,
         next_samples: Callable[[bool], list[ModelInput] | None],
-    ) -> None:
-        """Fill the buffer with data."""
-        return self["fill_buffer"](buffer, batch_info, next_samples)
+    ) -> None: ...
 
-    def generate_batch(self, buffer: StatefulBuffer, batch_info: BatchInfo) -> list[BatchInput] | None:
-        """Generate a batch from the buffer."""
-        return self["generate_batch"](buffer, batch_info)
+    @staticmethod
+    @abstractmethod
+    def generate_batch(buffer: StatefulBuffer, batch_info: BatchInfo) -> list[BatchInput] | None: ...
 
 
 def _get_dynamic_micro_batch_sizes(samples: list[ModelInput], batch_info: BatchInfo) -> list[int]:
@@ -149,135 +154,135 @@ def _pack_padding_free_samples(samples: list[ModelInput], cutoff_len: int) -> Ba
         return None
 
     packed["position_ids"] = position_ids
-    packed["attention_mask"] = [1] * len(position_ids)
-    return {key: torch.tensor(value).unsqueeze(0) for key, value in packed.items()}
+    packed["attention_mask"] = None
+    return {key: None if value is None else torch.tensor(value).unsqueeze(0) for key, value in packed.items()}
 
 
-@BatchingPlugin("padding_free").register("get_data_provider_batch_size")
-def get_padding_free_data_provider_batch_size(batch_info: BatchInfo) -> int:
-    return batch_info["micro_batch_size"] * batch_info["num_micro_batch"]
+@BatchingPlugin("padding_free").register()
+class PaddingFreeBatcher(BaseBatcher):
+    @staticmethod
+    def get_data_provider_batch_size(batch_info: BatchInfo) -> int:
+        return batch_info["micro_batch_size"] * batch_info["num_micro_batch"]
 
+    @staticmethod
+    def compute_length(data_provider: DataLoader, batch_info: BatchInfo) -> int:
+        return len(data_provider)
 
-@BatchingPlugin("padding_free").register("compute_length")
-def compute_padding_free_length(data_provider: DataLoader, batch_info: BatchInfo) -> int:
-    return len(data_provider)
+    @staticmethod
+    def fill_buffer(
+        buffer: StatefulBuffer,
+        batch_info: BatchInfo,
+        next_samples: Callable[[bool], list[ModelInput] | None],
+    ) -> None:
+        while len(buffer) < batch_info["micro_batch_size"] * batch_info["num_micro_batch"]:
+            samples = next_samples(False)
+            if samples is None:
+                break
 
+            buffer.put(samples)
 
-@BatchingPlugin("padding_free").register("fill_buffer")
-def fill_padding_free_buffer(
-    buffer: StatefulBuffer,
-    batch_info: BatchInfo,
-    next_samples: Callable[[bool], list[ModelInput] | None],
-) -> None:
-    while len(buffer) < batch_info["micro_batch_size"] * batch_info["num_micro_batch"]:
-        samples = next_samples(False)
-        if samples is None:
-            break
-
-        buffer.put(samples)
-
-
-@BatchingPlugin("padding_free").register("generate_batch")
-def generate_padding_free_batch(buffer: StatefulBuffer, batch_info: BatchInfo) -> list[BatchInput] | None:
-    micro_batch_size = batch_info["micro_batch_size"]
-    num_micro_batch = batch_info["num_micro_batch"]
-    cutoff_len = batch_info["cutoff_len"]
-    batch_size = micro_batch_size * num_micro_batch
-    if len(buffer) < batch_size:
-        return None
-
-    samples = buffer.get(batch_size)
-    batch = []
-    for i in range(num_micro_batch):
-        micro_batch = samples[i * micro_batch_size : (i + 1) * micro_batch_size]
-        packed_micro_batch = _pack_padding_free_samples(micro_batch, cutoff_len)
-        if packed_micro_batch is None:
+    @staticmethod
+    def generate_batch(buffer: StatefulBuffer, batch_info: BatchInfo) -> list[BatchInput] | None:
+        micro_batch_size = batch_info["micro_batch_size"]
+        num_micro_batch = batch_info["num_micro_batch"]
+        cutoff_len = batch_info["cutoff_len"]
+        batch_size = micro_batch_size * num_micro_batch
+        if len(buffer) < batch_size:
             return None
 
-        batch.append(packed_micro_batch)
+        samples = buffer.get(batch_size)
+        batch = []
+        for i in range(num_micro_batch):
+            micro_batch = samples[i * micro_batch_size : (i + 1) * micro_batch_size]
+            packed_micro_batch = _pack_padding_free_samples(micro_batch, cutoff_len)
+            if packed_micro_batch is None:
+                return None
 
-    return batch
+            batch.append(packed_micro_batch)
 
-
-@BatchingPlugin("dynamic_batching").register("get_data_provider_batch_size")
-def get_dynamic_batching_data_provider_batch_size(batch_info: BatchInfo) -> int:
-    return 1
-
-
-@BatchingPlugin("dynamic_batching").register("compute_length")
-def compute_dynamic_batching_length(data_provider: DataLoader, batch_info: BatchInfo) -> int:
-    batch_size = batch_info["micro_batch_size"] * batch_info["num_micro_batch"]
-    return ceil(len(data_provider) / batch_size)
+        return batch
 
 
-@BatchingPlugin("dynamic_batching").register("fill_buffer")
-def fill_dynamic_batching_buffer(
-    buffer: StatefulBuffer,
-    batch_info: BatchInfo,
-    next_samples: Callable[[bool], list[ModelInput] | None],
-) -> None:
-    while len(_get_dynamic_micro_batch_sizes(buffer.samples, batch_info)) < batch_info["num_micro_batch"]:
-        samples = next_samples(True)
-        if samples is None:
-            break
+@BatchingPlugin("dynamic_batching").register()
+class DynamicBatcher(BaseBatcher):
+    @staticmethod
+    def get_data_provider_batch_size(batch_info: BatchInfo) -> int:
+        return 1
 
-        buffer.put(samples)
+    @staticmethod
+    def compute_length(data_provider: DataLoader, batch_info: BatchInfo) -> int:
+        batch_size = batch_info["micro_batch_size"] * batch_info["num_micro_batch"]
+        return ceil(len(data_provider) / batch_size)
 
+    @staticmethod
+    def fill_buffer(
+        buffer: StatefulBuffer,
+        batch_info: BatchInfo,
+        next_samples: Callable[[bool], list[ModelInput] | None],
+    ) -> None:
+        while len(_get_dynamic_micro_batch_sizes(buffer.samples, batch_info)) < batch_info["num_micro_batch"]:
+            samples = next_samples(True)
+            if samples is None:
+                break
 
-@BatchingPlugin("dynamic_batching").register("generate_batch")
-def generate_dynamic_batching_batch(buffer: StatefulBuffer, batch_info: BatchInfo) -> list[BatchInput] | None:
-    micro_batch_sample_counts = _get_dynamic_micro_batch_sizes(buffer.samples, batch_info)
-    if len(micro_batch_sample_counts) < batch_info["num_micro_batch"]:
-        return None
+            buffer.put(samples)
 
-    batch = []
-    cutoff_len = batch_info["cutoff_len"]
-    for num_samples in micro_batch_sample_counts:
-        samples = buffer.get(num_samples)
-        batch.append(default_collate(pad_and_truncate(samples, cutoff_len)))
-
-    return batch
-
-
-@BatchingPlugin("dynamic_padding_free").register("get_data_provider_batch_size")
-def get_dynamic_padding_free_data_provider_batch_size(batch_info: BatchInfo) -> int:
-    return 1
-
-
-@BatchingPlugin("dynamic_padding_free").register("compute_length")
-def compute_dynamic_padding_free_length(data_provider: DataLoader, batch_info: BatchInfo) -> int:
-    batch_size = batch_info["micro_batch_size"] * batch_info["num_micro_batch"]
-    return ceil(len(data_provider) / batch_size)
-
-
-@BatchingPlugin("dynamic_padding_free").register("fill_buffer")
-def fill_dynamic_padding_free_buffer(
-    buffer: StatefulBuffer,
-    batch_info: BatchInfo,
-    next_samples: Callable[[bool], list[ModelInput] | None],
-) -> None:
-    while len(_get_dynamic_padding_free_micro_batch_sizes(buffer.samples, batch_info)) < batch_info["num_micro_batch"]:
-        samples = next_samples(True)
-        if samples is None:
-            break
-        buffer.put(samples)
-
-
-@BatchingPlugin("dynamic_padding_free").register("generate_batch")
-def generate_dynamic_padding_free_batch(buffer: StatefulBuffer, batch_info: BatchInfo) -> list[BatchInput] | None:
-    micro_batch_sample_counts = _get_dynamic_padding_free_micro_batch_sizes(buffer.samples, batch_info)
-    if len(micro_batch_sample_counts) < batch_info["num_micro_batch"]:
-        return None
-
-    batch = []
-    cutoff_len = batch_info["cutoff_len"]
-
-    for num_samples in micro_batch_sample_counts:
-        samples = buffer.get(num_samples)
-        packed_batch = _pack_padding_free_samples(samples, cutoff_len)
-        if packed_batch is None:
+    @staticmethod
+    def generate_batch(buffer: StatefulBuffer, batch_info: BatchInfo) -> list[BatchInput] | None:
+        micro_batch_sample_counts = _get_dynamic_micro_batch_sizes(buffer.samples, batch_info)
+        if len(micro_batch_sample_counts) < batch_info["num_micro_batch"]:
             return None
 
-        batch.append(packed_batch)
+        batch = []
+        cutoff_len = batch_info["cutoff_len"]
+        for num_samples in micro_batch_sample_counts:
+            samples = buffer.get(num_samples)
+            batch.append(default_collate(pad_and_truncate(samples, cutoff_len)))
 
-    return batch
+        return batch
+
+
+@BatchingPlugin("dynamic_padding_free").register()
+class DynamicPaddingFreeBatcher(BaseBatcher):
+    @staticmethod
+    def get_data_provider_batch_size(batch_info: BatchInfo) -> int:
+        return 1
+
+    @staticmethod
+    def compute_length(data_provider: DataLoader, batch_info: BatchInfo) -> int:
+        batch_size = batch_info["micro_batch_size"] * batch_info["num_micro_batch"]
+        return ceil(len(data_provider) / batch_size)
+
+    @staticmethod
+    def fill_buffer(
+        buffer: StatefulBuffer,
+        batch_info: BatchInfo,
+        next_samples: Callable[[bool], list[ModelInput] | None],
+    ) -> None:
+        while (
+            len(_get_dynamic_padding_free_micro_batch_sizes(buffer.samples, batch_info))
+            < batch_info["num_micro_batch"]
+        ):
+            samples = next_samples(True)
+            if samples is None:
+                break
+            buffer.put(samples)
+
+    @staticmethod
+    def generate_batch(buffer: StatefulBuffer, batch_info: BatchInfo) -> list[BatchInput] | None:
+        micro_batch_sample_counts = _get_dynamic_padding_free_micro_batch_sizes(buffer.samples, batch_info)
+        if len(micro_batch_sample_counts) < batch_info["num_micro_batch"]:
+            return None
+
+        batch = []
+        cutoff_len = batch_info["cutoff_len"]
+
+        for num_samples in micro_batch_sample_counts:
+            samples = buffer.get(num_samples)
+            packed_batch = _pack_padding_free_samples(samples, cutoff_len)
+            if packed_batch is None:
+                return None
+
+            batch.append(packed_batch)
+
+        return batch

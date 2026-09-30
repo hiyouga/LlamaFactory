@@ -1,0 +1,2 @@
+# Pin the FSDPTurbo API to a reproducible upstream main revision.
+fsdp-turbo @ git+https://gitcode.com/Ascend/FSDPTurbo.git@d878dffdb1e0312dc098599f2b56810d6b592ee2

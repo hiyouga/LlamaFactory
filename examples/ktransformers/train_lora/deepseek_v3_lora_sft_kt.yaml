@@ -40,6 +40,13 @@ resume_from_checkpoint: null
 
 ### ktransformers
 use_kt: true
-# Pair with fsdp2_kt_bf16.yaml for original BF16 checkpoints.
-# For pre-converted expert weights, uncomment kt_weight_path and use fsdp2_kt_int8.yaml or fsdp2_kt_int4.yaml.
-# kt_weight_path: /path/to/DeepSeek-V3-AMXINT8
+kt_cpu_activation: retain
+kt_config:
+  kt_expert_weight_format: bf16
+  kt_backend: AMXBF16
+  kt_num_threads: 96
+  kt_tp_enabled: true
+  kt_threadpool_count: 2
+  kt_max_cache_depth: 2
+  kt_share_backward_bb: true
+# The Accelerate YAML contains FSDP settings only. KT has a single configuration owner here.

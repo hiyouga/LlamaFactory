@@ -385,7 +385,7 @@ class BAdamArgument:
             "help": (
                 "The mode of the mask for BAdam optimizer. "
                 "`adjacent` means that the trainable parameters are adjacent to each other, "
-                "`scatter` means that trainable parameters are randomly choosed from the weight."
+                "`scatter` means that trainable parameters are randomly chosen from the weight."
             )
         },
     )
@@ -482,12 +482,27 @@ class FinetuningArguments(
             )
         },
     )
+    use_megatron_bridge: bool = field(
+        default=False,
+        metadata={
+            "help": (
+                "Whether or not to use Megatron Bridge training backend. "
+                "Controlled by USE_MEGATRON_BRIDGE environment variable."
+            )
+        },
+    )
+    megatron_bridge_args: Any = field(
+        default=None,
+        init=False,
+        repr=False,
+        metadata={"help": "Megatron Bridge specific arguments, set when USE_MEGATRON_BRIDGE=1."},
+    )
     use_hyper_parallel: bool = field(
         default=False,
         metadata={
             "help": (
-                "Whether or not to use HyperParallel distributed training backend (FSDP/TP). "
-                "Only supported for the 'sft' stage with full fine-tuning."
+                "Whether or not to use HyperParallel distributed training backend (FSDP/CP/EP). "
+                "Only supported for the 'pt' and 'sft' stages with full fine-tuning."
             )
         },
     )
@@ -496,7 +511,34 @@ class FinetuningArguments(
         metadata={
             "help": (
                 "Path to a JSON file containing HyperParallel strategy arguments "
-                "(e.g., tp_size, param_dtype). Used when use_hyper_parallel=True."
+                "(e.g., cp_size, ep_size, efsdp_size, token_dispatcher, param_dtype). "
+                "Used when use_hyper_parallel=True."
+            )
+        },
+    )
+    hyper_parallel_cp_size: int = field(
+        default=1,
+        metadata={"help": "Context parallel size used when `use_hyper_parallel=True`."},
+    )
+    hyper_parallel_ep_size: int = field(
+        default=1,
+        metadata={"help": "Expert parallel size used when `use_hyper_parallel=True`."},
+    )
+    hyper_parallel_efsdp_size: int = field(
+        default=1,
+        metadata={
+            "help": (
+                "Expert FSDP shard size used when `use_hyper_parallel=True`. "
+                "Defaults to world size divided by expert parallel size."
+            )
+        },
+    )
+    hyper_parallel_token_dispatcher: Literal["all_to_all"] = field(
+        default="all_to_all",
+        metadata={
+            "help": (
+                "Expert token dispatcher used when 'use_hyper_parallel=True'. "
+                "Currently only 'all_to_all' is supported."
             )
         },
     )
@@ -526,7 +568,7 @@ class FinetuningArguments(
     )
     freeze_vision_tower: bool = field(
         default=True,
-        metadata={"help": "Whether ot not to freeze the vision tower in MLLM training."},
+        metadata={"help": "Whether or not to freeze the vision tower in MLLM training."},
     )
     freeze_multi_modal_projector: bool = field(
         default=True,
@@ -576,6 +618,8 @@ class FinetuningArguments(
         assert self.finetuning_type in ["lora", "oft", "freeze", "full"], "Invalid fine-tuning method."
         assert self.ref_model_quantization_bit in [None, 8, 4], "We only accept 4-bit or 8-bit quantization."
         assert self.reward_model_quantization_bit in [None, 8, 4], "We only accept 4-bit or 8-bit quantization."
+        assert self.hyper_parallel_cp_size > 0, "`hyper_parallel_cp_size` must be greater than 0."
+        assert self.hyper_parallel_ep_size > 0, "`hyper_parallel_ep_size` must be greater than 0."
 
         if self.stage == "ppo" and self.reward_model is None:
             raise ValueError("`reward_model` is necessary for PPO training.")

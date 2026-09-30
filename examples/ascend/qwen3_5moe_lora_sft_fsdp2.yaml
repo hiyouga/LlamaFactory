@@ -1,0 +1,51 @@
+# Start FSDP2 full fine-tuning on Ascend NPU
+# Usage:
+#   accelerate launch \
+#       --config_file examples/accelerate/fsdp2_config_qwen35_moe.yaml \
+#       src/train.py examples/ascend/qwen3_5moe_lora_sft_fsdp2.yaml
+#
+# Note: Change `num_processes` in fsdp2_config_qwen35_moe.yaml to match your NPU count
+
+### model
+model_name_or_path: Qwen/Qwen3.5-35B-A3B
+trust_remote_code: true
+use_v1_kernels: false
+flash_attn: fa2
+
+### method
+stage: sft
+do_train: true
+finetuning_type: lora
+lora_rank: 8
+lora_target: all
+
+### dataset
+dataset: alpaca_en_demo
+template: qwen3_5_nothink
+cutoff_len: 2048
+max_samples: 1000
+overwrite_cache: true
+preprocessing_num_workers: 16
+dataloader_num_workers: 4
+packing: false
+
+### output
+output_dir: saves/Qwen3.5-35B/lora/sft
+logging_steps: 1
+save_steps: 2000
+max_steps: 2000
+plot_loss: true
+overwrite_output_dir: true
+save_only_model: false
+report_to: none  # choices: [none, wandb, tensorboard, swanlab, mlflow]
+
+### train
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 1
+learning_rate: 1.0e-5
+lr_scheduler_type: cosine
+warmup_ratio: 0.1
+bf16: true
+ddp_timeout: 1800
+resume_from_checkpoint: null
+disable_gradient_checkpointing: true

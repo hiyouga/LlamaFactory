@@ -20,9 +20,10 @@ from peft import PeftModel
 from transformers import GenerationMixin, PreTrainedModel, PreTrainedTokenizerBase
 from transformers.integrations import is_deepspeed_zero3_enabled
 from transformers.modeling_utils import is_fsdp_enabled
+from transformers.utils import is_torch_cuda_available, is_torch_npu_available
 
 from ..extras import logging
-from ..extras.misc import infer_optim_dtype
+from ..extras.misc import check_version, infer_optim_dtype
 from ..extras.packages import is_transformers_version_greater_than
 from .model_utils.attention import configure_attn_implementation, print_attn_implementation
 from .model_utils.checkpointing import prepare_model_for_training
@@ -84,8 +85,61 @@ def _check_fla_dependencies() -> None:
         ) from exc
 
 
-def patch_qwen3_5_forward(model: "PreTrainedModel") -> None:
-    """Patch the forward method of Qwen3_5ForConditionalGeneration to support cu_seqlens input only patch when do training.
+def patch_qwen3_5_forward_npu(model: "PreTrainedModel") -> None:
+    """Patch for Qwen3.5 models on NPU by importing torch_npu to enable torch.cuda compatibility.
+
+    On NPU, torch.cuda operations will fail unless torch_npu is imported.
+    torch_npu provides compatibility layer that maps torch.cuda calls to NPU operations.
+
+    Also replaces chunk_gated_delta_rule with NPU-compatible implementation.
+    """
+    import importlib.metadata
+
+    if "Ascend910" not in torch.npu.get_device_name(0):
+        logger.warning_rank0("Currently only 910B series NPUs are supported for the NPU GDN patch.")
+        return
+
+    try:
+        importlib.metadata.version("triton_ascend")
+    except importlib.metadata.PackageNotFoundError:
+        logger.warning_rank0(
+            "triton_ascend not installed, skipping NPU GDN patch. "
+            "To enable it on NPU, reinstall Triton with the Ascend build: "
+            "`pip uninstall -y triton && pip install -r requirements/triton_ascend.txt`. "
+            "Note: triton and triton_ascend cannot coexist — triton must be uninstalled first."
+        )
+        return
+
+    logger.info_rank0("triton_ascend detected for NPU compatibility.")
+
+    from ..third_party.triton.chunk_gated_delta_rule import chunk_gated_delta_rule as npu_chunk_gated_delta_rule
+
+    if model.config.architectures[0] == "Qwen3_5MoeForConditionalGeneration":
+        try:
+            # Qwen3.5-MoE structure: model.model.language_model.layers
+            for layer in model.model.language_model.layers:
+                if hasattr(layer, "linear_attn"):
+                    layer.linear_attn.chunk_gated_delta_rule = npu_chunk_gated_delta_rule
+
+            logger.info_rank0(
+                "Replaced chunk_gated_delta_rule with NPU-compatible implementation for Qwen3.5-MoE model."
+            )
+        except Exception as e:
+            logger.warning_rank0(f"Failed to replace chunk_gated_delta_rule for NPU: {e}")
+    elif model.config.architectures[0] == "Qwen3_5ForConditionalGeneration":
+        try:
+            # Qwen3.5 structure: model.model.layers
+            for layer in model.model.layers:
+                if hasattr(layer, "linear_attn"):
+                    layer.linear_attn.chunk_gated_delta_rule = npu_chunk_gated_delta_rule
+
+            logger.info_rank0("Replaced chunk_gated_delta_rule with NPU-compatible implementation for Qwen3.5 model.")
+        except Exception as e:
+            logger.warning_rank0(f"Failed to replace chunk_gated_delta_rule for NPU: {e}")
+
+
+def patch_qwen3_5_forward_gpu(model: "PreTrainedModel") -> None:
+    """Patch Qwen3.5 decoder forward methods to support cu_seqlens during training.
 
     Refer to: https://github.com/axolotl-ai-cloud/axolotl/blob/main/src/axolotl/monkeypatch/models/qwen3_5/modeling.py.
     """
@@ -162,8 +216,14 @@ def patch_qwen3_5_forward(model: "PreTrainedModel") -> None:
         if position_ids is not None and position_ids.ndim == 3:
             position_ids = position_ids[0]
 
-        # `prepare_fa_kwargs_from_position_ids` would crash on None; guard for safety.
-        cu_seqlens = prepare_fa_kwargs_from_position_ids(position_ids)[0][0] if position_ids is not None else None
+        # cu_seqlens for the FLA varlen path is only needed when batch_size == 1:
+        # packing / neat-packing: always folded into a single sequence (bsz == 1) -> varlen
+        # non-packing, bsz == 1: single segment, equivalent to a standard single sequence
+        # non-packing, bsz > 1: not packed, use cu_seqlens=None and standard batched kernels
+        if position_ids is not None and batch_size == 1:
+            cu_seqlens = prepare_fa_kwargs_from_position_ids(position_ids)[0][0]
+        else:
+            cu_seqlens = None
 
         # FLA varlen kernels expect [B, T, D] layout, not [B, D, T] like the
         # standard causal-conv1d path that the upstream forward uses.
@@ -226,12 +286,12 @@ def patch_qwen3_5_forward(model: "PreTrainedModel") -> None:
 
         return output
 
-    if model.config.architectures[0] == "Qwen3_5ForConditionalGeneration":
+    if model.config.architectures[0] in ("Qwen3_5ForCausalLM", "Qwen3_5ForConditionalGeneration"):
         from transformers.models.qwen3_5.modeling_qwen3_5 import Qwen3_5DecoderLayer, Qwen3_5GatedDeltaNet
 
         Qwen3_5DecoderLayer.forward = _patched_decoder_forward
         Qwen3_5GatedDeltaNet.forward = _patch_gdn_forward
-    elif model.config.architectures[0] == "Qwen3_5MoeForConditionalGeneration":
+    elif model.config.architectures[0] in ("Qwen3_5MoeForCausalLM", "Qwen3_5MoeForConditionalGeneration"):
         from transformers.models.qwen3_5_moe.modeling_qwen3_5_moe import (
             Qwen3_5MoeDecoderLayer,
             Qwen3_5MoeGatedDeltaNet,
@@ -358,6 +418,10 @@ def patch_config(
             "pip install git+https://github.com/huggingface/transformers.git@3c2517727ce28a30f5044e01663ee204deb1cdbe"
         )
 
+    if getattr(config, "model_type", None) == "moss_vl":
+        check_version("transformers==4.57.1", mandatory=True)
+        check_version("torchcodec==0.7.0", mandatory=True)
+
     if getattr(config, "model_type", None) == "qwen3_omni_moe":
         patch_qwen3_omni_moe_thinker_text_sparse_moe_block()
 
@@ -397,9 +461,14 @@ def patch_model(
         prepare_valuehead_model(model)
 
     if model_args.resize_vocab:
+        # Pass the explicit list of newly added tokens so their exact embedding rows can be
+        # located and initialized, even when they land in a model's pre-existing padding zone.
+        new_tokens = (model_args.add_tokens or []) + (model_args.add_special_tokens or [])
+
         resize_embedding_layer(
             model,
             tokenizer,
+            new_tokens=new_tokens or None,
             new_special_tokens_config=getattr(model_args, "_special_token_descriptions", None),
             init_special_tokens=model_args.init_special_tokens,
         )
@@ -415,8 +484,17 @@ def patch_model(
         autocast_projector_dtype(model, model_args)
         add_z3_leaf_module(model)
 
-        if getattr(model.config, "model_type", None) in ["qwen3_5", "qwen3_5_moe"] and model_args.flash_attn == "fa2":
-            patch_qwen3_5_forward(model)
+        if getattr(model.config, "model_type", None) in [
+            "qwen3_5",
+            "qwen3_5_moe",
+            "qwen3_5_moe_text",
+            "qwen3_5_text",
+        ]:
+            if is_torch_npu_available():
+                patch_qwen3_5_forward_npu(model)
+            elif is_torch_cuda_available() and model_args.flash_attn == "fa2":
+                # this is the patch for packing/neat_packing for GPU GDN. And when setting packing, flash_attn must be fa2.
+                patch_qwen3_5_forward_gpu(model)
 
     if not model_args.use_unsloth:
         print_attn_implementation(model.config)

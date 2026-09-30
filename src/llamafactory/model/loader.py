@@ -34,7 +34,7 @@ from .adapter import init_adapter
 from .model_utils.liger_kernel import apply_liger_kernel
 from .model_utils.misc import register_autoclass
 from .model_utils.mod import convert_pretrained_model_to_mod, load_mod_pretrained_model
-from .model_utils.unsloth import load_unsloth_pretrained_model
+from .model_utils.unsloth import load_unsloth_peft_model, load_unsloth_pretrained_model
 from .model_utils.valuehead import load_valuehead_params
 from .patcher import patch_config, patch_model, patch_processor, patch_tokenizer, patch_valuehead_model
 
@@ -125,7 +125,13 @@ def load_tokenizer(model_args: "ModelArguments") -> "TokenizerModule":
 def load_config(model_args: "ModelArguments") -> "PretrainedConfig":
     r"""Load model config."""
     init_kwargs = _get_init_kwargs(model_args)
-    return AutoConfig.from_pretrained(model_args.model_name_or_path, **init_kwargs)
+    config = AutoConfig.from_pretrained(model_args.model_name_or_path, **init_kwargs)
+    if model_args.use_kt:
+        from transformers.integrations.kt_artifacts import prepare_kt_pretrained_config
+
+        prepare_kt_pretrained_config(config)
+
+    return config
 
 
 def load_model(
@@ -142,14 +148,13 @@ def load_model(
     apply_liger_kernel(config, model_args, is_trainable, require_logits=(finetuning_args.stage not in ["pt", "sft"]))
 
     model = None
-    lazy_load = False
     if model_args.use_unsloth:
         if model_args.adapter_name_or_path is not None:
-            lazy_load = True
+            model = load_unsloth_peft_model(config, model_args, finetuning_args, is_trainable=is_trainable)
         elif is_trainable:
             model = load_unsloth_pretrained_model(config, model_args, finetuning_args)
 
-    if model is None and not lazy_load:
+    if model is None:
         init_kwargs["config"] = config
         init_kwargs["pretrained_model_name_or_path"] = model_args.model_name_or_path
         init_kwargs["torch_dtype"] = "auto"
@@ -176,9 +181,8 @@ def load_model(
         if model_args.mixture_of_depths == "convert":
             model = convert_pretrained_model_to_mod(model, config, model_args)
 
-    if not lazy_load:
-        patch_model(model, tokenizer, model_args, is_trainable, add_valuehead)
-        register_autoclass(config, model, tokenizer)
+    patch_model(model, tokenizer, model_args, is_trainable, add_valuehead)
+    register_autoclass(config, model, tokenizer)
 
     model = init_adapter(config, model, model_args, finetuning_args, is_trainable)
 
@@ -198,13 +202,22 @@ def load_model(
 
     # Conv3D is not recommended when using torch 2.9.x
     if is_torch_version_greater_than("2.9.0") and not is_torch_version_greater_than("2.10.0"):
-        if any(isinstance(m, torch.nn.Conv3d) for m in model.modules()):
+        conv3d_modules = [module for module in model.modules() if isinstance(module, torch.nn.Conv3d)]
+        kt_conv3d_ready = (
+            model_args.use_kt
+            and is_trainable
+            and bool(conv3d_modules)
+            and all(getattr(module, "_kt_conv3d_compatible", False) for module in conv3d_modules)
+        )
+        if conv3d_modules and not kt_conv3d_ready:
             raise ValueError(
                 "Unsupported torch version detected: torch 2.9.x with Conv3D. "
                 "This combination is known to cause severe performance regression. "
                 "Please downgrade torch to <2.9 or remove Conv3D. "
                 "See https://github.com/pytorch/pytorch/issues/166122"
             )
+        elif kt_conv3d_ready:
+            logger.info_rank0("Using KTransformers instance-scoped Conv3D fallback for torch 2.9.x VLM training.")
 
     if not is_trainable:
         model.requires_grad_(False)
@@ -219,9 +232,9 @@ def load_model(
             "You are try to using future feature about kernels, please note that this feature "
             "is not supported for all models. If get any error, please disable this feature, or report the issue."
         )
-        from ..v1.plugins.model_plugins.kernels.interface import apply_default_kernels
+        from ..v1.plugins.model_plugins.kernels.interface import apply_v1_kernels
 
-        model = apply_default_kernels(model, include_kernels=model_args.use_v1_kernels)
+        model = apply_v1_kernels(model, use_v1_kernels=model_args.use_v1_kernels)
 
     trainable_params, all_param = count_parameters(model)
     if is_trainable:

@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -21,7 +22,131 @@ from transformers import AutoConfig, AutoModelForImageTextToText
 
 from llamafactory.extras.packages import is_transformers_version_greater_than
 from llamafactory.hparams import FinetuningArguments, ModelArguments
-from llamafactory.model.adapter import init_adapter
+from llamafactory.model.adapter import _setup_freeze_tuning, _setup_full_tuning, init_adapter
+from llamafactory.model.model_utils.misc import find_all_linear_modules
+from llamafactory.model.model_utils.visual import COMPOSITE_MODELS, autocast_projector_dtype, patch_target_modules
+
+
+class _MossVLFixture(torch.nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        self.config = SimpleNamespace(
+            model_type="moss_vl",
+            text_config=SimpleNamespace(num_hidden_layers=2),
+        )
+        self.model = torch.nn.Module()
+        self.model.separator_token = torch.nn.Parameter(torch.empty(4))
+        self.model.visual = torch.nn.Module()
+        self.model.visual.pos_embed = torch.nn.Embedding(4, 4)
+        self.model.visual.patch_embed = torch.nn.Module()
+        self.model.visual.patch_embed.proj = torch.nn.Linear(4, 4)
+        self.model.visual.blocks = torch.nn.ModuleList([self._make_block(), self._make_block()])
+        self.model.visual.merger = torch.nn.Module()
+        self.model.visual.merger.linear_fc1 = torch.nn.Linear(4, 4)
+        self.model.language_model = torch.nn.Module()
+        self.model.language_model.layers = torch.nn.ModuleList([self._make_layer(), self._make_layer()])
+        self.lm_head = torch.nn.Linear(4, 4)
+
+    @staticmethod
+    def _make_block() -> torch.nn.Module:
+        block = torch.nn.Module()
+        block.attn = torch.nn.Module()
+        block.attn.qkv = torch.nn.Linear(4, 4)
+        return block
+
+    @staticmethod
+    def _make_layer() -> torch.nn.Module:
+        layer = torch.nn.Module()
+        layer.self_attn = torch.nn.Module()
+        layer.self_attn.q_proj = torch.nn.Linear(4, 4)
+        return layer
+
+
+@pytest.mark.parametrize("freeze_vision_tower", (False, True))
+@pytest.mark.parametrize("freeze_multi_modal_projector", (False, True))
+@pytest.mark.parametrize("freeze_language_model", (False, True))
+def test_moss_vl_full(
+    freeze_vision_tower: bool,
+    freeze_multi_modal_projector: bool,
+    freeze_language_model: bool,
+):
+    model = _MossVLFixture()
+    finetuning_args = FinetuningArguments(
+        finetuning_type="full",
+        freeze_vision_tower=freeze_vision_tower,
+        freeze_multi_modal_projector=freeze_multi_modal_projector,
+        freeze_language_model=freeze_language_model,
+    )
+
+    _setup_full_tuning(model, finetuning_args, is_trainable=True, cast_trainable_params_to_fp32=False)
+
+    for name, param in model.named_parameters():
+        if name.startswith("model.visual.merger") or name == "model.separator_token":
+            assert param.requires_grad != freeze_multi_modal_projector
+        elif name.startswith("model.visual"):
+            assert param.requires_grad != freeze_vision_tower
+        else:
+            assert param.requires_grad != freeze_language_model
+
+
+@pytest.mark.parametrize("freeze_multi_modal_projector", (False, True))
+def test_moss_vl_freeze(freeze_multi_modal_projector: bool):
+    model = _MossVLFixture()
+    finetuning_args = FinetuningArguments(
+        finetuning_type="freeze",
+        freeze_trainable_layers=1,
+        freeze_vision_tower=True,
+        freeze_multi_modal_projector=freeze_multi_modal_projector,
+        freeze_language_model=False,
+    )
+
+    _setup_freeze_tuning(model, finetuning_args, is_trainable=True, cast_trainable_params_to_fp32=False)
+
+    assert model.model.separator_token.requires_grad != freeze_multi_modal_projector
+    assert model.model.visual.merger.linear_fc1.weight.requires_grad != freeze_multi_modal_projector
+    assert model.model.visual.patch_embed.proj.weight.requires_grad is False
+    assert model.model.language_model.layers[0].self_attn.q_proj.weight.requires_grad is False
+    assert model.model.language_model.layers[1].self_attn.q_proj.weight.requires_grad is True
+
+
+@pytest.mark.parametrize("freeze_vision_tower", (False, True))
+def test_moss_vl_lora_target_all(freeze_vision_tower: bool):
+    model = _MossVLFixture()
+    finetuning_args = FinetuningArguments(
+        finetuning_type="lora",
+        lora_target="all",
+        freeze_vision_tower=freeze_vision_tower,
+        freeze_multi_modal_projector=True,
+        freeze_language_model=False,
+    )
+
+    target_modules = find_all_linear_modules(model, freeze_vision_tower)
+    target_modules = patch_target_modules(model, finetuning_args, target_modules)
+
+    assert any(name.startswith("model.language_model") and name.endswith("q_proj") for name in target_modules)
+    assert any(name.startswith("model.visual.blocks") and name.endswith("qkv") for name in target_modules) != (
+        freeze_vision_tower
+    )
+    assert all("patch_embed" not in name for name in target_modules)
+    assert all("merger" not in name for name in target_modules)
+    assert all("lm_head" not in name for name in target_modules)
+
+
+def test_moss_vl_projector_modules():
+    model = _MossVLFixture()
+    composite_model = COMPOSITE_MODELS["moss_vl"]
+
+    assert composite_model.projector_keys == ["model.visual.merger", "model.separator_token"]
+    assert composite_model.get_projectors(model) == [model.model.visual.merger]
+
+
+def test_moss_vl_quantized_projector_hook_skips_parameter():
+    model = _MossVLFixture()
+    model.quantization_method = "bitsandbytes"
+
+    autocast_projector_dtype(model, SimpleNamespace(compute_dtype=torch.float16))
+
+    assert len(model.model.visual.merger._forward_hooks) == 1
 
 
 @pytest.mark.parametrize("freeze_vision_tower", (False, True))

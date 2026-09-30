@@ -2,9 +2,12 @@
 
 check_dirs := scripts src tests tests_v1
 
+ruff_version := 0.15.5
+
 RUN := $(shell command -v uv >/dev/null 2>&1 && echo "uv run" || echo "")
 BUILD := $(shell command -v uv >/dev/null 2>&1 && echo "uv build" || echo "python -m build")
 TOOL := $(shell command -v uv >/dev/null 2>&1 && echo "uvx" || echo "")
+RUFF := $(shell command -v uv >/dev/null 2>&1 && echo "uvx ruff@$(ruff_version)" || echo "ruff")
 
 build:
 	$(BUILD)
@@ -17,12 +20,12 @@ license:
 	$(RUN) python3 tests/check_license.py $(check_dirs)
 
 quality:
-	$(TOOL) ruff check $(check_dirs)
-	$(TOOL) ruff format --check $(check_dirs)
+	$(RUFF) check $(check_dirs)
+	$(RUFF) format --check $(check_dirs)
 
 style:
-	$(TOOL) ruff check $(check_dirs) --fix
-	$(TOOL) ruff format $(check_dirs)
+	$(RUFF) check $(check_dirs) --fix
+	$(RUFF) format $(check_dirs)
 
 test:
 	WANDB_DISABLED=true $(RUN) pytest -vv --import-mode=importlib tests/ tests_v1/

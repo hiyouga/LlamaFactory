@@ -12,7 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import math
 from typing import TYPE_CHECKING, Optional
+
+from transformers import DataCollatorForLanguageModeling
 
 from ...data import SFTDataCollatorWith4DAttentionMask, get_dataset, get_template_and_fix_tokenizer
 from ...extras.constants import IGNORE_INDEX
@@ -21,9 +24,9 @@ from ...extras.misc import calculate_tps
 from ...extras.packages import is_hyper_parallel_available, is_transformers_version_greater_than
 from ...extras.ploting import plot_loss
 from ...model import load_model, load_tokenizer
-from ..callbacks import SaveProcessorCallback
 from ..sft.metric import ComputeAccuracy, ComputeSimilarity, eval_logit_processor
-from ..trainer_utils import asft_loss_func, create_modelcard_and_push, create_ref_model, dft_loss_func, eaft_loss_func
+from ..trainer_utils import create_modelcard_and_push, create_ref_model
+from .trainer import HyperParallelTrainer
 
 
 if TYPE_CHECKING:
@@ -35,6 +38,105 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
+def _prepare_hp_args(finetuning_args: "FinetuningArguments", model_args: "ModelArguments"):
+    r"""Load HyperParallel arguments and apply LlamaFactory-side overrides.
+
+    When activation optimization is enabled, skip native gradient checkpointing
+    so HP can install its own via ``setup_activation_optimization``.
+    """
+    if not is_hyper_parallel_available():
+        raise ImportError("hyper_parallel is not installed. Please install it with `pip install hyper_parallel`.")
+
+    from hyper_parallel.integration.llamafactory import HyperParallelArguments  # pylint: disable=C0415
+
+    hp_args = HyperParallelArguments.from_finetuning_args(finetuning_args)
+
+    if getattr(hp_args, "cp_size", None) != finetuning_args.hyper_parallel_cp_size:
+        setattr(hp_args, "cp_size", finetuning_args.hyper_parallel_cp_size)
+
+    if getattr(hp_args, "ep_size", None) != finetuning_args.hyper_parallel_ep_size:
+        setattr(hp_args, "ep_size", finetuning_args.hyper_parallel_ep_size)
+
+    if getattr(hp_args, "efsdp_size", None) != finetuning_args.hyper_parallel_efsdp_size:
+        setattr(hp_args, "efsdp_size", finetuning_args.hyper_parallel_efsdp_size)
+
+    if getattr(hp_args, "token_dispatcher", None) != finetuning_args.hyper_parallel_token_dispatcher:
+        setattr(hp_args, "token_dispatcher", finetuning_args.hyper_parallel_token_dispatcher)
+
+    hp_args.validate()
+
+    if hp_args.activation_mode != "none":
+        model_args.disable_gradient_checkpointing = True
+    return hp_args
+
+
+def run_pt(
+    model_args: "ModelArguments",
+    data_args: "DataArguments",
+    training_args: "Seq2SeqTrainingArguments",
+    finetuning_args: "FinetuningArguments",
+    callbacks: Optional[list["TrainerCallback"]] = None,
+):
+    hp_args = _prepare_hp_args(finetuning_args, model_args)
+
+    tokenizer_module = load_tokenizer(model_args)
+    tokenizer = tokenizer_module["tokenizer"]
+    template = get_template_and_fix_tokenizer(tokenizer, data_args)
+    dataset_module = get_dataset(template, model_args, data_args, training_args, stage="pt", **tokenizer_module)
+    model = load_model(tokenizer, model_args, finetuning_args, training_args.do_train)
+    data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
+
+    trainer = HyperParallelTrainer(
+        hp_args=hp_args,
+        model=model,
+        args=training_args,
+        finetuning_args=finetuning_args,
+        data_collator=data_collator,
+        callbacks=callbacks,
+        **dataset_module,
+        **tokenizer_module,
+    )
+
+    if training_args.do_train:
+        train_result = trainer.train(resume_from_checkpoint=training_args.resume_from_checkpoint)
+        trainer.save_model()
+        trainer.log_metrics("train", train_result.metrics)
+        trainer.save_metrics("train", train_result.metrics)
+        trainer.save_state()
+        if trainer.is_world_process_zero() and finetuning_args.plot_loss:
+            keys = ["loss"]
+            if isinstance(dataset_module.get("eval_dataset"), dict):
+                keys += [f"eval_{key}_loss" for key in dataset_module["eval_dataset"].keys()]
+            else:
+                keys += ["eval_loss"]
+
+            plot_loss(training_args.output_dir, keys=keys)
+
+    if training_args.do_eval:
+        metrics = trainer.evaluate(metric_key_prefix="eval")
+
+        if isinstance(dataset_module.get("eval_dataset"), dict):
+            for key in dataset_module["eval_dataset"].keys():
+                try:
+                    perplexity = math.exp(metrics[f"eval_{key}_loss"])
+                except OverflowError:
+                    perplexity = float("inf")
+
+                metrics[f"eval_{key}_perplexity"] = perplexity
+        else:
+            try:
+                perplexity = math.exp(metrics["eval_loss"])
+            except OverflowError:
+                perplexity = float("inf")
+
+            metrics["eval_perplexity"] = perplexity
+
+        trainer.log_metrics("eval", metrics)
+        trainer.save_metrics("eval", metrics)
+
+    create_modelcard_and_push(trainer, model_args, data_args, training_args, finetuning_args)
+
+
 def run_sft(
     model_args: "ModelArguments",
     data_args: "DataArguments",
@@ -43,13 +145,7 @@ def run_sft(
     generating_args: "GeneratingArguments",
     callbacks: Optional[list["TrainerCallback"]] = None,
 ):
-    if not is_hyper_parallel_available():
-        raise ImportError("hyper_parallel is not installed. Please install it with `pip install hyper_parallel`.")
-
-    from hyper_parallel.integration.llamafactory import (  # pylint: disable=C0415
-        HyperParallelArguments,
-        HyperParallelTrainer,
-    )
+    hp_args = _prepare_hp_args(finetuning_args, model_args)
 
     tokenizer_module = load_tokenizer(model_args)
     tokenizer = tokenizer_module["tokenizer"]
@@ -94,25 +190,6 @@ def run_sft(
         gen_kwargs["eos_token_id"] = [tokenizer.eos_token_id] + tokenizer.additional_special_tokens_ids
     gen_kwargs["pad_token_id"] = tokenizer.pad_token_id
 
-    hp_args = HyperParallelArguments.from_finetuning_args(finetuning_args)
-
-    callbacks = list(callbacks or [])
-    processor = tokenizer_module.get("processor")
-    if processor is not None:
-        callbacks.append(SaveProcessorCallback(processor))
-
-    compute_loss_func = None
-    if finetuning_args.use_dft_loss:
-        compute_loss_func = dft_loss_func
-    elif finetuning_args.use_eaft_loss:
-        compute_loss_func = lambda outputs, labels, num_items_in_batch=None: eaft_loss_func(  # noqa: E731
-            outputs, labels, num_items_in_batch, finetuning_args.eaft_alpha
-        )
-    elif finetuning_args.use_asft_loss:
-        from functools import partial
-
-        compute_loss_func = partial(asft_loss_func, asft_alpha=finetuning_args.asft_alpha)
-
     trainer = HyperParallelTrainer(
         hp_args=hp_args,
         model=model,
@@ -122,19 +199,10 @@ def run_sft(
         callbacks=callbacks,
         gen_kwargs=gen_kwargs,
         ref_model=ref_model,
-        compute_loss_func=compute_loss_func,
         **dataset_module,
         **tokenizer_module,
         **metric_module,
     )
-
-    if finetuning_args.use_badam:
-        from types import MethodType
-
-        from badam import BAdamCallback, clip_grad_norm_old_version  # type: ignore[import]
-
-        trainer.accelerator.clip_grad_norm_ = MethodType(clip_grad_norm_old_version, trainer.accelerator)
-        trainer.add_callback(BAdamCallback)
 
     # Training
     if training_args.do_train:

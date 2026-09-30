@@ -40,7 +40,14 @@ resume_from_checkpoint: null
 
 ### ktransformers
 use_kt: true
-# For original BF16 checkpoints, start with examples/ktransformers/accelerate/fsdp2_kt_bf16.yaml.
-# For pre-converted expert weights, uncomment kt_weight_path and use fsdp2_kt_int8.yaml or fsdp2_kt_int4.yaml.
-# Pair the 397B path with fsdp2_kt_int8.yaml, tune cutoff_len to prepared weights and GPU memory.
-# kt_weight_path: /path/to/Qwen3.5-MoE-AMXINT8
+kt_cpu_activation: retain
+kt_config:
+  kt_expert_weight_format: bf16
+  kt_backend: AMXBF16
+  kt_num_threads: 96
+  kt_tp_enabled: true
+  kt_threadpool_count: 2
+  kt_max_cache_depth: 2
+  kt_model_max_length: 2176  # Includes the text-only template's dummy-image tokens.
+  kt_share_backward_bb: true
+# The Accelerate YAML contains FSDP settings only. KT has a single configuration owner here.

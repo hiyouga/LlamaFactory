@@ -105,7 +105,7 @@ def check_template(lang: str, template: str) -> None:
 
 
 def get_trainer_info(lang: str, output_path: os.PathLike, do_train: bool) -> tuple[str, "gr.Slider", dict[str, Any]]:
-    r"""Get training infomation for monitor.
+    r"""Get training information for monitor.
 
     If do_train is True:
         Inputs: top.lang, train.output_path

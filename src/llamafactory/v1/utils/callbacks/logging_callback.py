@@ -54,7 +54,17 @@ class LoggingCallback(TrainerCallback):
 
         # Human-readable output to stdout
         display_logs = {**logs, "step": state.global_step, "total_steps": state.num_training_steps}
-        parts = ", ".join(f"{k}: {v:.4f}" if isinstance(v, float) else f"{k}: {v}" for k, v in display_logs.items())
+
+        def _fmt(k: str, v) -> str:
+            if not isinstance(v, float):
+                return f"{k}: {v}"
+            # learning_rate is often < 1e-4 (e.g. 1e-5); :.4f would print "0.0000".
+            # Use :.4g so small values show as "1e-05" while 1e-4 still shows "0.0001".
+            if k == "learning_rate":
+                return f"{k}: {v:.4g}"
+            return f"{k}: {v:.4f}"
+
+        parts = ", ".join(_fmt(k, v) for k, v in display_logs.items())
         logger.info_rank0(parts)
 
         # Append to JSONL log file in output_dir

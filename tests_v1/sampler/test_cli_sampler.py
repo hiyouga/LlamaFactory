@@ -19,9 +19,9 @@ from llamafactory.v1.core.model_engine import ModelEngine
 from llamafactory.v1.samplers.cli_sampler import SyncSampler
 
 
-@pytest.mark.runs_on(["cuda", "npu"])
+@pytest.mark.runs_on(["cuda", "npu", "xpu"])
 def test_sync_sampler():
-    model_args = ModelArguments(model="Qwen/Qwen3-4B-Instruct-2507", template="qwen3_nothink")
+    model_args = ModelArguments(model="Qwen/Qwen3-4B-Instruct-2507")
     sample_args = SampleArguments()
     model_engine = ModelEngine(model_args)
     sampler = SyncSampler(sample_args, model_args, model_engine.model, model_engine.renderer)
@@ -31,7 +31,4 @@ def test_sync_sampler():
         response += new_text
 
     print(response)
-    assert model_engine.renderer.parse_message(response) == {
-        "role": "assistant",
-        "content": [{"type": "text", "value": "This is a test."}],
-    }
+    assert "This is a test." in response

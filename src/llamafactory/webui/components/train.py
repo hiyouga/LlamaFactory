@@ -52,15 +52,17 @@ def create_train_tab(engine: "Engine") -> dict[str, "Component"]:
         learning_rate = gr.Textbox(value="5e-5")
         num_train_epochs = gr.Textbox(value="3.0")
         max_grad_norm = gr.Textbox(value="1.0")
+        train_seed = gr.Textbox(value="42")
         max_samples = gr.Textbox(value="100000")
         compute_type = gr.Dropdown(choices=["bf16", "fp16", "fp32", "pure_bf16"], value="bf16")
 
-    input_elems.update({learning_rate, num_train_epochs, max_grad_norm, max_samples, compute_type})
+    input_elems.update({learning_rate, num_train_epochs, max_grad_norm, train_seed, max_samples, compute_type})
     elem_dict.update(
         dict(
             learning_rate=learning_rate,
             num_train_epochs=num_train_epochs,
             max_grad_norm=max_grad_norm,
+            train_seed=train_seed,
             max_samples=max_samples,
             compute_type=compute_type,
         )

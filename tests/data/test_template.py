@@ -13,13 +13,21 @@
 # limitations under the License.
 
 import os
+from copy import deepcopy
 from typing import TYPE_CHECKING
 
 import pytest
 from transformers import AutoTokenizer
 
 from llamafactory.data import get_template_and_fix_tokenizer
-from llamafactory.data.template import parse_template
+from llamafactory.data.template import TEMPLATES, parse_template
+from llamafactory.extras.constants import (
+    DEFAULT_TEMPLATE,
+    MCA_SUPPORTED_MODELS,
+    MULTIMODAL_SUPPORTED_MODELS,
+    SUPPORTED_MODELS,
+    DownloadSource,
+)
 from llamafactory.extras.packages import is_transformers_version_greater_than
 from llamafactory.hparams import DataArguments
 
@@ -46,6 +54,16 @@ MESSAGES_WITH_THOUGHT = [
     {"role": "user", "content": "你好"},
     {"role": "assistant", "content": "<think>\n模型思考内容\n</think>\n\n很高兴认识你！"},
 ]
+
+
+class CharTokenizer:
+    r"""Minimal reversible tokenizer for testing rendered template text."""
+
+    def encode(self, text: str, add_special_tokens: bool = False) -> list[int]:
+        return [ord(char) for char in text]
+
+    def decode(self, token_ids: list[int]) -> str:
+        return "".join(chr(token_id) for token_id in token_ids)
 
 
 def _check_tokenization(
@@ -91,7 +109,37 @@ def _check_template(
     _check_tokenization(tokenizer, (prompt_ids, answer_ids), (prompt_str, answer_str))
 
 
-@pytest.mark.runs_on(["cpu", "mps"])
+def test_moss_vl_registration():
+    model_name = "MOSS-VL-Instruct-0708"
+
+    assert model_name in SUPPORTED_MODELS
+    assert SUPPORTED_MODELS[model_name][DownloadSource.DEFAULT] == "OpenMOSS-Team/MOSS-VL-Instruct-0708"
+    assert DEFAULT_TEMPLATE[model_name] == "moss_vl"
+    assert model_name in MULTIMODAL_SUPPORTED_MODELS
+    assert TEMPLATES["moss_vl"].mm_plugin.__class__.__name__ == "MossVLPlugin"
+    assert TEMPLATES["moss_vl"].mm_plugin.image_token == "<|image_pad|>"
+    assert TEMPLATES["moss_vl"].mm_plugin.video_token == "<|video_pad|>"
+    assert TEMPLATES["moss_vl"].mm_plugin.vision_bos_token == "<|vision_start|>"
+    assert TEMPLATES["moss_vl"].mm_plugin.vision_eos_token == "<|vision_end|>"
+    assert TEMPLATES["moss_vl"].mm_plugin.time_bos_token == "<|time_start|>"
+    assert TEMPLATES["moss_vl"].mm_plugin.time_eos_token == "<|time_end|>"
+
+
+def test_qwen38_registration():
+    multimodal_model = "Qwen3.8-27B"
+    text_model = "Qwen3.8-2.4T-A95B-Thinking"
+
+    assert SUPPORTED_MODELS[multimodal_model][DownloadSource.DEFAULT] == "Qwen/Qwen3.8-27B"
+    assert DEFAULT_TEMPLATE[multimodal_model] == "qwen3_8"
+    assert multimodal_model in MULTIMODAL_SUPPORTED_MODELS
+
+    assert SUPPORTED_MODELS[text_model][DownloadSource.DEFAULT] == "Qwen/Qwen3.8-2.4T-A95B"
+    assert DEFAULT_TEMPLATE[text_model] == "qwen3_8"
+    assert text_model not in MULTIMODAL_SUPPORTED_MODELS
+    assert {"qwen3_5_moe_text", "qwen3_5_text"} <= MCA_SUPPORTED_MODELS
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
 def test_encode_oneturn():
     tokenizer = AutoTokenizer.from_pretrained(TINY_LLAMA3)
     template = get_template_and_fix_tokenizer(tokenizer, DataArguments(template="llama3"))
@@ -106,7 +154,7 @@ def test_encode_oneturn():
     _check_tokenization(tokenizer, (prompt_ids, answer_ids), (prompt_str, answer_str))
 
 
-@pytest.mark.runs_on(["cpu", "mps"])
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
 def test_encode_multiturn():
     tokenizer = AutoTokenizer.from_pretrained(TINY_LLAMA3)
     template = get_template_and_fix_tokenizer(tokenizer, DataArguments(template="llama3"))
@@ -127,7 +175,7 @@ def test_encode_multiturn():
     )
 
 
-@pytest.mark.runs_on(["cpu", "mps"])
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
 @pytest.mark.parametrize("cot_messages", [True, False])
 @pytest.mark.parametrize("enable_thinking", [True, False, None])
 def test_reasoning_encode_oneturn(cot_messages: bool, enable_thinking: bool):
@@ -153,7 +201,7 @@ def test_reasoning_encode_oneturn(cot_messages: bool, enable_thinking: bool):
     _check_tokenization(tokenizer, (prompt_ids, answer_ids), (prompt_str, answer_str))
 
 
-@pytest.mark.runs_on(["cpu", "mps"])
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
 @pytest.mark.parametrize("cot_messages", [True, False])
 @pytest.mark.parametrize("enable_thinking", [True, False, None])
 def test_reasoning_encode_multiturn(cot_messages: bool, enable_thinking: bool):
@@ -182,7 +230,7 @@ def test_reasoning_encode_multiturn(cot_messages: bool, enable_thinking: bool):
     )
 
 
-@pytest.mark.runs_on(["cpu", "mps"])
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
 @pytest.mark.parametrize("enable_thinking", [True, False, None])
 @pytest.mark.parametrize("discarding_history_cot", [True, False])
 def test_reasoning_encode_multiturn_discarding_history_cot(enable_thinking: bool, discarding_history_cot: bool):
@@ -218,7 +266,49 @@ def test_reasoning_encode_multiturn_discarding_history_cot(enable_thinking: bool
     )
 
 
-@pytest.mark.runs_on(["cpu", "mps"])
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
+def test_qwen38_reasoning_instruction():
+    tokenizer = CharTokenizer()
+    template = deepcopy(TEMPLATES["qwen3_8"])
+    encoded_pairs = template.encode_multiturn(tokenizer, MESSAGES[:2], system="Medical assistant")
+
+    prompt_text = tokenizer.decode(encoded_pairs[0][0])
+    answer_text = tokenizer.decode(encoded_pairs[0][1])
+    assert prompt_text == (
+        "<|im_start|>system\n"
+        "Reasoning effort is set to xhigh. Please think carefully through the task, validate key assumptions, "
+        "consider plausible alternatives, and prioritize correctness, consistency, and clarity in the final answer."
+        "\n\nMedical assistant<|im_end|>\n"
+        "<|im_start|>user\nHow are you<|im_end|>\n<|im_start|>assistant\n"
+    )
+    assert answer_text == "<think>\n\n</think>\n\nI am fine!<|im_end|>\n"
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
+def test_qwen38_tool_system_order():
+    tokenizer = CharTokenizer()
+    template = deepcopy(TEMPLATES["qwen3_8"])
+    tools = '[{"name":"get_weather","parameters":{"type":"object","properties":{}}}]'
+    messages = [
+        {"role": "user", "content": "How is the weather?"},
+        {"role": "function", "content": '{"name":"get_weather","arguments":{}}'},
+    ]
+    encoded_pairs = template.encode_multiturn(tokenizer, messages, system="Use tools safely", tools=tools)
+
+    prompt_text = tokenizer.decode(encoded_pairs[0][0])
+    answer_text = tokenizer.decode(encoded_pairs[0][1])
+    reasoning_text = template._get_reasoning_instruction()
+    tool_text = template.format_tools.apply(content=tools)[0].lstrip("\n")
+    assert prompt_text == (
+        f"<|im_start|>system\n{reasoning_text}\n\n{tool_text}\n\nUse tools safely<|im_end|>\n"
+        "<|im_start|>user\nHow is the weather?<|im_end|>\n<|im_start|>assistant\n"
+    )
+    assert answer_text == (
+        "<think>\n\n</think>\n\n<tool_call>\n<function=get_weather>\n</function>\n</tool_call><|im_end|>\n"
+    )
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
 def test_jinja_template():
     tokenizer = AutoTokenizer.from_pretrained(TINY_LLAMA3)
     ref_tokenizer = AutoTokenizer.from_pretrained(TINY_LLAMA3)
@@ -228,7 +318,7 @@ def test_jinja_template():
     assert tokenizer.apply_chat_template(MESSAGES) == ref_tokenizer.apply_chat_template(MESSAGES)
 
 
-@pytest.mark.runs_on(["cpu", "mps"])
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
 def test_ollama_modelfile():
     tokenizer = AutoTokenizer.from_pretrained(TINY_LLAMA3)
     template = get_template_and_fix_tokenizer(tokenizer, DataArguments(template="llama3"))
@@ -246,14 +336,14 @@ def test_ollama_modelfile():
     )
 
 
-@pytest.mark.runs_on(["cpu", "mps"])
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
 def test_get_stop_token_ids():
     tokenizer = AutoTokenizer.from_pretrained(TINY_LLAMA3)
     template = get_template_and_fix_tokenizer(tokenizer, DataArguments(template="llama3"))
     assert set(template.get_stop_token_ids(tokenizer)) == {128008, 128009}
 
 
-@pytest.mark.runs_on(["cpu", "mps"])
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
 @pytest.mark.skipif(not HF_TOKEN, reason="Gated model.")
 def test_gemma_template():
     prompt_str = (
@@ -266,7 +356,7 @@ def test_gemma_template():
     _check_template("google/gemma-3-4b-it", "gemma", prompt_str, answer_str)
 
 
-@pytest.mark.runs_on(["cpu", "mps"])
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
 @pytest.mark.skipif(not HF_TOKEN, reason="Gated model.")
 def test_gemma2_template():
     prompt_str = (
@@ -279,7 +369,7 @@ def test_gemma2_template():
     _check_template("google/gemma-2-2b-it", "gemma2", prompt_str, answer_str)
 
 
-@pytest.mark.runs_on(["cpu", "mps"])
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
 @pytest.mark.skipif(not HF_TOKEN, reason="Gated model.")
 def test_llama3_template():
     prompt_str = (
@@ -292,7 +382,7 @@ def test_llama3_template():
     _check_template("meta-llama/Meta-Llama-3-8B-Instruct", "llama3", prompt_str, answer_str)
 
 
-@pytest.mark.runs_on(["cpu", "mps"])
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
 def test_llama4_template():
     prompt_str = (
         f"<|begin_of_text|><|header_start|>user<|header_end|>\n\n{MESSAGES[0]['content']}<|eot|>"
@@ -304,7 +394,7 @@ def test_llama4_template():
     _check_template(TINY_LLAMA4, "llama4", prompt_str, answer_str)
 
 
-@pytest.mark.runs_on(["cpu", "mps"])
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
 def test_phi4_template():
     prompt_str = (
         f"<|im_start|>user<|im_sep|>{MESSAGES[0]['content']}<|im_end|>"
@@ -316,7 +406,7 @@ def test_phi4_template():
     _check_template("microsoft/phi-4", "phi4", prompt_str, answer_str)
 
 
-@pytest.mark.runs_on(["cpu", "mps"])
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
 @pytest.mark.xfail(not HF_TOKEN, reason="Authorization.")
 def test_qwen2_5_template():
     prompt_str = (
@@ -330,7 +420,7 @@ def test_qwen2_5_template():
     _check_template("Qwen/Qwen2.5-7B-Instruct", "qwen", prompt_str, answer_str)
 
 
-@pytest.mark.runs_on(["cpu", "mps"])
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
 @pytest.mark.parametrize("cot_messages", [True, False])
 def test_qwen3_template(cot_messages: bool):
     prompt_str = (
@@ -349,7 +439,7 @@ def test_qwen3_template(cot_messages: bool):
     _check_template("Qwen/Qwen3-8B", "qwen3", prompt_str, answer_str, messages=messages)
 
 
-@pytest.mark.runs_on(["cpu", "mps"])
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
 def test_parse_llama3_template():
     tokenizer = AutoTokenizer.from_pretrained(TINY_LLAMA3)
     template = parse_template(tokenizer)
@@ -363,7 +453,7 @@ def test_parse_llama3_template():
     assert template.default_system == ""
 
 
-@pytest.mark.runs_on(["cpu", "mps"])
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
 @pytest.mark.xfail(not HF_TOKEN, reason="Authorization.")
 def test_parse_qwen_template():
     tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-7B-Instruct")
@@ -376,7 +466,7 @@ def test_parse_qwen_template():
     assert template.default_system == "You are Qwen, created by Alibaba Cloud. You are a helpful assistant."
 
 
-@pytest.mark.runs_on(["cpu", "mps"])
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
 @pytest.mark.xfail(not HF_TOKEN, reason="Authorization.")
 def test_parse_qwen3_template():
     tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-8B")

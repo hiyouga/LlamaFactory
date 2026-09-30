@@ -84,8 +84,12 @@ def load_unsloth_peft_model(
     model_args: "ModelArguments",
     finetuning_args: "FinetuningArguments",
     is_trainable: bool,
-) -> "PreTrainedModel":
-    r"""Load peft model with unsloth. Used in both training and inference."""
+) -> Optional["PreTrainedModel"]:
+    r"""Load peft model with unsloth. Used in both training and inference.
+
+    Returns None if unsloth does not support the model type, and sets
+    model_args.use_unsloth = False so callers can fall back to standard loading.
+    """
     from unsloth import FastLanguageModel  # type: ignore
 
     unsloth_kwargs = _get_unsloth_kwargs(config, model_args.adapter_name_or_path[0], model_args, finetuning_args)
@@ -95,7 +99,9 @@ def load_unsloth_peft_model(
 
         model, _ = FastLanguageModel.from_pretrained(**unsloth_kwargs)
     except NotImplementedError:
-        raise ValueError("Unsloth does not support model type {}.".format(getattr(config, "model_type", None)))
+        logger.warning_rank0("Unsloth does not support model type {}.".format(getattr(config, "model_type", None)))
+        model_args.use_unsloth = False
+        return None
 
     if not is_trainable:
         FastLanguageModel.for_inference(model)

@@ -1,0 +1,6 @@
+### Install model-specific dependencies: `pip install -r requirements/moss-vl.txt`
+
+model_name_or_path: OpenMOSS-Team/MOSS-VL-Instruct-0708
+template: moss_vl
+infer_backend: huggingface  # choices: [huggingface, vllm, sglang, ktransformers]
+trust_remote_code: true

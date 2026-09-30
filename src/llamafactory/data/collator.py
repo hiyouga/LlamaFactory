@@ -150,7 +150,9 @@ class MultiModalDataCollatorForSeq2Seq(DataCollatorForSeq2Seq):
         if isinstance(self.model, PeftModel):
             self.model = self.model.base_model.model
 
-        if self.model is not None and hasattr(self.model, "get_rope_index"):  # for qwen2vl mrope
+        if getattr(getattr(self.model, "config", None), "model_type", None) == "moss_vl":
+            self.get_rope_func = None  # MOSS-VL computes its own XRoPE positions in model.forward.
+        elif self.model is not None and hasattr(self.model, "get_rope_index"):  # for qwen2vl mrope
             self.get_rope_func = self.model.get_rope_index  # transformers < 4.52.0 or qwen2.5 omni
         elif self.model is not None and hasattr(self.model, "model") and hasattr(self.model.model, "get_rope_index"):
             self.get_rope_func = self.model.model.get_rope_index  # transformers >= 4.52.0
@@ -315,6 +317,16 @@ class MultiModalDataCollatorForSeq2Seq(DataCollatorForSeq2Seq):
                 [features["attention_mask"], dummy_image_right_padding_attention_mask], dim=-1
             )
 
+        # Mirror the non-FA2 packing fix (#10737) for the packed-mrope path. The merged position_ids
+        # is built from per-subseq sequence_boundaries, which end at cutoff_len, while
+        # `DataCollatorForSeq2Seq(pad_to_multiple_of=...)` right-pads input_ids/attention_mask past
+        # cutoff_len. Right-pad the trailing (masked) positions with 0 so the merged position_ids
+        # matches seq_len before validating. Works for both 2D and 3D (mrope) position_ids since the
+        # sequence axis is last, and is idempotent with the has_dummy_image cat above.
+        pad_len = seq_len - features["position_ids"].shape[-1]
+        if pad_len > 0:
+            features["position_ids"] = F.pad(features["position_ids"], (0, pad_len), value=0)
+
         if features["position_ids"].shape != expected_position_ids_shape:
             raise ValueError(
                 "Merged position_ids shape mismatch: "
@@ -322,6 +334,8 @@ class MultiModalDataCollatorForSeq2Seq(DataCollatorForSeq2Seq):
             )
 
     def __call__(self, features: list[dict[str, Any]]) -> dict[str, "torch.Tensor"]:
+        model_type = getattr(getattr(self.model, "config", None), "model_type", None)
+        is_moss_vl = model_type == "moss_vl"
         batch_images, batch_videos, batch_audios = [], [], []
         batch_imglens, batch_vidlens, batch_audlens, batch_input_ids = [], [], [], []
         packing_params_list: list[dict[str, Any] | None] = []
@@ -341,7 +355,10 @@ class MultiModalDataCollatorForSeq2Seq(DataCollatorForSeq2Seq):
         fake_input_ids = []
         has_dummy_image = False
         if (
-            self.template.mm_plugin.image_token is not None and sum(batch_imglens) == 0 and sum(batch_vidlens) == 0
+            self.template.mm_plugin.image_token is not None
+            and sum(batch_imglens) == 0
+            and sum(batch_vidlens) == 0
+            and not is_moss_vl  # MOSS-VL builds one native zero-valued dummy per text-only sample in its plugin.
         ):  # avoid process hanging in zero3/fsdp case
             fake_messages = [{"role": "user", "content": IMAGE_PLACEHOLDER}]
             fake_images = [Image.new("RGB", (64, 64), (255, 255, 255))]
@@ -416,7 +433,6 @@ class MultiModalDataCollatorForSeq2Seq(DataCollatorForSeq2Seq):
         features: dict[str, torch.Tensor] = super().__call__(features)
 
         bsz, seq_len = features["input_ids"].shape[:2]
-        model_type = getattr(self.model.config, "model_type", None) if self.model is not None else None
         is_omni = model_type in [
             "qwen2_5_omni_thinker",
             "qwen3_omni_moe_thinker",
@@ -461,11 +477,16 @@ class MultiModalDataCollatorForSeq2Seq(DataCollatorForSeq2Seq):
         ):
             raise ValueError(f"{self.model.config.model_type} requires 3D position ids for mrope.")
 
-        if "cross_attention_mask" in mm_inputs:  # for mllama inputs when pad_to_multiple_of is enabled
+        if (
+            "cross_attention_mask" in mm_inputs and mm_inputs["cross_attention_mask"].dtype != torch.bool
+        ):  # for mllama inputs when pad_to_multiple_of is enabled
             cross_attention_mask = mm_inputs.pop("cross_attention_mask")
             seq_len = features["input_ids"].size(1)
             orig_len = cross_attention_mask.size(1)
             mm_inputs["cross_attention_mask"] = F.pad(cross_attention_mask, (0, 0, 0, 0, 0, seq_len - orig_len))
+
+        if is_moss_vl:
+            mm_inputs = self.template.mm_plugin.post_process_mossvl_inputs(features, mm_inputs, self.processor)
 
         features.update(mm_inputs)
 
@@ -530,6 +551,17 @@ class SFTDataCollatorWith4DAttentionMask(MultiModalDataCollatorForSeq2Seq):
                 self._unpad_packed_features(features)
 
             features["attention_mask"] = None  # let transformers handle causal packed mask.
+        else:
+            # `DataCollatorForSeq2Seq(pad_to_multiple_of=...)` pads `input_ids`/`attention_mask`
+            # but leaves `position_ids` untouched (it is not in `model_input_names`). On the
+            # non-FA2 packing path we do not unpad, so `position_ids` stays shorter than
+            # `input_ids`, which makes cos/sin shorter than query and crashes
+            # `apply_rotary_pos_emb`. Right-pad `position_ids` to the padded length to match.
+            position_ids = features.get("position_ids")
+            if torch.is_tensor(position_ids):
+                pad_len = features["input_ids"].shape[-1] - position_ids.shape[-1]
+                if pad_len > 0:
+                    features["position_ids"] = F.pad(position_ids, (0, pad_len), value=0)
 
         for key, value in features.items():  # cast data dtype for paligemma
             if torch.is_tensor(value) and torch.is_floating_point(value):

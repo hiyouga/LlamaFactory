@@ -1,0 +1,26 @@
+model: Qwen/Qwen3.5-0.8B
+model_class: llm
+
+
+kernel_config:
+  name: auto
+
+quant_config: null
+
+dist_config:
+  name: fsdp2
+  dcp_path: null
+
+### data
+train_dataset: data/v1_multimodal_demo.yaml
+
+### training
+output_dir: outputs/test_multimodal
+micro_batch_size: 1
+cutoff_len: 2048
+learning_rate: 1.0e-4
+max_steps: 5
+
+### sample
+sample_backend: hf
+max_new_tokens: 128

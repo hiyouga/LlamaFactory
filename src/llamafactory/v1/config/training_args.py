@@ -14,9 +14,14 @@
 
 import os
 from dataclasses import dataclass, field
+from typing import Literal
 from uuid import uuid4
 
+from ..utils.logging import get_logger
 from .arg_utils import BatchingStrategy, PluginConfig, get_plugin_config
+
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -71,7 +76,31 @@ class TrainingArguments:
     )
     dist_config: PluginConfig | None = field(
         default=None,
-        metadata={"help": "Distribution configuration for training."},
+        metadata={"help": "Distributed backend plugin configuration."},
+    )
+    dp_size: int | None = field(
+        default=None,
+        metadata={"help": "Data parallel size, default to world_size // cp_size."},
+    )
+    cp_size: int = field(
+        default=1,
+        metadata={"help": "Context parallel size."},
+    )
+    cp_mode: str = field(
+        default="ulysses",
+        metadata={"help": "Context parallel implementation."},
+    )
+    mp_replicate_size: int = field(
+        default=1,
+        metadata={"help": "Model parallel replicate size."},
+    )
+    mp_shard_size: int | None = field(
+        default=None,
+        metadata={"help": "Model parallel shard size, default to world_size // mp_replicate_size."},
+    )
+    dist_timeout: int = field(
+        default=18000,
+        metadata={"help": "Distributed process group initialization timeout in seconds."},
     )
     optim_config: PluginConfig | None = field(
         default=None,
@@ -115,11 +144,58 @@ class TrainingArguments:
         default=1,
         metadata={"help": "Log metrics every N optimizer steps."},
     )
+    chunk_loss_size: int | None = field(
+        default=None,
+        metadata={"help": "Maximum flattened token rows per Chunk Loss chunk. None disables Chunk Loss."},
+    )
+    pref_loss: Literal["sigmoid", "orpo", "simpo"] = field(
+        default="sigmoid",
+        metadata={"help": "The type of DPO loss to use."},
+    )
+    pref_beta: float = field(
+        default=0.1,
+        metadata={"help": "The beta parameter in the preference loss."},
+    )
+    pref_ftx: float = field(
+        default=0.0,
+        metadata={"help": "The supervised fine-tuning loss coefficient in DPO training."},
+    )
+    simpo_gamma: float = field(
+        default=0.5,
+        metadata={"help": "The target reward margin term in SimPO loss."},
+    )
+    dpo_label_smoothing: float = field(
+        default=0.0,
+        metadata={"help": "The robust DPO label smoothing parameter in cDPO that should be between 0 and 0.5."},
+    )
+    ld_alpha: float | None = field(
+        default=None,
+        metadata={"help": "Alpha parameter from LD-DPO, controls weighting of verbose token log-probabilities."},
+    )
 
     def __post_init__(self) -> None:
         self.dist_config = get_plugin_config(self.dist_config)
         self.optim_config = get_plugin_config(self.optim_config)
         self.lr_scheduler_config = get_plugin_config(self.lr_scheduler_config)
+        if self.chunk_loss_size is not None and self.chunk_loss_size <= 0:
+            raise ValueError("`chunk_loss_size` must be positive.")
+        try:
+            from ..plugins.model_plugins.deepspeed_utils import register_deepspeed_dist_config
+
+            register_deepspeed_dist_config(self.dist_config)
+        except ImportError:
+            pass
+
+        # The optimizer learning rate has a single source of truth: ``learning_rate``.
+        # Propagate it into ``optim_config["lr"]`` so optimizer plugins (e.g. Muon) pick it up
+        # via ``optim_config.get("lr")`` without each plugin needing a separate ``learning_rate`` arg.
+        if self.optim_config is not None:
+            if "lr" in self.optim_config:
+                logger.warning_rank0(
+                    "`optim_config.lr` is overridden by `learning_rate`; set the learning rate via "
+                    "`learning_rate` instead and remove `lr` from `optim_config`."
+                )
+            self.optim_config["lr"] = self.learning_rate
 
         if str(self.batching_strategy) == str(BatchingStrategy.DYNAMIC_BATCHING):
             if self.max_steps is None or self.max_steps <= 0:

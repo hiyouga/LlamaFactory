@@ -1,0 +1,2 @@
+--extra-index-url https://triton-ascend.osinfra.cn/pypi/simple
+triton-ascend==3.2.1

@@ -29,8 +29,6 @@ jobs:
       matrix:
         include:
           - device: "cuda"
-          - device: "npu-a2"
-          - device: "npu-a3"
 
     runs-on: ubuntu-latest
 
@@ -71,14 +69,6 @@ jobs:
           username: ${{ vars.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Login to Quay
-        if: ${{ github.event_name != 'pull_request' && startsWith(matrix.device, 'npu') }}
-        uses: docker/login-action@v3
-        with:
-          registry: quay.io
-          username: ${{ vars.QUAY_ASCEND_USERNAME }}
-          password: ${{ secrets.QUAY_ASCEND_TOKEN }}
-
       - name: Build and push Docker image (CUDA)
         if: ${{ matrix.device == 'cuda' }}
         uses: docker/build-push-action@v6
@@ -88,29 +78,3 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: |
             docker.io/hiyouga/llamafactory:${{ steps.version.outputs.tag }}
-
-      - name: Build and push Docker image (NPU-A2)
-        if: ${{ matrix.device == 'npu-a2' }}
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          file: ./docker/docker-npu/Dockerfile
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: |
-            docker.io/hiyouga/llamafactory:${{ steps.version.outputs.tag }}-npu-a2
-            quay.io/ascend/llamafactory:${{ steps.version.outputs.tag }}-npu-a2
-
-      - name: Build and push Docker image (NPU-A3)
-        if: ${{ matrix.device == 'npu-a3' }}
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          file: ./docker/docker-npu/Dockerfile
-          build-args: |
-            BASE_IMAGE=quay.io/ascend/cann:9.0.0-a3-ubuntu22.04-py3.11
-          push: ${{ github.event_name != 'pull_request' }}
-          tags: |
-            docker.io/hiyouga/llamafactory:${{ steps.version.outputs.tag }}-npu-a3
-            quay.io/ascend/llamafactory:${{ steps.version.outputs.tag }}-npu-a3

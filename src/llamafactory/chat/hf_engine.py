@@ -19,7 +19,7 @@ from threading import Thread
 from typing import TYPE_CHECKING, Any, Optional, Union
 
 import torch
-from transformers import GenerationConfig, TextIteratorStreamer
+from transformers import GenerationConfig, TextIteratorStreamer, set_seed
 from typing_extensions import override
 
 from ..data import get_template_and_fix_tokenizer
@@ -128,6 +128,7 @@ class HuggingfaceEngine(BaseEngine):
         skip_special_tokens: Optional[bool] = input_kwargs.pop("skip_special_tokens", None)
         max_length: Optional[int] = input_kwargs.pop("max_length", None)
         max_new_tokens: Optional[int] = input_kwargs.pop("max_new_tokens", None)
+        seed: Optional[int] = input_kwargs.pop("seed", None)
         stop: Optional[Union[str, list[str]]] = input_kwargs.pop("stop", None)
 
         if stop is not None:
@@ -177,6 +178,8 @@ class HuggingfaceEngine(BaseEngine):
             attention_mask=attention_mask,
             generation_config=GenerationConfig(**generating_args),
         )
+        if seed is not None:
+            gen_kwargs["_seed"] = seed
 
         mm_inputs = template.mm_plugin.get_mm_inputs(**mm_input_dict, batch_ids=[prompt_ids], processor=processor)
         for key, value in mm_inputs.items():
@@ -237,6 +240,10 @@ class HuggingfaceEngine(BaseEngine):
             audios,
             input_kwargs,
         )
+        seed = gen_kwargs.pop("_seed", None)
+        if seed is not None:
+            set_seed(seed)
+
         generate_output = model.generate(**gen_kwargs)
         if isinstance(generate_output, tuple):
             generate_output = generate_output[1][0]  # post-process the minicpm_o output
@@ -292,6 +299,10 @@ class HuggingfaceEngine(BaseEngine):
             audios,
             input_kwargs,
         )
+        seed = gen_kwargs.pop("_seed", None)
+        if seed is not None:
+            set_seed(seed)
+
         streamer = TextIteratorStreamer(
             tokenizer,
             skip_prompt=True,

@@ -79,6 +79,13 @@ def is_mcore_adapter_available():
     return _is_package_available("mcore_adapter")
 
 
+def is_megatron_bridge_available():
+    try:
+        return _is_package_available("megatron.bridge")
+    except ModuleNotFoundError:
+        return False
+
+
 def is_pillow_available():
     return _is_package_available("PIL")
 

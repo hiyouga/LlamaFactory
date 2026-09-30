@@ -1,0 +1,27 @@
+model: Qwen/Qwen3-0.6B
+trust_remote_code: true
+model_class: llm
+
+kernel_config:
+  name: auto
+
+# FSDP Config
+dist_config:
+  name: fsdp2
+  dcp_path: null
+
+### data
+train_dataset: data/v1_sft_demo.yaml
+
+### training
+output_dir: outputs/test_chunk_loss
+micro_batch_size: 1
+cutoff_len: 2048
+# Maximum flattened token rows per logits/CE chunk; this is not the sequence length.
+chunk_loss_size: 256
+learning_rate: 1.0e-4
+max_steps: 10
+
+### sample
+sample_backend: hf
+max_new_tokens: 128

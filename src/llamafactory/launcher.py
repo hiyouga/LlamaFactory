@@ -54,7 +54,7 @@ def launch():
     )
 
     command = sys.argv.pop(1) if len(sys.argv) > 1 else "help"
-    if is_env_enabled("USE_MCA"):  # force use torchrun
+    if is_env_enabled("USE_MCA") or is_env_enabled("USE_MEGATRON_BRIDGE"):  # force use torchrun
         os.environ["FORCE_TORCHRUN"] = "1"
 
     if command == "train" and (

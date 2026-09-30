@@ -1,58 +1,128 @@
+x-build-args: &build-args
+  PIP_INDEX: https://pypi.org/simple
+
+x-build: &build
+  dockerfile: ./docker/docker-npu/Dockerfile
+  context: ../..
+
+x-npu-common: &npu-common
+  volumes:
+    - /usr/local/dcmi:/usr/local/dcmi
+    - /usr/local/bin/npu-smi:/usr/local/bin/npu-smi
+    - /usr/local/Ascend/driver:/usr/local/Ascend/driver
+    - /etc/ascend_install.info:/etc/ascend_install.info
+  ipc: host
+  tty: true
+  # shm_size: "16gb"  # ipc: host is set
+  stdin_open: true
+  command: bash
+  devices:
+    - /dev/davinci0
+    - /dev/davinci_manager
+    - /dev/devmm_svm
+    - /dev/hisi_hdc
+  restart: unless-stopped
+
+x-npu-950: &npu-950
+  <<: *npu-common
+  devices:
+    - /dev/davinci0
+    - /dev/davinci_manager
+    - /dev/hisi_hdc
+
 services:
-  llamafactory-a2:
+  llamafactory-a2-ubuntu:
+    <<: *npu-common
+    profiles: ["a2-ubuntu"]
     build:
-      dockerfile: ./docker/docker-npu/Dockerfile
-      context: ../..
+      <<: *build
       args:
-        PIP_INDEX: https://pypi.org/simple
-    container_name: llamafactory-a2
-    image: llamafactory:npu-a2
-    volumes:
-      - /usr/local/dcmi:/usr/local/dcmi
-      - /usr/local/bin/npu-smi:/usr/local/bin/npu-smi
-      - /usr/local/Ascend/driver:/usr/local/Ascend/driver
-      - /etc/ascend_install.info:/etc/ascend_install.info
+        <<: *build-args
+        BASE_IMAGE: quay.io/ascend/cann:9.1.0-910b-ubuntu22.04-py3.12
+    container_name: llamafactory-910b-ubuntu
+    image: llamafactory:npu-910b-ubuntu
+    environment:
+      - GRADIO_SERVER_NAME=0.0.0.0
     ports:
       - "7860:7860"
       - "8000:8000"
-    ipc: host
-    tty: true
-    # shm_size: "16gb"  # ipc: host is set
-    stdin_open: true
-    command: bash
-    devices:
-      - /dev/davinci0
-      - /dev/davinci_manager
-      - /dev/devmm_svm
-      - /dev/hisi_hdc
-    restart: unless-stopped
 
-  llamafactory-a3:
-    profiles: ["a3"]
+  llamafactory-a3-ubuntu:
+    <<: *npu-common
+    profiles: ["a3-ubuntu"]
     build:
-      dockerfile: ./docker/docker-npu/Dockerfile
-      context: ../..
+      <<: *build
       args:
-        BASE_IMAGE: quay.io/ascend/cann:9.0.0-a3-ubuntu22.04-py3.11
-        PIP_INDEX: https://pypi.org/simple
-    container_name: llamafactory-a3
-    image: llamafactory:npu-a3
-    volumes:
-      - /usr/local/dcmi:/usr/local/dcmi
-      - /usr/local/bin/npu-smi:/usr/local/bin/npu-smi
-      - /usr/local/Ascend/driver:/usr/local/Ascend/driver
-      - /etc/ascend_install.info:/etc/ascend_install.info
+        <<: *build-args
+        BASE_IMAGE: quay.io/ascend/cann:9.1.0-a3-ubuntu22.04-py3.12
+    container_name: llamafactory-a3-ubuntu
+    image: llamafactory:npu-a3-ubuntu
+    environment:
+      - GRADIO_SERVER_NAME=0.0.0.0
     ports:
       - "7861:7860"
       - "8001:8000"
-    ipc: host
-    tty: true
-    # shm_size: "16gb"  # ipc: host is set
-    stdin_open: true
-    command: bash
-    devices:
-      - /dev/davinci0
-      - /dev/davinci_manager
-      - /dev/devmm_svm
-      - /dev/hisi_hdc
-    restart: unless-stopped
+
+  llamafactory-a2-openeuler:
+    <<: *npu-common
+    profiles: ["a2-openeuler"]
+    build:
+      <<: *build
+      args:
+        <<: *build-args
+        BASE_IMAGE: quay.io/ascend/cann:9.1.0-910b-openeuler24.03-py3.12
+    container_name: llamafactory-910b-openeuler
+    image: llamafactory:npu-910b-openeuler
+    environment:
+      - GRADIO_SERVER_NAME=0.0.0.0
+    ports:
+      - "7862:7860"
+      - "8002:8000"
+
+  llamafactory-a3-openeuler:
+    <<: *npu-common
+    profiles: ["a3-openeuler"]
+    build:
+      <<: *build
+      args:
+        <<: *build-args
+        BASE_IMAGE: quay.io/ascend/cann:9.1.0-a3-openeuler24.03-py3.12
+    container_name: llamafactory-a3-openeuler
+    image: llamafactory:npu-a3-openeuler
+    environment:
+      - GRADIO_SERVER_NAME=0.0.0.0
+    ports:
+      - "7863:7860"
+      - "8003:8000"
+
+  llamafactory-950-ubuntu:
+    <<: *npu-950
+    profiles: ["950-ubuntu"]
+    build:
+      <<: *build
+      args:
+        <<: *build-args
+        BASE_IMAGE: quay.io/ascend/cann:9.1.0-950-ubuntu22.04-py3.12
+    container_name: llamafactory-950-ubuntu
+    image: llamafactory:npu-950-ubuntu
+    environment:
+      - GRADIO_SERVER_NAME=0.0.0.0
+    ports:
+      - "7864:7860"
+      - "8004:8000"
+
+  llamafactory-950-openeuler:
+    <<: *npu-950
+    profiles: ["950-openeuler"]
+    build:
+      <<: *build
+      args:
+        <<: *build-args
+        BASE_IMAGE: quay.io/ascend/cann:9.1.0-950-openeuler24.03-py3.12
+    container_name: llamafactory-950-openeuler
+    image: llamafactory:npu-950-openeuler
+    environment:
+      - GRADIO_SERVER_NAME=0.0.0.0
+    ports:
+      - "7865:7860"
+      - "8005:8000"

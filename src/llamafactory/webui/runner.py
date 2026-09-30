@@ -16,7 +16,7 @@ import json
 import os
 from collections.abc import Generator
 from copy import deepcopy
-from subprocess import PIPE, Popen, TimeoutExpired
+from subprocess import Popen, TimeoutExpired
 from typing import TYPE_CHECKING, Any
 
 from transformers.utils import is_torch_npu_available
@@ -49,6 +49,13 @@ if TYPE_CHECKING:
     from gradio.components import Component
 
     from .manager import Manager
+
+
+def _parse_seed(value: Any, default: int = 42) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
 
 
 class Runner:
@@ -147,6 +154,7 @@ class Runner:
             learning_rate=float(get("train.learning_rate")),
             num_train_epochs=float(get("train.num_train_epochs")),
             max_samples=int(get("train.max_samples")),
+            seed=_parse_seed(get("train.train_seed")),
             per_device_train_batch_size=get("train.batch_size"),
             gradient_accumulation_steps=get("train.gradient_accumulation_steps"),
             lr_scheduler_type=get("train.lr_scheduler_type"),
@@ -316,6 +324,7 @@ class Runner:
             max_new_tokens=get("eval.max_new_tokens"),
             top_p=get("eval.top_p"),
             temperature=get("eval.temperature"),
+            seed=_parse_seed(get("eval.eval_seed")),
             output_dir=get_save_dir(model_name, finetuning_type, get("eval.output_dir")),
             trust_remote_code=True,
             ddp_timeout=180000000,
@@ -375,7 +384,16 @@ class Runner:
                 env["FORCE_TORCHRUN"] = "1"
 
             # NOTE: DO NOT USE shell=True to avoid security risk
-            self.trainer = Popen(["llamafactory-cli", "train", save_cmd(args)], env=env, stderr=PIPE, text=True)
+            webui_log_path = os.path.join(args["output_dir"], "webui_subprocess.log")
+            webui_log = open(webui_log_path, "a", encoding="utf-8")
+            self.trainer = Popen(
+                ["llamafactory-cli", "train", save_cmd(args)],
+                env=env,
+                stdout=webui_log,
+                stderr=webui_log,
+                text=True,
+            )
+            webui_log.close()
             yield from self.monitor()
 
     def _build_config_dict(self, data: dict["Component", Any]) -> dict[str, Any]:
@@ -451,6 +469,16 @@ class Runner:
             else:
                 finish_log = load_eval_results(os.path.join(output_path, "all_results.json")) + "\n\n" + running_log
         else:
+            if stderr is None:
+                webui_log_path = os.path.join(output_path, "webui_subprocess.log")
+                if os.path.exists(webui_log_path):
+                    with open(webui_log_path, "rb") as f:
+                        f.seek(0, os.SEEK_END)
+                        f.seek(max(f.tell() - 20000, 0))
+                        stderr = f.read().decode("utf-8", errors="replace")
+                else:
+                    stderr = "No subprocess log file found."
+
             print(stderr)
             finish_info = ALERTS["err_failed"][lang]
             finish_log = ALERTS["err_failed"][lang] + f" Exit code: {return_code}\n\n```\n{stderr}\n```\n"

@@ -32,6 +32,7 @@ def _make_model_input(length: int, start: int = 0):
         "attention_mask": [1] * length,
         "labels": input_ids.copy(),
         "loss_weights": [1.0] * length,
+        "position_ids": list(range(1, length + 1)),
     }
 
 
@@ -62,7 +63,7 @@ def test_padding_free():
     assert len(batch) == 1
     assert batch[0]["input_ids"].shape == (1, 5)
     assert batch[0]["input_ids"].tolist() == [[0, 1, 10, 11, 12]]
-    assert batch[0]["attention_mask"].tolist() == [[1, 1, 1, 1, 1]]
+    assert batch[0]["attention_mask"] is None
     assert batch[0]["position_ids"].tolist() == [[0, 1, 0, 1, 2]]
     assert batch[0]["labels"].tolist() == [[0, 1, IGNORE_INDEX, 11, 12]]
     assert batch[0]["loss_weights"].tolist() == [[1.0, 1.0, 0.0, 1.0, 1.0]]
@@ -115,6 +116,8 @@ def test_dynamic_batching():
     assert len(batch) == 1
     assert batch[0]["input_ids"].shape == (3, 6)
     assert batch[0]["input_ids"].tolist()[0] == [0, 1, 2, 0, 0, 0]
+    assert batch[0]["position_ids"].shape == (3, 6)
+    assert batch[0]["position_ids"].tolist()[0] == [1, 2, 3, 0, 0, 0]
     assert len(buffer) == 3
 
 
@@ -201,6 +204,7 @@ def test_normal_batching():
     batch = next(iter(batch_generator))
     assert len(batch) == 2
     assert batch[0]["input_ids"].shape == (4, 10)
+    assert batch[0]["position_ids"].shape == (4, 10)
 
 
 def test_dynamic_padding_free():
@@ -280,8 +284,8 @@ def test_dynamic_padding_free():
         ]  # Sample 3
     ]
 
-    # Verify attention_mask
-    assert packed_batch["attention_mask"].tolist() == [[1] * 15]
+    # Verify attention_mask: padding-free relies on reset-style position_ids instead of a dense mask.
+    assert packed_batch["attention_mask"] is None
 
     # Verify position_ids
     assert packed_batch["position_ids"].tolist() == [
@@ -366,3 +370,207 @@ def test_dynamic_padding_free_fill_buffer_restarts_until_micro_batch_is_complete
     assert len(batch) == 1
     assert batch[0]["input_ids"].shape == (1, 18)
     assert len(batch_generator._buffer) == 1
+
+
+def _image_fragment(n_pad: int = 4, merge_sq: int = 4):
+    """Hand-crafted image fragment: vision_start + n_pad image_pad + vision_end."""
+    import torch
+
+    pad, vstart, vend = 9, 8, 7
+    return {
+        "input_ids": [vstart] + [pad] * n_pad + [vend],
+        "mm_token_type_ids": [0] + [1] * n_pad + [0],
+        "pixel_values": torch.zeros((n_pad * merge_sq, 16), dtype=torch.float32),
+        "image_grid_thw": torch.tensor([[1, 2, n_pad * 2]], dtype=torch.long),
+    }
+
+
+def _text_sample(n: int, base: int = 100):
+    s = _make_model_input(n, start=base)
+    s["position_ids"] = list(range(1, n + 1))
+    return s
+
+
+def test_inject_appends_zero_loss_dummy_into_collated_text_batch():
+    import torch
+
+    from llamafactory.v1.core.utils.batching import _collate_micro_batch, _inject_dummy_into_collated
+
+    collated = _collate_micro_batch([_text_sample(20), _text_sample(8)], cutoff_len=4096)
+    assert "pixel_values" not in collated
+    bsz, seqlen = collated["input_ids"].shape
+
+    frag = _image_fragment(n_pad=4)
+    fl = len(frag["input_ids"])
+    _inject_dummy_into_collated(collated, frag, marker=1)
+
+    new_len = seqlen + fl
+    # every sequence field grew by the fragment length, batch size unchanged
+    for key in ("input_ids", "attention_mask", "labels", "loss_weights", "position_ids", "mm_token_type_ids"):
+        assert collated[key].shape == (bsz, new_len)
+
+    # dummy lives only in row 0's tail; other rows are padding (attention 0) there
+    assert collated["input_ids"][0, seqlen:].tolist() == frag["input_ids"]
+    assert collated["attention_mask"][0, seqlen:].tolist() == [1] * fl
+    assert collated["attention_mask"][1, seqlen:].tolist() == [0] * fl
+    # zero loss contribution
+    assert collated["labels"][0, seqlen:].tolist() == [IGNORE_INDEX] * fl
+    assert torch.all(collated["loss_weights"][:, seqlen:] == 0.0)
+    assert collated["mm_token_type_ids"][0, seqlen:].tolist() == frag["mm_token_type_ids"]
+    # pixel features carried verbatim
+    assert torch.equal(collated["pixel_values"], frag["pixel_values"])
+    assert torch.equal(collated["image_grid_thw"], frag["image_grid_thw"])
+
+
+def test_inject_video_concatenates_alongside_existing_image():
+    """Injecting a missing modality leaves the other modality's features intact (dim-0 cat)."""
+    import torch
+
+    from llamafactory.v1.core.utils.batching import _collate_micro_batch, _inject_dummy_into_collated
+
+    img = _text_sample(10)
+    img["pixel_values"] = torch.ones((8, 16), dtype=torch.float32)
+    img["image_grid_thw"] = torch.tensor([[1, 2, 4]], dtype=torch.long)
+    img["mm_token_type_ids"] = [0] * 10
+    collated = _collate_micro_batch([img], cutoff_len=4096)
+
+    video_frag = {
+        "input_ids": [8, 6, 6, 7],
+        "mm_token_type_ids": [0, 2, 2, 0],
+        "pixel_values_videos": torch.zeros((8, 16), dtype=torch.float32),
+        "video_grid_thw": torch.tensor([[1, 2, 4]], dtype=torch.long),
+    }
+    _inject_dummy_into_collated(collated, video_frag, marker=2)
+
+    # image features untouched, video features added
+    assert torch.equal(collated["pixel_values"], torch.ones((8, 16)))
+    assert collated["pixel_values_videos"].shape[0] == 8
+    assert collated["video_grid_thw"].shape[0] == 1
+    assert collated["mm_token_type_ids"][0, -4:].tolist() == [0, 2, 2, 0]
+
+
+def test_collate_creates_mm_token_type_ids_for_pure_text_then_inject():
+    """A pure-text micro batch has no mm_token_type_ids; injection must create it."""
+    from llamafactory.v1.core.utils.batching import _collate_micro_batch, _inject_dummy_into_collated
+
+    collated = _collate_micro_batch([_text_sample(12)], cutoff_len=4096)
+    assert "mm_token_type_ids" not in collated
+    seqlen = collated["input_ids"].shape[1]
+
+    frag = _image_fragment(n_pad=3)
+    _inject_dummy_into_collated(collated, frag, marker=1)
+
+    assert "mm_token_type_ids" in collated
+    assert collated["mm_token_type_ids"].shape == collated["input_ids"].shape
+    # original region all zero (text), dummy region carries the markers
+    assert collated["mm_token_type_ids"][0, :seqlen].tolist() == [0] * seqlen
+    assert collated["mm_token_type_ids"][0, seqlen:].tolist() == frag["mm_token_type_ids"]
+
+
+def _audio_fragment(n_tok: int = 2, n_frames: int = 3000):
+    """Hand-crafted audio fragment: audio_bos + n_tok AUDIO + audio_eos, with feature rows."""
+    import torch
+
+    aud, bos, eos = 50, 51, 52
+    return {
+        "input_ids": [bos] + [aud] * n_tok + [eos],
+        "mm_token_type_ids": [0] + [3] * n_tok + [0],
+        "input_features": torch.zeros((1, 128, n_frames), dtype=torch.float32),
+        "feature_attention_mask": torch.ones((1, n_frames), dtype=torch.long),
+    }
+
+
+def test_inject_audio_dummy_into_text_batch():
+    """A pure-text micro batch gets an audio dummy appended so the audio tower fires on every rank."""
+    import torch
+
+    from llamafactory.v1.core.utils.batching import _collate_micro_batch, _inject_dummy_into_collated
+
+    collated = _collate_micro_batch([_text_sample(12)], cutoff_len=4096)
+    assert "input_features" not in collated
+    seqlen = collated["input_ids"].shape[1]
+
+    frag = _audio_fragment(n_tok=2)
+    fl = len(frag["input_ids"])
+    _inject_dummy_into_collated(collated, frag, marker=3)
+
+    # audio feature tensors carried verbatim; placeholder tokens marked 3 in the dummy tail
+    assert torch.equal(collated["input_features"], frag["input_features"])
+    assert torch.equal(collated["feature_attention_mask"], frag["feature_attention_mask"])
+    assert collated["mm_token_type_ids"][0, seqlen:].tolist() == frag["mm_token_type_ids"]
+    # zero loss contribution from the dummy
+    assert collated["labels"][0, seqlen:].tolist() == [IGNORE_INDEX] * fl
+    assert torch.all(collated["loss_weights"][:, seqlen:] == 0.0)
+
+
+def test_audio_truncation_drops_orphaned_item_and_zeros_tokens():
+    """Truncating mid-audio trims the orphaned feature row and zeros its in-window tokens."""
+    import torch
+
+    from llamafactory.v1.core.utils.collation import _align_multimodal_on_truncation
+
+    aud = 50
+    # text(2) + [audio#0: 4 tok] + text(1) + [audio#1: 4 tok] + text(1)
+    input_ids = [1, 2] + [aud] * 4 + [3] + [aud] * 4 + [4]
+    mm = [0, 0] + [3] * 4 + [0] + [3] * 4 + [0]
+    sample = {
+        "input_ids": input_ids,
+        "labels": input_ids.copy(),
+        "loss_weights": [1.0] * len(input_ids),
+        "mm_token_type_ids": mm,
+        "input_features": torch.zeros((2, 128, 10), dtype=torch.float32),
+        "feature_attention_mask": torch.ones((2, 10), dtype=torch.long),
+    }
+    # audio#1 occupies positions 7..10; cut at 9 so its last token (10) is orphaned, audio#0 intact
+    out = _align_multimodal_on_truncation(dict(sample), max_length=9)
+
+    assert out["input_features"].shape[0] == 1  # only the complete audio#0 survives
+    assert out["feature_attention_mask"].shape[0] == 1
+    # audio#0 tokens (positions 2..5) untouched
+    assert all(out["input_ids"][i] == aud and out["mm_token_type_ids"][i] == 3 for i in range(2, 6))
+    # audio#1's in-window tokens (positions 7,8) zeroed + delabeled (positions >= 9 cut by truncation)
+    for i in (7, 8):
+        assert out["input_ids"][i] == 0
+        assert out["mm_token_type_ids"][i] == 0
+        assert out["labels"][i] == IGNORE_INDEX
+        assert out["loss_weights"][i] == 0.0
+
+
+def test_audio_truncation_keeps_all_when_complete():
+    """No trimming when the cut falls after every audio's last token."""
+    import torch
+
+    from llamafactory.v1.core.utils.collation import _align_multimodal_on_truncation
+
+    aud = 50
+    input_ids = [1] + [aud] * 4 + [2]
+    sample = {
+        "input_ids": input_ids,
+        "labels": input_ids.copy(),
+        "loss_weights": [1.0] * len(input_ids),
+        "mm_token_type_ids": [0] + [3] * 4 + [0],
+        "input_features": torch.zeros((1, 128, 10), dtype=torch.float32),
+        "feature_attention_mask": torch.ones((1, 10), dtype=torch.long),
+    }
+    out = _align_multimodal_on_truncation(dict(sample), max_length=6)
+    assert out["input_features"].shape[0] == 1
+    assert out["input_ids"] == input_ids
+
+
+def test_drop_unsupervised_samples():
+    """Samples whose supervised tokens fall entirely beyond cutoff_len are dropped (warn once)."""
+    from types import SimpleNamespace
+
+    def _s(weights):  # a sample's input_ids length matches its loss_weights length
+        return {"input_ids": list(range(len(weights))), "loss_weights": weights}
+
+    gen = SimpleNamespace(cutoff_len=4, _warned_truncation=False)
+    samples = [
+        _s([0.0, 0.0, 1.0, 1.0]),  # fits cutoff (len 4), supervised -> kept
+        _s([0.0, 0.0, 0.0, 0.0, 1.0, 1.0]),  # len 6 > 4, supervision only beyond cutoff -> dropped
+        _s([1.0, 1.0]),  # short, fully supervised -> kept
+        _s([0.0, 0.0, 1.0, 1.0, 1.0, 1.0]),  # len 6 > 4 but supervision within cutoff -> kept
+    ]
+    kept = BatchGenerator._drop_unsupervised(gen, samples)
+    assert kept == [samples[0], samples[2], samples[3]]
+    assert gen._warned_truncation is True

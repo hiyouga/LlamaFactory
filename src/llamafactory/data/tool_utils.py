@@ -55,6 +55,14 @@ GLM4_MOE_TOOL_PROMPT = (
     "\n...\n</tool_call>\n"
 )
 
+GLM5_NEXT_TOOL_PROMPT = (
+    "<|system|>\n# Tools\n\nYou may call one or more functions to assist with the user query.\n\n"
+    "You are provided with function signatures within <tools></tools> XML tags:\n<tools>\n{tool_text}"
+    "</tools>\n\nFor each function call, output the function name and arguments within the following XML format:\n"
+    "<tool_call>{{function-name}}<arg_key>{{arg-key-1}}</arg_key><arg_value>{{arg-value-1}}</arg_value>"
+    "<arg_key>{{arg-key-2}}</arg_key><arg_value>{{arg-value-2}}</arg_value>...</tool_call>"
+)
+
 LLAMA3_TOOL_PROMPT = (
     "Cutting Knowledge Date: December 2023\nToday Date: {date}\n\n"
     "You have access to the following functions. To call a function, please respond with JSON for a function call. "
@@ -118,6 +126,17 @@ LING_TOOL_PROMPT = (
 )
 
 LFM2_TOOL_PROMPT = "List of tools: <|tool_list_start|>{tool_text}<|tool_list_end|>"
+
+MINICPM5_TOOL_PROMPT = (
+    "\n\n# Tools\n\nYou are provided with function signatures within <tools></tools> XML tags:\n"
+    "<tools>{tool_text}\n</tools>\n\nTool usage guidelines:\n"
+    "- You may call zero or more functions. If no function calls are needed, just answer normally "
+    "and do not include any <function ... </function>.\n"
+    "- When calling a function, return an XML object within <function ... </function> using:\n"
+    '<function name="function-name"><param name="param-name">param-value</param></function>\n'
+    "- param-value may be multi-line. If it contains <, & or newline characters, wrap it in a "
+    'CDATA block: <param name="param-name"><![CDATA[...multi-line value...]]></param>'
+)
 
 
 @dataclass
@@ -551,6 +570,72 @@ class MiniMaxM2ToolUtils(ToolUtils):
         return results
 
 
+class MiniCPM5ToolUtils(ToolUtils):
+    r"""MiniCPM-5 tool using template."""
+
+    @override
+    @staticmethod
+    def tool_formatter(tools: list[dict[str, Any]]) -> str:
+        tool_text = ""
+        for tool in tools:
+            if tool.get("type") != "function":
+                tool = {"type": "function", "function": tool}
+
+            tool_text += "\n" + json.dumps(tool, ensure_ascii=False)
+
+        return MINICPM5_TOOL_PROMPT.format(tool_text=tool_text)
+
+    @override
+    @staticmethod
+    def function_formatter(functions: list["FunctionCall"]) -> str:
+        function_texts = []
+        for name, arguments in functions:
+            prompt = f'<function name="{name}">'
+            for key, value in json.loads(arguments).items():
+                prompt += f'<param name="{key}">'
+                if isinstance(value, str):
+                    if "<" in value or "&" in value or "\n" in value:
+                        prompt += f"<![CDATA[{value}]]>"
+                    else:
+                        prompt += value
+                else:
+                    prompt += str(value)
+
+                prompt += "</param>"
+
+            prompt += "</function>"
+            function_texts.append(prompt)
+
+        return "\n".join(function_texts)
+
+    @override
+    @staticmethod
+    def tool_extractor(content: str) -> Union[str, list["FunctionCall"]]:
+        results = []
+        regex = re.compile(r'<function name="(.*?)">((?:<!\[CDATA\[.*?\]\]>|.)*?)</function>', re.DOTALL)
+        for func_name, params_block in re.findall(regex, content):
+            args_dict = {}
+            param_pattern = re.compile(r'<param name="(.*?)">(<!\[CDATA\[.*?\]\]>|.*?)</param>', re.DOTALL)
+            for key, raw_value in re.findall(param_pattern, params_block):
+                cdata = re.fullmatch(r"<!\[CDATA\[(.*?)\]\]>", raw_value, re.DOTALL)
+                if cdata:
+                    args_dict[key] = cdata.group(1)
+                    continue
+
+                value = raw_value.strip()
+                try:
+                    args_dict[key] = json.loads(value)
+                except json.JSONDecodeError:
+                    try:
+                        args_dict[key] = ast.literal_eval(value)
+                    except Exception:
+                        args_dict[key] = raw_value
+
+            results.append(FunctionCall(func_name, json.dumps(args_dict, ensure_ascii=False)))
+
+        return results if results else content
+
+
 class MistralToolUtils(ToolUtils):
     r"""Mistral v0.3 tool using template."""
 
@@ -681,6 +766,20 @@ class Qwen35ToolUtils(ToolUtils):
         return results if results else content
 
 
+class Qwen38ToolUtils(Qwen35ToolUtils):
+    r"""Qwen 3.8 tool template preserving the OpenAI function wrapper."""
+
+    @override
+    @staticmethod
+    def tool_formatter(tools: list[dict[str, Any]]) -> str:
+        tool_text = ""
+        for tool in tools:
+            wrapped_tool = tool if tool.get("type") == "function" else {"type": "function", "function": tool}
+            tool_text += "\n" + json.dumps(wrapped_tool, ensure_ascii=False)
+
+        return QWEN35_TOOL_PROMPT.format(tool_text=tool_text)
+
+
 class GLM4MOEToolUtils(QwenToolUtils):
     r"""GLM-4-MOE tool using template."""
 
@@ -711,6 +810,44 @@ class GLM4MOEToolUtils(QwenToolUtils):
             function_texts.append(prompt)
 
         return "\n".join(function_texts)
+
+
+class GLM5NextToolUtils(GLM4MOEToolUtils):
+    r"""GLM5-Next tool using template."""
+
+    @override
+    @staticmethod
+    def tool_formatter(tools: list[dict[str, Any]]) -> str:
+        if not isinstance(tools, list):
+            raise ValueError("glm5_next tools must be a JSON list.")
+        tool_text = ""
+        for tool in tools:
+            tool = tool.get("function", tool)
+            if tool.get("defer_loading", False):
+                continue
+            tool = {key: value for key, value in tool.items() if key not in {"strict", "defer_loading"}}
+            tool_text += json.dumps(tool, ensure_ascii=False) + "\n"
+
+        return GLM5_NEXT_TOOL_PROMPT.format(tool_text=tool_text)
+
+    @override
+    @staticmethod
+    def function_formatter(functions: list["FunctionCall"]) -> str:
+        if not functions:
+            raise ValueError("glm5_next function messages must contain at least one call.")
+        calls = []
+        for name, arguments in functions:
+            if not isinstance(name, str) or not re.fullmatch(r"[^\s<>]+", name):
+                raise ValueError("Invalid glm5_next function name.")
+            arguments = json.loads(arguments)
+            if not isinstance(arguments, dict):
+                raise ValueError("glm5_next function arguments must be a JSON object.")
+            text = "<tool_call>" + name
+            for key, value in arguments.items():
+                value = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+                text += f"<arg_key>{key}</arg_key><arg_value>{value}</arg_value>"
+            calls.append(text + "</tool_call>")
+        return "".join(calls)
 
 
 class SeedToolUtils(ToolUtils):
@@ -887,12 +1024,15 @@ TOOLS = {
     "glm4": GLM4ToolUtils(),
     "llama3": Llama3ToolUtils(),
     "lfm2": LFM2ToolUtils(),
+    "minicpm5": MiniCPM5ToolUtils(),
     "minimax1": MiniMaxM1ToolUtils(),
     "minimax2": MiniMaxM2ToolUtils(),
     "mistral": MistralToolUtils(),
     "qwen": QwenToolUtils(),
     "qwen3_5": Qwen35ToolUtils(),
+    "qwen3_8": Qwen38ToolUtils(),
     "glm4_moe": GLM4MOEToolUtils(),
+    "glm5_next": GLM5NextToolUtils(),
     "seed_oss": SeedToolUtils(),
     "ling": LingToolUtils(),
 }

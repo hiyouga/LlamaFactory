@@ -79,6 +79,8 @@ def _get_visible_devices_env() -> str | None:
         return "CUDA_VISIBLE_DEVICES"
     elif CURRENT_DEVICE == "npu":
         return "ASCEND_RT_VISIBLE_DEVICES"
+    elif CURRENT_DEVICE == "xpu":
+        return "ZE_AFFINITY_MASK"
     else:
         return None
 
@@ -172,6 +174,8 @@ def _manage_distributed_env(request: FixtureRequest, monkeypatch: MonkeyPatch) -
             monkeypatch.setattr(torch.cuda, "device_count", lambda: 1)
         elif CURRENT_DEVICE == "npu":
             monkeypatch.setattr(torch.npu, "device_count", lambda: 1)
+        elif CURRENT_DEVICE == "xpu":
+            monkeypatch.setattr(torch.xpu, "device_count", lambda: 1)
 
 
 @pytest.fixture(scope="session", autouse=True)

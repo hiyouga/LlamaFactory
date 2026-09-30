@@ -13,7 +13,8 @@
 # limitations under the License.
 
 import re
-from typing import Literal, TypedDict, Union
+from dataclasses import dataclass, field
+from typing import Literal
 
 import torch
 from peft import LoraConfig, PeftModel, TaskType, get_peft_model
@@ -28,58 +29,64 @@ from ...utils.types import HFModel
 logger = logging.get_logger(__name__)
 
 
-class LoraConfigDict(TypedDict, total=False):
-    name: Literal["lora"]
+@dataclass
+class LoraParams:
+    """Typed configuration for the LoRA PEFT plugin."""
+
+    name: Literal["lora"] = "lora"
     """Plugin name."""
-    r: int
-    """Lora rank."""
-    lora_alpha: int
-    """Lora alpha."""
-    lora_dropout: float
-    """Lora dropout."""
-    target_modules: Union[list[str], str]
+    r: int = 8
+    """LoRA rank."""
+    lora_alpha: int = 16
+    """LoRA alpha."""
+    lora_dropout: float = 0.05
+    """LoRA dropout."""
+    target_modules: list[str] | str = "all"
     """Target modules."""
-    use_rslora: bool
+    use_rslora: bool = False
     """Use RS-LoRA."""
-    use_dora: bool
+    use_dora: bool = False
     """Use DoRA."""
-    modules_to_save: list[str]
+    modules_to_save: list[str] | None = None
     """Modules to save."""
-    adapter_name_or_path: Union[list[str], str]
+    adapter_name_or_path: list[str] | str | None = None
     """Path to the adapter(s)."""
-    export_dir: str
+    export_dir: str | None = None
     """Path to the export directory."""
-    export_size: int
-    """Shard size for the export model."""
-    export_hub_model_id: str
-    """Hub model ID for the export model."""
-    infer_dtype: Literal["auto", "float16", "float32", "bfloat16"]
-    """Inference data type for the export model."""
-    export_legacy_format: bool
-    """Use legacy format for the export model."""
+    export_size: int = 5
+    """Shard size for the exported model, in GB."""
+    export_hub_model_id: str | None = None
+    """Hub model ID for the exported model."""
+    infer_dtype: Literal["auto", "float16", "float32", "bfloat16"] = "auto"
+    """Inference data type for the exported model."""
+    export_legacy_format: bool = False
+    """Use legacy format for the exported model."""
 
 
-class FreezeConfigDict(TypedDict, total=False):
-    name: Literal["freeze"]
+@dataclass
+class FreezeParams:
+    """Typed configuration for the freeze PEFT plugin."""
+
+    name: Literal["freeze"] = "freeze"
     """Plugin name."""
-    freeze_trainable_layers: int
-    """Freeze trainable layers."""
-    freeze_trainable_modules: Union[list[str], str]
-    """Freeze trainable modules."""
-    freeze_extra_modules: list[str]
-    """Freeze extra modules."""
-    cast_trainable_params_to_fp32: bool
-    """Cast trainable params to fp32."""
+    freeze_trainable_layers: int = 2
+    """Number of trainable layers."""
+    freeze_trainable_modules: list[str] | str = "all"
+    """Trainable modules in the selected layers."""
+    freeze_extra_modules: list[str] | str | None = field(default_factory=list)
+    """Extra non-hidden modules to train."""
+    cast_trainable_params_to_fp32: bool = True
+    """Cast trainable parameters to float32."""
 
 
 class PeftPlugin(BasePlugin):
-    def __call__(self, model: HFModel, config: dict, is_train: bool) -> HFModel:
-        return super().__call__(model, config, is_train)
+    def __call__(self, model: HFModel, peft_config: dict, is_train: bool) -> HFModel:
+        return super().__call__(model, peft_config, is_train)
 
 
 def _find_all_linear_modules(model: HFModel) -> list[str]:
     r"""Find all available modules to apply LoRA."""
-    forbidden_modules = {"lm_head", "output_layer", "output"}
+    forbidden_modules = {"lm_head", "output_layer", "output", "score", "classifier"}
     module_names = set()
     for name, module in model.named_modules():
         if any(forbidden_module in name for forbidden_module in forbidden_modules):
@@ -91,7 +98,7 @@ def _find_all_linear_modules(model: HFModel) -> list[str]:
     return list(module_names)
 
 
-def merge_adapters(model: HFModel, adapter_name_or_path: Union[list[str], str]) -> HFModel:
+def merge_adapters(model: HFModel, adapter_name_or_path: list[str] | str) -> HFModel:
     if not isinstance(adapter_name_or_path, list):
         adapter_name_or_path = [adapter_name_or_path]
 
@@ -103,7 +110,7 @@ def merge_adapters(model: HFModel, adapter_name_or_path: Union[list[str], str]) 
     return model
 
 
-def load_adapter(model: HFModel, adapter_name_or_path: Union[list[str], str], is_train: bool) -> HFModel:
+def load_adapter(model: HFModel, adapter_name_or_path: list[str] | str, is_train: bool) -> HFModel:
     r"""Loads adapter(s) into the model.
 
     Determine adapter usage based on mode:
@@ -149,15 +156,16 @@ def load_adapter(model: HFModel, adapter_name_or_path: Union[list[str], str], is
 
 
 @PeftPlugin("lora").register()
-def get_lora_model(model: HFModel, config: LoraConfigDict, is_train: bool = False) -> HFModel:
-    adapter_name_or_path = config.get("adapter_name_or_path")
+def get_lora_model(model: HFModel, peft_config: dict | LoraParams, is_train: bool = False) -> HFModel:
+    peft_config = PeftPlugin.parse_params(peft_config, LoraParams)
+    adapter_name_or_path = peft_config.adapter_name_or_path
 
     if adapter_name_or_path:
         return load_adapter(model, adapter_name_or_path, is_train)
 
     logger.info_rank0("Fine-tuning method: LoRA")
 
-    target_modules = config.get("target_modules", "all")
+    target_modules = peft_config.target_modules
 
     # Handle target modules
     if target_modules == "all":
@@ -167,19 +175,27 @@ def get_lora_model(model: HFModel, config: LoraConfigDict, is_train: bool = Fals
 
     logger.info_rank0(f"LoRA target modules: {target_modules}")
 
-    peft_config = LoraConfig(
-        task_type=TaskType.CAUSAL_LM,
+    cls_name = model.__class__.__name__
+    if cls_name.endswith("ForTokenClassification"):
+        task_type = TaskType.TOKEN_CLS
+    elif cls_name.endswith("ForSequenceClassification"):
+        task_type = TaskType.SEQ_CLS
+    else:
+        task_type = TaskType.CAUSAL_LM
+
+    lora_config = LoraConfig(
+        task_type=task_type,
         inference_mode=not is_train,
-        r=config.get("r", 8),
-        lora_alpha=config.get("lora_alpha", 16),
-        lora_dropout=config.get("lora_dropout", 0.05),
-        use_rslora=config.get("use_rslora", False),
-        use_dora=config.get("use_dora", False),
+        r=peft_config.r,
+        lora_alpha=peft_config.lora_alpha,
+        lora_dropout=peft_config.lora_dropout,
+        use_rslora=peft_config.use_rslora,
+        use_dora=peft_config.use_dora,
         target_modules=target_modules,
-        modules_to_save=config.get("modules_to_save", None),
+        modules_to_save=peft_config.modules_to_save,
     )
 
-    model = get_peft_model(model, peft_config)
+    model = get_peft_model(model, lora_config)
 
     if is_train:
         model.print_trainable_parameters()
@@ -188,16 +204,17 @@ def get_lora_model(model: HFModel, config: LoraConfigDict, is_train: bool = Fals
 
 
 @PeftPlugin("freeze").register()
-def get_freeze_model(model: HFModel, config: FreezeConfigDict, is_train: bool = False) -> HFModel:
+def get_freeze_model(model: HFModel, peft_config: dict | FreezeParams, is_train: bool = False) -> HFModel:
+    peft_config = PeftPlugin.parse_params(peft_config, FreezeParams)
     logger.info_rank0("Fine-tuning method: Freeze")
 
     if not is_train:
         return model
 
-    freeze_trainable_layers = config.get("freeze_trainable_layers", 2)
-    freeze_trainable_modules = config.get("freeze_trainable_modules", ["all"])
-    freeze_extra_modules = config.get("freeze_extra_modules", [])
-    cast_trainable_params_to_fp32 = config.get("cast_trainable_params_to_fp32", True)
+    freeze_trainable_layers = peft_config.freeze_trainable_layers
+    freeze_trainable_modules = peft_config.freeze_trainable_modules
+    freeze_extra_modules = peft_config.freeze_extra_modules
+    cast_trainable_params_to_fp32 = peft_config.cast_trainable_params_to_fp32
 
     if isinstance(freeze_trainable_modules, str):
         freeze_trainable_modules = [module.strip() for module in freeze_trainable_modules.split(",")]
@@ -284,26 +301,16 @@ def get_freeze_model(model: HFModel, config: FreezeConfigDict, is_train: bool = 
 def merge_and_export_model(args: InputArgument = None):
     model_args, _, _, _ = get_args(args)
 
-    export_config = model_args.peft_config
-    if export_config is None:
+    raw_config = model_args.peft_config
+    if raw_config is None:
         raise ValueError("Please specify peft_config to merge and export model.")
-
-    export_dir = export_config.get("export_dir")
-    if export_dir is None:
-        raise ValueError("Please specify export_dir.")
-
-    export_size = export_config.get("export_size", 5)
-    export_hub_model_id = export_config.get("export_hub_model_id")
-    infer_dtype = export_config.get("infer_dtype", "auto")
-    export_legacy_format = export_config.get("export_legacy_format", False)
-
-    adapters = None
-    if export_config.get("name") == "lora":
-        adapters = export_config.get("adapter_name_or_path")
-    else:
+    if raw_config.name != "lora":
         raise ValueError("Currently merge and export model function is only supported for lora.")
 
-    if adapters is None:
+    export_peft_config = PeftPlugin.parse_params(raw_config, LoraParams)
+    if export_peft_config.export_dir is None:
+        raise ValueError("Please specify export_dir.")
+    if export_peft_config.adapter_name_or_path is None:
         raise ValueError("Please set adapter_name_or_path to merge adapters into base model.")
 
     logger.info_rank0("Loading model for export...")
@@ -311,33 +318,33 @@ def merge_and_export_model(args: InputArgument = None):
     model = model_engine.model
     tokenizer = model_engine.processor
 
-    if infer_dtype == "auto":
+    if export_peft_config.infer_dtype == "auto":
         if model.config.torch_dtype == torch.float32 and torch.cuda.is_bf16_supported():
             model = model.to(torch.bfloat16)
             logger.info_rank0("Converted model to bfloat16.")
     else:
-        target_dtype = getattr(torch, infer_dtype)
+        target_dtype = getattr(torch, export_peft_config.infer_dtype)
         model = model.to(target_dtype)
-        logger.info_rank0(f"Converted model to {infer_dtype}.")
+        logger.info_rank0(f"Converted model to {export_peft_config.infer_dtype}.")
 
-    logger.info_rank0(f"Exporting model to {export_dir}...")
+    logger.info_rank0(f"Exporting model to {export_peft_config.export_dir}...")
     model.save_pretrained(
-        export_dir,
-        max_shard_size=f"{export_size}GB",
-        safe_serialization=not export_legacy_format,
+        export_peft_config.export_dir,
+        max_shard_size=f"{export_peft_config.export_size}GB",
+        safe_serialization=not export_peft_config.export_legacy_format,
     )
     if tokenizer is not None:
         try:
             if hasattr(tokenizer, "padding_side"):
                 tokenizer.padding_side = "left"
-            tokenizer.save_pretrained(export_dir)
+            tokenizer.save_pretrained(export_peft_config.export_dir)
         except Exception as e:
             logger.warning(f"Failed to save tokenizer: {e}")
 
-    if export_hub_model_id:
-        logger.info_rank0(f"Pushing to hub: {export_hub_model_id}...")
-        model.push_to_hub(export_hub_model_id)
+    if export_peft_config.export_hub_model_id:
+        logger.info_rank0(f"Pushing to hub: {export_peft_config.export_hub_model_id}...")
+        model.push_to_hub(export_peft_config.export_hub_model_id)
         if tokenizer is not None:
-            tokenizer.push_to_hub(export_hub_model_id)
+            tokenizer.push_to_hub(export_peft_config.export_hub_model_id)
 
     logger.info_rank0("Model exported successfully.")

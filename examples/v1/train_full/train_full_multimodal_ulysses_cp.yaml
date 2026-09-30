@@ -1,0 +1,25 @@
+model: Qwen/Qwen3.5-0.8B
+trust_remote_code: true
+model_class: llm
+
+flash_attn: flash_attention_2
+
+# FSDP Config
+dist_config:
+  name: fsdp2
+  dcp_path: null
+
+cp_mode: ulysses
+cp_size: 2
+
+### data
+train_dataset: data/v1_multimodal_demo.yaml
+
+### training
+output_dir: outputs/test_multimodal_ulysses_cp
+micro_batch_size: 1
+batching_strategy: normal
+cutoff_len: 2048
+learning_rate: 1.0e-4
+bf16: false
+max_steps: 10

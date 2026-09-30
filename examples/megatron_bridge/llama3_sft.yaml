@@ -1,0 +1,67 @@
+### model
+model_name_or_path: meta-llama/Llama-3.2-1B-Instruct
+
+### method
+stage: sft
+do_train: true
+finetuning_type: lora  # full or lora
+dataset: alpaca_en_demo
+template: llama3
+cutoff_len: 2048
+preprocessing_num_workers: 8
+# disable_shuffling: true  # keep sample order aligned with HF baseline
+
+### output
+output_dir: saves/mbridge/llama3_sft
+logging_steps: 1
+overwrite_output_dir: true
+
+### train
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 1
+num_train_epochs: 3
+max_steps: 1000  # when set, overrides num_train_epochs for Megatron Bridge schedule
+save_steps: 3000
+learning_rate: 5.0e-6
+lr_scheduler_type: cosine
+warmup_steps: 10
+adam_beta1: 0.9
+adam_beta2: 0.999
+weight_decay: 0.0
+max_grad_norm: 1.0
+bf16: true
+
+### megatron bridge parallelism
+tensor_model_parallel_size: 1
+pipeline_model_parallel_size: 1
+context_parallel_size: 1
+expert_model_parallel_size: 1
+# virtual_pipeline_model_parallel_size: 2
+sequence_parallel: false
+
+### megatron bridge optimizer / overlap
+use_distributed_optimizer: true
+overlap_param_gather: true
+overlap_grad_reduce: true
+mixed_precision: bf16_mixed
+
+### megatron bridge activation recompute (optional)
+# recompute_granularity: full
+# recompute_method: uniform
+# recompute_num_layers: 1
+
+### megatron bridge model kernels (optional; None keeps provider defaults)
+# bias_activation_fusion: true
+# apply_rope_fusion: true
+# masked_softmax_fusion: true
+# cross_entropy_loss_fusion: true
+
+### megatron bridge MoE (optional)
+# moe_grouped_gemm: true
+# moe_token_dispatcher_type: alltoall
+
+### megatron bridge data / checkpoint
+use_packed_sequences: false
+# megatron_pretrained_checkpoint: /path/to/megatron_ckpt
+export_hf_on_finish: false  # disable for short loss-comparison runs (avoids checkpoint OOM)
+# extra_config: '{"train.train_iters": 5, "logger.log_interval": 1}'

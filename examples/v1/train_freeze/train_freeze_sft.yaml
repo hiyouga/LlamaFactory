@@ -1,8 +1,6 @@
 model: Qwen/Qwen3-4B
 model_class: llm
 
-template: qwen3_nothink
-
 # Freeze Configuration
 peft_config:
   name: freeze
@@ -13,7 +11,6 @@ peft_config:
 # Kernel Config
 kernel_config:
   name: auto
-  include_kernels: auto
 
 # FSDP Config
 dist_config:
@@ -26,7 +23,6 @@ train_dataset: data/v1_sft_demo.yaml
 ### training
 output_dir: ./outputs/test_freeze
 micro_batch_size: 1
-global_batch_size: 4
 cutoff_len: 2048
 learning_rate: 2.0e-5
 max_steps: 10

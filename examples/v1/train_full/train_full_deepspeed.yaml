@@ -1,11 +1,8 @@
 model: Qwen/Qwen3-0.6B
 model_class: llm
 
-template: qwen3_nothink
-
 kernel_config:
     name: auto
-    include_kernels: auto
 
 dist_config:
     name: deepspeed

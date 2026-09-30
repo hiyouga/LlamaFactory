@@ -40,6 +40,10 @@ if TYPE_CHECKING:
 logger = logging.get_logger(__name__)
 
 
+def _uses_kt_non_expert_cache(model_args: "ModelArguments") -> bool:
+    return model_args.use_kt and bool(model_args.kt_non_expert_weight_path)
+
+
 def _get_quantization_dataset(tokenizer: "PreTrainedTokenizer", model_args: "ModelArguments") -> list[dict[str, Any]]:
     r"""Prepare the tokenized dataset to perform AutoGPTQ. Do not use tensor output for JSON serialization."""
     if os.path.isfile(model_args.export_quantization_dataset):
@@ -108,6 +112,13 @@ def configure_quantization(
             init_kwargs["ignore_mismatched_sizes"] = True
 
         if quant_method == QuantizationMethod.FP8:
+            if _uses_kt_non_expert_cache(model_args):
+                if model_args.quantization_bit is not None:
+                    raise ValueError("`quantization_bit` cannot be combined with KT weight caches.")
+
+                logger.info_rank0("Skipping source FP8 dequantization because KT weight caches are configured.")
+                return
+
             from transformers import FineGrainedFP8Config
 
             quant_config = FineGrainedFP8Config(dequantize=True)

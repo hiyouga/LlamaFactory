@@ -30,9 +30,7 @@ def test_tiny_qwen():
 def test_tiny_qwen_with_kernel_plugin():
     from llamafactory.v1.plugins.model_plugins.kernels.ops.rms_norm.npu_rms_norm import npu_rms_norm_forward
 
-    model_args = ModelArguments(
-        model="llamafactory/tiny-random-qwen3", kernel_config={"name": "auto", "include_kernels": "auto"}
-    )
+    model_args = ModelArguments(model="llamafactory/tiny-random-qwen3", kernel_config={"name": "auto"})
     model_engine = ModelEngine(model_args)
     # test enable apply kernel plugin
     if hasattr(torch, "npu"):
