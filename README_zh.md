@@ -287,6 +287,7 @@ https://github.com/user-attachments/assets/43b700c6-a178-41db-b1f8-8190a5d3fcfc
 
 | 模型名                                                             | 参数量                            | Template             |
 | ----------------------------------------------------------------- | -------------------------------- | -------------------- |
+| [Audio-Flamingo-3](https://huggingface.co/nvidia/audio-flamingo-3-hf) | 8B                               | audio_flamingo_3     |
 | [BLOOM/BLOOMZ](https://huggingface.co/bigscience)                 | 560M/1.1B/1.7B/3B/7.1B/176B      | -                    |
 | [DeepSeek (LLM/Code/MoE)](https://huggingface.co/deepseek-ai)     | 7B/16B/67B/236B                  | deepseek             |
 | [DeepSeek 3-3.2](https://huggingface.co/deepseek-ai)              | 236B/671B                        | deepseek3            |
