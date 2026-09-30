@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 
 if TYPE_CHECKING:
+    from datasets import Dataset, Features
     from transformers import PreTrainedTokenizer, ProcessorMixin
 
     from ...hparams import DataArguments
@@ -43,6 +44,32 @@ class DatasetProcessor(ABC):
     def print_data_example(self, example: dict[str, list[int]]) -> None:
         r"""Print a data example to stdout."""
         ...
+
+    @staticmethod
+    def get_dataset_features(dataset: "Dataset") -> "Features | None":
+        r"""Return a stable output schema for ``Dataset.map``, or ``None`` to infer it."""
+        return None
+
+
+def build_dataset_features(
+    dataset: "Dataset", output_features: dict[str, Any], include_multimodal: bool = True
+) -> "Features":
+    r"""Build output features and validate the aligned dataset columns."""
+    from datasets import Features
+
+    output_features = dict(output_features)
+    if include_multimodal:
+        media_columns = {"_images": "images", "_videos": "videos", "_audios": "audios"}
+        missing_columns = [column for column in media_columns if column not in dataset.features]
+        if missing_columns:
+            raise ValueError(
+                "Expected an aligned dataset with multimodal columns, but the following columns are missing: "
+                + ", ".join(missing_columns)
+            )
+
+        output_features.update({target: dataset.features[source] for source, target in media_columns.items()})
+
+    return Features(output_features)
 
 
 def search_for_fit(numbers: list[int], capacity: int) -> int:
