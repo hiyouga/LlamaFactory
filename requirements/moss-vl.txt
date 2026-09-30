@@ -1,0 +1,3 @@
+transformers==4.57.1
+torchcodec==0.7.0
+joblib

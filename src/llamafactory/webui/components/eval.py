@@ -55,10 +55,19 @@ def create_eval_tab(engine: "Engine") -> dict[str, "Component"]:
         max_new_tokens = gr.Slider(minimum=8, maximum=4096, value=512, step=1)
         top_p = gr.Slider(minimum=0.01, maximum=1, value=0.7, step=0.01)
         temperature = gr.Slider(minimum=0.01, maximum=1.5, value=0.95, step=0.01)
+        eval_seed = gr.Textbox(value="42")
         output_dir = gr.Textbox()
 
-    input_elems.update({max_new_tokens, top_p, temperature, output_dir})
-    elem_dict.update(dict(max_new_tokens=max_new_tokens, top_p=top_p, temperature=temperature, output_dir=output_dir))
+    input_elems.update({max_new_tokens, top_p, temperature, eval_seed, output_dir})
+    elem_dict.update(
+        dict(
+            max_new_tokens=max_new_tokens,
+            top_p=top_p,
+            temperature=temperature,
+            eval_seed=eval_seed,
+            output_dir=output_dir,
+        )
+    )
 
     with gr.Row():
         cmd_preview_btn = gr.Button()

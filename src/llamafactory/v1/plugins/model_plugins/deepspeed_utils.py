@@ -14,7 +14,30 @@
 
 import json
 from copy import deepcopy
+from functools import lru_cache
 from typing import Any
+
+
+_registered_dist_config: Any | None = None
+
+
+def register_deepspeed_dist_config(dist_config: Any | None) -> None:
+    """Register backend config before model loading without involving the accelerator."""
+    global _registered_dist_config
+    _registered_dist_config = dist_config
+    is_deepspeed_zero3_enabled.cache_clear()
+
+
+@lru_cache(maxsize=1)
+def is_deepspeed_zero3_enabled() -> bool:
+    dist_config = _registered_dist_config
+    if dist_config is None or getattr(dist_config, "name", None) != "deepspeed":
+        return False
+
+    config_file = dist_config.get("config_file")
+    if not config_file:
+        return False
+    return _load_deepspeed_config(config_file).get("zero_optimization", {}).get("stage") == 3
 
 
 def _normalize_precision_enabled(value: Any) -> bool | str:
@@ -69,18 +92,19 @@ def _load_deepspeed_config(config_file: str) -> dict[str, Any]:
         return json.load(f)
 
 
-def setup_deepspeed_zero3_model_loading(is_train: bool, dist_config: dict[str, Any] | None):
-    """Enable transformers' ZeRO-3-aware model loading for the current thread."""
-    config_file = dist_config.get("config_file")
+def setup_deepspeed_zero3_model_loading():
+    """Enable ZeRO-3-aware model loading for the registered backend config."""
+    dist_config = _registered_dist_config
+    config_file = dist_config.get("config_file") if dist_config is not None else None
     if not config_file:
         raise ValueError("DeepSpeed config_file is required in dist_config")
 
     from accelerate.utils import DeepSpeedPlugin
 
     try:
-        from transformers.integrations import is_deepspeed_zero3_enabled
+        from transformers.integrations import is_deepspeed_zero3_enabled as _hf_is_deepspeed_zero3_enabled
     except ImportError:
-        from transformers.deepspeed import is_deepspeed_zero3_enabled
+        from transformers.deepspeed import is_deepspeed_zero3_enabled as _hf_is_deepspeed_zero3_enabled
 
     # DeepSpeed configs often use "auto" placeholders that only make sense once
     # we know the current runtime batch settings and precision mode.
@@ -109,7 +133,7 @@ def setup_deepspeed_zero3_model_loading(is_train: bool, dist_config: dict[str, A
     plugin.set_mixed_precision(mixed_precision)
     plugin.set_deepspeed_weakref()
 
-    if not is_deepspeed_zero3_enabled():
+    if not _hf_is_deepspeed_zero3_enabled():
         raise RuntimeError(
             "DeepSpeed ZeRO-3 model-loading bootstrap failed: transformers still reports zero3 disabled "
             "after constructing HfDeepSpeedConfig. This usually means the runtime is using a different transformers "

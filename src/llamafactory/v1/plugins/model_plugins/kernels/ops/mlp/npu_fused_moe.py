@@ -29,14 +29,19 @@ import torch.nn.functional as F
 
 try:
     import torch_npu
-except ImportError:
-    pass
+except ImportError as exc:
+    _TORCH_NPU_IMPORT_ERROR = exc
+else:
+    _TORCH_NPU_IMPORT_ERROR = None
 
-from ......accelerator.helper import DeviceType
+from ......accelerator.helper import DeviceType, get_current_accelerator
+from ......utils.logging import get_logger
 from ......utils.packages import is_transformers_version_greater_than
 from ......utils.types import HFModel
-from ...base import BaseKernel
-from ...registry import register_kernel
+from ...base import BaseKernel, KernelPlugin
+
+
+logger = get_logger(__name__)
 
 
 class GmmFunction(torch.autograd.Function):
@@ -50,7 +55,7 @@ class GmmFunction(torch.autograd.Function):
             ctx: Context object to save tensors for backward pass.
             x (Tensor): Input tensor.
             weight (Tensor): Weight tensor.
-            group_list (list): List of group sizes.
+            group_list (Tensor): Number of tokens assigned to each expert.
 
         Returns:
             Tensor: The result of the grouped matrix multiplication.
@@ -175,14 +180,14 @@ class HybridGmmFunction(torch.autograd.Function):
         return (None, *grad_x_list, *grad_w_list)
 
 
-class NpuMoeFused:
-    """Container for NPU fused MoE forward functions."""
+class NpuMoeFusedV4:
+    """Container for Transformers v4 NPU fused MoE forward functions."""
 
     @staticmethod
-    def npu_moe_experts_forward(
+    def stacked_experts_forward(
         self, hidden_states: torch.Tensor, routing_weights: torch.Tensor, router_indices: torch.Tensor
     ) -> torch.Tensor:
-        """Forward pass for MoE experts using NPU fused operations.
+        """Forward pass for Transformers v4 MoE experts using NPU fused operations.
 
         Args:
             self: The MoE layer instance.
@@ -198,7 +203,9 @@ class NpuMoeFused:
         permuted_hidden_states, row_ids_map = torch_npu.npu_moe_token_permute(
             hidden_states, router_indices.to(torch.int32)
         )
-        tokens_per_expert = torch.histc(router_indices, bins=self.num_experts, min=0, max=self.num_experts)
+        tokens_per_expert = torch.histc(
+            router_indices.float(), bins=self.num_experts, min=0, max=self.num_experts
+        ).long()
         intermediate_hidden_states = GmmFunction.apply(permuted_hidden_states, self.gate_up_proj, tokens_per_expert)
         intermediate_activations = torch_npu.npu_swiglu(intermediate_hidden_states, dim=-1)
         output = GmmFunction.apply(intermediate_activations, self.down_proj, tokens_per_expert)
@@ -207,61 +214,33 @@ class NpuMoeFused:
         return next_states
 
     @staticmethod
-    def npu_moe_sparse_block_forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        r"""Forward pass for sparse MoE block using NPU optimization.
+    def stacked_sparse_block_forward(self, hidden_states: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+        r"""Forward pass for Transformers v4 sparse MoE block using NPU optimization.
 
         Args:
             self: The MoE sparse block instance.
             hidden_states (Tensor): Input hidden states.
 
         Returns:
-            Tensor: The routed output.
+            tuple: A tuple containing the routed output and router logits.
         """
         batch_size = hidden_states.shape[0]
         hidden_states = hidden_states.reshape(-1, self.hidden_size)
         router_logits = self.gate(hidden_states)
-        routing_weights = torch.nn.functional.softmax(router_logits, dim=-1, dtype=torch.float)
+        routing_weights = F.softmax(router_logits, dim=-1, dtype=torch.float)
         routing_weights, router_indices = torch.topk(routing_weights, self.top_k, dim=-1)
         routing_weights = routing_weights / routing_weights.sum(dim=-1, keepdim=True)
         routing_weights = routing_weights.to(hidden_states.dtype)
         hidden_states = hidden_states.reshape(batch_size, -1, self.hidden_size)
         routed_out = self.experts(hidden_states, routing_weights, router_indices)
-        return routed_out
+        return routed_out, router_logits
 
     @staticmethod
-    def npu_moe_experts_v5_forward(
-        self, hidden_states: torch.Tensor, top_k_index: torch.Tensor, top_k_weights: torch.Tensor
-    ) -> torch.Tensor:
-        """Forward pass for Transformers v5+ MoE experts using NPU fused operations.
-
-        Transformers v5 stores expert weights in F.linear layout:
-        gate_up_proj: [num_experts, 2 * intermediate_dim, hidden_dim]
-        down_proj: [num_experts, hidden_dim, intermediate_dim]
-        The NPU grouped matmul path expects matmul layout, so both weights are transposed.
-        """
-        hidden_states = hidden_states.reshape(-1, self.hidden_dim)
-        permuted_hidden_states, row_ids_map = torch_npu.npu_moe_token_permute(
-            hidden_states, top_k_index.to(torch.int32)
-        )
-        tokens_per_expert = torch.histc(top_k_index.float(), bins=self.num_experts, min=0, max=self.num_experts).long()
-
-        gate_up_proj = self.gate_up_proj.transpose(1, 2)
-        down_proj = self.down_proj.transpose(1, 2)
-        intermediate_hidden_states = GmmFunction.apply(permuted_hidden_states, gate_up_proj, tokens_per_expert)
-        intermediate_activations = torch_npu.npu_swiglu(intermediate_hidden_states, dim=-1)
-        output = GmmFunction.apply(intermediate_activations, down_proj, tokens_per_expert)
-        return torch_npu.npu_moe_token_unpermute(output, row_ids_map, probs=top_k_weights)
-
-
-class Qwen3NpuMoeFused:
-    """Container for Qwen3 NPU fused MoE forward functions."""
-
-    @staticmethod
-    def qwen3moe_sparse_moe_block_forward(self, hidden_states: torch.Tensor):
-        """Forward pass for Qwen3 sparse MoE block using NPU fused operations.
+    def sparse_block_forward(self, hidden_states: torch.Tensor):
+        """Forward pass for a Transformers v4 list-backed sparse MoE block using NPU fused operations.
 
         Args:
-            self: The Qwen3 MoE block instance.
+            self: The sparse MoE block instance.
             hidden_states (Tensor): Input hidden states.
 
         Returns:
@@ -305,44 +284,118 @@ class Qwen3NpuMoeFused:
         next_states = next_states.view(batch_size, sequence_length, -1)
         return next_states, router_logits
 
+    @staticmethod
+    def shared_sparse_block_forward(self, hidden_states: torch.Tensor):
+        """Forward pass for a Transformers v4 sparse MoE block with a shared expert."""
+        next_states, router_logits = NpuMoeFusedV4.sparse_block_forward(self, hidden_states)
 
-# moe patch config mapping
-if is_transformers_version_greater_than("5.0.0"):
-    kernel_moe_mapping = {
-        "Qwen3MoeForCausalLM": {
-            "Qwen3MoeExperts": NpuMoeFused.npu_moe_experts_v5_forward,
-        },
-        "Qwen3VLMoeForConditionalGeneration": {
-            "Qwen3VLMoeTextExperts": NpuMoeFused.npu_moe_experts_v5_forward,
-        },
-        "Qwen3_5MoeForCausalLM": {
-            "Qwen3_5MoeExperts": NpuMoeFused.npu_moe_experts_v5_forward,
-        },
-        "Qwen3_5MoeForConditionalGeneration": {
-            "Qwen3_5MoeExperts": NpuMoeFused.npu_moe_experts_v5_forward,
-        },
-    }
-else:
-    kernel_moe_mapping = {
-        "Qwen3MoeForCausalLM": {
-            "Qwen3MoeSparseMoeBlock": Qwen3NpuMoeFused.qwen3moe_sparse_moe_block_forward,
-        },
-        "Qwen3VLMoeForConditionalGeneration": {
-            "Qwen3VLMoeTextExperts": NpuMoeFused.npu_moe_experts_forward,
-            "Qwen3VLMoeTextSparseMoeBlock": NpuMoeFused.npu_moe_sparse_block_forward,
-        },
-    }
+        shared_expert_output = self.shared_expert(hidden_states)
+        shared_expert_output = F.sigmoid(self.shared_expert_gate(hidden_states)) * shared_expert_output
+        next_states = next_states + shared_expert_output
+        return next_states, router_logits
 
 
-@register_kernel
+class NpuMoeFusedV5:
+    """Container for Transformers v5 NPU fused MoE forward functions."""
+
+    @staticmethod
+    def experts_forward(
+        self, hidden_states: torch.Tensor, top_k_index: torch.Tensor, top_k_weights: torch.Tensor
+    ) -> torch.Tensor:
+        """Forward pass for Transformers v5+ MoE experts using NPU fused operations.
+
+        Transformers v5 stores expert weights in F.linear layout:
+        gate_up_proj: [num_experts, 2 * intermediate_dim, hidden_dim]
+        down_proj: [num_experts, hidden_dim, intermediate_dim]
+        The NPU grouped matmul path expects matmul layout, so both weights are transposed.
+        """
+        hidden_states = hidden_states.reshape(-1, self.hidden_dim)
+        permuted_hidden_states, row_ids_map = torch_npu.npu_moe_token_permute(
+            hidden_states, top_k_index.to(torch.int32)
+        )
+        tokens_per_expert = torch.histc(top_k_index.float(), bins=self.num_experts, min=0, max=self.num_experts).long()
+
+        gate_up_proj = self.gate_up_proj.transpose(1, 2)
+        down_proj = self.down_proj.transpose(1, 2)
+        intermediate_hidden_states = GmmFunction.apply(permuted_hidden_states, gate_up_proj, tokens_per_expert)
+        intermediate_activations = torch_npu.npu_swiglu(intermediate_hidden_states, dim=-1)
+        output = GmmFunction.apply(intermediate_activations, down_proj, tokens_per_expert)
+        return torch_npu.npu_moe_token_unpermute(output, row_ids_map, probs=top_k_weights)
+
+
+_V4_MODEL_TYPE_TO_PATCHES = {
+    "qwen3_moe": {
+        "Qwen3MoeSparseMoeBlock": NpuMoeFusedV4.sparse_block_forward,
+    },
+    "qwen3_next": {
+        "Qwen3NextSparseMoeBlock": NpuMoeFusedV4.shared_sparse_block_forward,
+    },
+    "qwen3_omni_moe": {
+        "Qwen3OmniMoeThinkerTextSparseMoeBlock": NpuMoeFusedV4.sparse_block_forward,
+        "Qwen3OmniMoeTalkerTextSparseMoeBlock": NpuMoeFusedV4.shared_sparse_block_forward,
+    },
+    "qwen3_omni_moe_thinker": {
+        "Qwen3OmniMoeThinkerTextSparseMoeBlock": NpuMoeFusedV4.sparse_block_forward,
+    },
+    "qwen3_vl_moe": {
+        "Qwen3VLMoeTextExperts": NpuMoeFusedV4.stacked_experts_forward,
+        "Qwen3VLMoeTextSparseMoeBlock": NpuMoeFusedV4.stacked_sparse_block_forward,
+    },
+}
+
+_V5_MODEL_TYPE_TO_PATCHES = {
+    "qwen3_moe": {
+        "Qwen3MoeExperts": NpuMoeFusedV5.experts_forward,
+    },
+    "qwen3_next": {
+        "Qwen3NextExperts": NpuMoeFusedV5.experts_forward,
+    },
+    "qwen3_omni_moe": {
+        "Qwen3OmniMoeThinkerTextExperts": NpuMoeFusedV5.experts_forward,
+        "Qwen3OmniMoeTalkerTextExperts": NpuMoeFusedV5.experts_forward,
+    },
+    "qwen3_omni_moe_thinker": {
+        "Qwen3OmniMoeThinkerTextExperts": NpuMoeFusedV5.experts_forward,
+    },
+    "qwen3_vl_moe": {
+        "Qwen3VLMoeTextExperts": NpuMoeFusedV5.experts_forward,
+    },
+    "qwen3_5_moe": {
+        "Qwen3_5MoeExperts": NpuMoeFusedV5.experts_forward,
+    },
+    "qwen3_5_moe_text": {
+        "Qwen3_5MoeExperts": NpuMoeFusedV5.experts_forward,
+    },
+}
+
+_MODEL_TYPE_TO_PATCHES = (
+    _V5_MODEL_TYPE_TO_PATCHES if is_transformers_version_greater_than("5.0.0") else _V4_MODEL_TYPE_TO_PATCHES
+)
+
+
+@KernelPlugin("npu_fused_moe").register()
 class NpuFusedMoEKernel(BaseKernel):
     """NPU Fused MoE Kernel implementation."""
 
-    _kernel_id = "npu_fused_moe"
-    _device = DeviceType.NPU
+    @staticmethod
+    def check_device() -> None:
+        current = get_current_accelerator().type
+        if current != DeviceType.NPU:
+            raise RuntimeError(f"NpuFusedMoEKernel requires NPU, current accelerator is {current}.")
 
-    @classmethod
-    def apply(cls, **kwargs) -> HFModel:
+    @staticmethod
+    def check_deps() -> None:
+        if _TORCH_NPU_IMPORT_ERROR is not None:
+            raise RuntimeError("NpuFusedMoEKernel requires torch_npu.") from _TORCH_NPU_IMPORT_ERROR
+
+    @staticmethod
+    def _get_patch_forward(model_type: str, module: torch.nn.Module):
+        """Return the version-specific NPU forward function for a matched MoE module."""
+        model_patches = _MODEL_TYPE_TO_PATCHES.get(model_type, {})
+        return model_patches.get(module.__class__.__name__)
+
+    @staticmethod
+    def _apply(**kwargs) -> HFModel:
         """Applies the NPU fused MoE kernel to the model.
 
         Args:
@@ -350,32 +403,21 @@ class NpuFusedMoEKernel(BaseKernel):
 
         Returns:
             HFModel: The model with patched MoE forward functions.
-
-        Raises:
-            ValueError: If the model is not provided.
-            RuntimeError: If dependencies are not met.
         """
-        model = kwargs.get("model", None)
-        if model is None:
-            raise ValueError(f"HFModel instance is required for {cls.__name__}.")
+        model = kwargs["model"]
 
-        if not cls.check_deps():
-            raise RuntimeError("torch_npu is not available but NpuMoEFusedMoEKernel was called.")
-
-        archs = getattr(model.config, "architectures", None) or []
-        target_moe_mapping = None
-        for arch in archs:
-            if arch in kernel_moe_mapping:
-                target_moe_mapping = kernel_moe_mapping[arch]
-                break
-
-        if target_moe_mapping is None:
+        model_type = getattr(model.config, "model_type", None)
+        if model_type not in _MODEL_TYPE_TO_PATCHES:
             return model
 
+        patched_count = 0
         for module in model.modules():
-            class_name = module.__class__.__name__
-            if class_name in target_moe_mapping:
-                new_forward_func = target_moe_mapping[class_name]
-                module.forward = types.MethodType(new_forward_func, module)
+            patch_forward = NpuFusedMoEKernel._get_patch_forward(model_type, module)
+            if patch_forward is not None:
+                module.forward = types.MethodType(patch_forward, module)
+                patched_count += 1
+
+        if patched_count:
+            logger.info_rank0(f"Applied NPU fused MoE kernel to {patched_count} modules for model type: {model_type}.")
 
         return model

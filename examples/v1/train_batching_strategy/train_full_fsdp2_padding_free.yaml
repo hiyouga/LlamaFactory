@@ -1,11 +1,8 @@
 model: Qwen/Qwen3-0.6B
 model_class: llm
 
-template: qwen3_nothink
-
 kernel_config:
   name: auto
-  include_kernels: auto # choice: null/true/false/auto/kernel_id1,kernel_id2,kernel_id3, default is null
 
 quant_config: null
 
@@ -20,7 +17,7 @@ train_dataset: data/v1_sft_demo.yaml
 output_dir: outputs/test_fsdp2
 micro_batch_size: 4
 batching_strategy: padding_free
-flash_attn: flash_attention2
+flash_attn: flash_attention_2
 cutoff_len: 2048
 learning_rate: 1.0e-4
 max_steps: 10

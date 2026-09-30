@@ -21,7 +21,7 @@ from ..config import InputArgument, ModelArguments, SampleArguments, SampleBacke
 from ..core.base_sampler import BaseSampler
 from ..core.data_engine import DataEngine
 from ..core.model_engine import ModelEngine
-from ..core.utils.rendering import Renderer
+from ..core.rendering import Renderer
 from ..utils.types import HFModel, Message, Sample, TorchDataset
 
 
@@ -118,7 +118,7 @@ def run_chat(args: InputArgument = None):
                 response += new_text
 
             print()
-            messages.append(model_engine.renderer.parse_message(response))
+            messages.append({"role": "assistant", "content": [{"type": "text", "value": response}]})
 
 
 if __name__ == "__main__":

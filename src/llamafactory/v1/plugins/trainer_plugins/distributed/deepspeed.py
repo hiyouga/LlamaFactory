@@ -34,6 +34,14 @@ from ...model_plugins.deepspeed_utils import infer_deepspeed_mixed_precision
 logger = get_logger(__name__)
 
 
+# ZeRO-3 bucket sizes that accelerate derives from the model's hidden size
+_ZERO3_BUCKET_FORMULAS = {
+    "reduce_bucket_size": lambda hidden: hidden * hidden,
+    "stage3_prefetch_bucket_size": lambda hidden: int(0.9 * hidden * hidden),
+    "stage3_param_persistence_threshold": lambda hidden: 10 * hidden,
+}
+
+
 class DeepSpeedEngine:
     """DeepSpeed integration using accelerate's built-in capabilities.
 
@@ -84,6 +92,7 @@ class DeepSpeedEngine:
 
         Internally calls deepspeed.initialize() and wraps the returned objects.
         """
+        self._fill_zero3_bucket_sizes(model)
         if lr_scheduler is not None:
             model, optimizer, lr_scheduler = self.accelerator.prepare(model, optimizer, lr_scheduler)
         else:
@@ -93,6 +102,23 @@ class DeepSpeedEngine:
 
         logger.info_rank0("Model, optimizer, and lr_scheduler prepared via accelerate")
         return model, optimizer, lr_scheduler
+
+    def _fill_zero3_bucket_sizes(self, model: HFModel) -> None:
+        """Fill ZeRO-3 ``auto`` bucket sizes that accelerate cannot infer for multimodal models."""
+        zero_config = self.accelerator.state.deepspeed_plugin.deepspeed_config.get("zero_optimization", {})
+        auto_keys = [key for key in _ZERO3_BUCKET_FORMULAS if zero_config.get(key) == "auto"]
+        if not auto_keys:
+            return
+
+        config = model.config
+        text_config = config.get_text_config() if hasattr(config, "get_text_config") else config
+        hidden_size = getattr(text_config, "hidden_size", None)
+        if hidden_size is None:
+            return
+
+        for key in auto_keys:
+            zero_config[key] = _ZERO3_BUCKET_FORMULAS[key](hidden_size)
+        logger.info_rank0(f"Resolved ZeRO-3 {auto_keys} from text-config hidden_size={hidden_size}.")
 
     def backward(self, loss: torch.Tensor) -> None:
         """Backward pass using accelerate.
@@ -108,7 +134,7 @@ class DeepSpeedEngine:
         """Get the global gradient norm from the DeepSpeed engine."""
         engine_wrapper = getattr(self.accelerator, "deepspeed_engine_wrapped", None)
         if engine_wrapper is not None:
-            return engine_wrapper.engine.get_global_grad_norm() or 0.0
+            return float(engine_wrapper.engine.get_global_grad_norm() or 0.0)
         return 0.0
 
 

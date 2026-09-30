@@ -27,16 +27,22 @@ import types
 import torch
 import torch.nn.functional as F
 
-from ......accelerator.helper import DeviceType
+from ......accelerator.helper import DeviceType, get_current_accelerator
 from ......utils.types import HFModel
-from ...base import BaseKernel
-from ...registry import register_kernel
-from .triton_grouped_gemm import (
-    group_gemm_same_mn,
-    group_gemm_same_nk,
-    moe_gather,
-    moe_scatter,
-)
+from ...base import BaseKernel, KernelPlugin
+
+
+try:
+    from .triton_grouped_gemm import (
+        group_gemm_same_mn,
+        group_gemm_same_nk,
+        moe_gather,
+        moe_scatter,
+    )
+except ImportError as exc:
+    _TRITON_IMPORT_ERROR = exc
+else:
+    _TRITON_IMPORT_ERROR = None
 
 
 logger = logging.getLogger(__name__)
@@ -351,7 +357,7 @@ _TRITON_MOE_MAPPING: dict[str, dict[str, object]] = {
 # ---------------------------------------------------------------------------
 
 
-@register_kernel
+@KernelPlugin("cuda_fused_moe").register()
 class CudaFusedMoEKernel(BaseKernel):
     """Pure-Triton fused MoE kernel for NVIDIA CUDA GPUs.
 
@@ -362,30 +368,20 @@ class CudaFusedMoEKernel(BaseKernel):
     Requires: CUDA GPU + Triton
     """
 
-    _kernel_id = "cuda_fused_moe"
-    _device = DeviceType.CUDA
+    @staticmethod
+    def check_device() -> None:
+        current = get_current_accelerator().type
+        if current != DeviceType.CUDA:
+            raise RuntimeError(f"CudaFusedMoEKernel requires CUDA, current accelerator is {current}.")
 
-    @classmethod
-    def check_deps(cls) -> bool:
-        if not super().check_deps():
-            return False
-        try:
-            import triton  # noqa: F401
+    @staticmethod
+    def check_deps() -> None:
+        if _TRITON_IMPORT_ERROR is not None:
+            raise RuntimeError("cuda_fused_moe requires Triton.") from _TRITON_IMPORT_ERROR
 
-            return True
-        except ImportError:
-            logger.info("cuda_fused_moe: Triton not available, kernel disabled.")
-            return False
-
-    @classmethod
-    def apply(cls, **kwargs) -> HFModel:
+    @staticmethod
+    def _apply(**kwargs) -> HFModel:
         model = kwargs.get("model")
-        if model is None:
-            raise ValueError(f"HFModel instance is required for {cls.__name__}.")
-
-        if not cls.check_deps():
-            logger.warning("cuda_fused_moe: Dependencies not met. Skipping kernel application.")
-            return model
 
         archs = getattr(model.config, "architectures", None) or []
         target_mapping = None

@@ -1,0 +1,29 @@
+model: Qwen/Qwen3-0.6B
+model_class: llm
+
+
+dist_config:
+  name: fsdp2
+
+optim_config:
+  name: muon
+  wd: 0.1
+  momentum: 0.95
+  nesterov: true
+  ns_steps: 5
+  adamw_betas: [0.9, 0.95]
+  adamw_eps: 1.0e-8
+
+### data
+train_dataset: data/v1_sft_demo.yaml
+
+### training
+output_dir: outputs/test_muon
+micro_batch_size: 1
+cutoff_len: 2048
+learning_rate: 1.0e-5
+max_steps: 10
+
+### sample
+sample_backend: hf
+max_new_tokens: 128

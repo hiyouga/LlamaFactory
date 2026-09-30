@@ -1,6 +1,6 @@
 # https://hub.docker.com/r/ascendai/cann/tags
 
-ARG BASE_IMAGE=quay.io/ascend/cann:9.0.0-910b-ubuntu22.04-py3.11
+ARG BASE_IMAGE=quay.io/ascend/cann:9.1.0-910b-ubuntu22.04-py3.12
 FROM ${BASE_IMAGE}
 
 # Installation arguments

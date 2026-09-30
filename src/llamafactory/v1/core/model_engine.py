@@ -37,8 +37,9 @@ from ..accelerator.helper import DeviceType
 from ..accelerator.interface import DistributedInterface
 from ..config.model_args import ModelArguments, ModelClass
 from ..utils import logging
+from ..utils.helper import get_tokenizer, is_tokenizer
 from ..utils.types import HFConfig, HFModel, Processor
-from .utils.rendering import Renderer
+from .rendering import Renderer
 
 
 logger = logging.get_logger(__name__)
@@ -63,28 +64,30 @@ class ModelEngine:
         """Whether to train the model."""
         self.processor = self._init_processor()
         """Tokenizer or multi-modal processor."""
-        self.renderer = Renderer(self.args.template, self.processor)
-        """Renderer."""
+        self._sync_chat_template()
         self.model_config = self._init_model_config()
         """Model configuration."""
-        self._dist_config = DistributedInterface().dist_config
-        self._deepspeed_zero3_plugin = None
+        self.renderer = Renderer(self.processor)
+        """Renderer."""
         self._deepspeed_zero3_enabled = False
 
-        if self.is_train and self._dist_config is not None and self._dist_config.get("name") == "deepspeed":
+        try:
             from ..plugins.model_plugins.deepspeed_utils import (
+                is_deepspeed_zero3_enabled,
                 setup_deepspeed_zero3_model_loading,
                 teardown_deepspeed_zero3_model_loading,
             )
 
+            self._deepspeed_zero3_enabled = self.is_train and is_deepspeed_zero3_enabled()
+        except ImportError:
+            pass
+
+        if self._deepspeed_zero3_enabled:
+            plugin = setup_deepspeed_zero3_model_loading()
             try:
-                self._deepspeed_zero3_plugin = setup_deepspeed_zero3_model_loading(self.is_train, self._dist_config)
-                self._deepspeed_zero3_enabled = self._deepspeed_zero3_plugin is not None
                 self.model = self._init_model()
             finally:
-                teardown_deepspeed_zero3_model_loading(self._deepspeed_zero3_plugin)
-                self._deepspeed_zero3_plugin = None
-                self._deepspeed_zero3_enabled = False
+                teardown_deepspeed_zero3_model_loading(plugin)
         else:
             self.model = self._init_model()
 
@@ -98,6 +101,18 @@ class ModelEngine:
             self.args.model,
             trust_remote_code=self.args.trust_remote_code,
         )
+
+    def _sync_chat_template(self) -> None:
+        """Sync chat_template and inject custom_chat_template."""
+        tokenizer = get_tokenizer(self.processor)
+        if not is_tokenizer(self.processor) and not getattr(self.processor, "chat_template", None):
+            if getattr(tokenizer, "chat_template", None):
+                self.processor.chat_template = tokenizer.chat_template
+
+        if self.args.custom_chat_template:
+            if not is_tokenizer(self.processor):
+                self.processor.chat_template = self.args.custom_chat_template
+            tokenizer.chat_template = self.args.custom_chat_template
 
     def _init_model_config(self) -> HFConfig:
         """Init model config."""
@@ -127,17 +142,26 @@ class ModelEngine:
 
             init_kwargs = QuantizationPlugin(self.args.quant_config.name)(
                 init_kwargs=init_kwargs,
-                config=self.model_config,
-                tokenizer=self.processor,
-                model_args=self.args,
+                quant_config=self.args.quant_config,
                 is_trainable=self.is_train,
             )
 
         if self.args.model_class == ModelClass.LLM:
             from transformers import AutoModelForCausalLM, AutoModelForImageTextToText
 
-            if type(self.model_config) in AutoModelForImageTextToText._model_mapping.keys():
+            # AutoModelForMultimodalLM (audio / other multimodal LMs, e.g. Qwen2-Audio) was added in
+            # a newer transformers; fall back gracefully when it is absent (e.g. 4.57.1).
+            try:
+                from transformers import AutoModelForMultimodalLM
+            except ImportError:
+                AutoModelForMultimodalLM = None
+
+            cfg_type = type(self.model_config)
+            if cfg_type in AutoModelForImageTextToText._model_mapping.keys():
                 AutoClass = AutoModelForImageTextToText
+            elif AutoModelForMultimodalLM is not None and cfg_type in AutoModelForMultimodalLM._model_mapping.keys():
+                # Audio / other multimodal LMs (e.g. Qwen2-Audio) live here, not in CausalLM.
+                AutoClass = AutoModelForMultimodalLM
             else:
                 AutoClass = AutoModelForCausalLM
 
@@ -159,7 +183,7 @@ class ModelEngine:
         if init_device.type == DeviceType.META:
             assert self.args.quant_config is None, "Quantization is not supported with meta device."
             with init_empty_weights():
-                model = AutoClass.from_config(self.model_config)
+                model = AutoClass.from_config(self.model_config, attn_implementation=self.args.flash_attn)
         else:
             model = AutoClass.from_pretrained(
                 self.args.model,
@@ -173,6 +197,10 @@ class ModelEngine:
         init_mode = self.args.init_config.name if self.args.init_config is not None else "init_on_default"
         model._init_mode = init_mode
 
+        if hasattr(model, "thinker"):
+            model = model.thinker
+            model._init_mode = init_mode
+
         if self.args.peft_config is None:
             if self.is_train:
                 logger.info_rank0("Fine-tuning mode: full tuning")
@@ -185,17 +213,16 @@ class ModelEngine:
 
             from ..plugins.model_plugins.peft import PeftPlugin
 
-            model = PeftPlugin(self.args.peft_config.name)(model, self.args.peft_config, self.is_train)
+            model = PeftPlugin(self.args.peft_config.name)(
+                model,
+                peft_config=self.args.peft_config,
+                is_train=self.is_train,
+            )
 
         if self.args.kernel_config is not None:
-            from ..plugins.model_plugins.kernels.interface import KernelPlugin
+            from ..plugins.model_plugins.kernels.interface import apply_kernels
 
-            kernel_config = self.args.kernel_config
-            kernel_kwargs: dict = {"model": model, "include_kernels": kernel_config.get("include_kernels")}
-            if kernel_config.name == "liger_kernel":
-                # Fused linear CE omits logits; SFT stage needs logits for loss_weights.
-                kernel_kwargs["require_logits"] = self.is_train
-            model = KernelPlugin(kernel_config.name)(**kernel_kwargs)
+            model = apply_kernels(model, self.args.kernel_config, require_logits=self.is_train)
 
         return model
 

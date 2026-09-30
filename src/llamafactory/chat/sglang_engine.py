@@ -171,6 +171,7 @@ class SGLangEngine(BaseEngine):
         skip_special_tokens: Optional[bool] = input_kwargs.pop("skip_special_tokens", None)
         max_length: Optional[int] = input_kwargs.pop("max_length", None)
         max_new_tokens: Optional[int] = input_kwargs.pop("max_new_tokens", None)
+        seed: Optional[int] = input_kwargs.pop("seed", None)
         stop: Optional[Union[str, list[str]]] = input_kwargs.pop("stop", None)
 
         if num_return_sequences != 1:
@@ -205,6 +206,8 @@ class SGLangEngine(BaseEngine):
             if skip_special_tokens is not None
             else self.generating_args["skip_special_tokens"],
         }
+        if seed is not None:
+            sampling_params["seed"] = seed
 
         def stream_request():
             json_data = {

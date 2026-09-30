@@ -20,55 +20,32 @@ Init Phase:
 
 """
 
-import re
 import types
 
 import torch
 import torch.nn.functional as F
 
-from ......accelerator.helper import DeviceType
+from ......accelerator.helper import DeviceType, get_current_accelerator
+from ......utils.logging import get_logger
 from ......utils.types import HFModel
-from ...base import BaseKernel
-from ...registry import register_kernel
+from ...base import BaseKernel, KernelPlugin
 
+
+logger = get_logger(__name__)
 
 try:
     import torch_npu
-except ImportError:
-    pass
-
-
-def _should_use_residual_rmsnorm(module):
-    """Detect whether the module uses residual RMSNorm parameterization.
-
-    Residual RMSNorm uses ``scale = 1.0 + weight`` where weight is initialized to 0,
-    while standard RMSNorm uses ``scale = weight`` where weight is initialized to 1.
-
-    Args:
-        module (nn.Module): The RMSNorm module to check.
-
-    Returns:
-        bool: ``True`` if the module uses residual parameterization, ``False`` otherwise.
-
-    .. note::
-        This must follow the module's forward semantics. Do not infer it from trained
-        weight values because standard RMSNorm weights can also be close to zero.
-    """
-    residual_rmsnorm_classes = {
-        "Qwen3_5RMSNorm",
-        "Qwen3_5MoeRMSNorm",
-        "Qwen3NextRMSNorm",
-    }
-
-    class_name = module.__class__.__name__
-    return class_name in residual_rmsnorm_classes
+except ImportError as exc:
+    _TORCH_NPU_IMPORT_ERROR = exc
+else:
+    _TORCH_NPU_IMPORT_ERROR = None
 
 
 def npu_rms_norm_forward(self, hidden_states):
     """NPU forward implementation for standard RMSNorm.
 
     Args:
-        self (nn.Module): The RMSNorm module instance with ``weight`` and ``variance_epsilon``.
+        self (nn.Module): The RMSNorm module instance with ``weight`` and either ``variance_epsilon`` or ``eps``.
         hidden_states (Tensor): Input hidden states tensor.
 
     Returns:
@@ -76,88 +53,165 @@ def npu_rms_norm_forward(self, hidden_states):
     """
     _eps = getattr(self, "variance_epsilon", None) or getattr(self, "eps", 1e-6)
 
-    if hasattr(self, "weight") and self.weight is not None:
-        if getattr(self, "_npu_use_residual_rmsnorm", False):
-            effective_weight = 1.0 + self.weight.float()
-        else:
-            effective_weight = self.weight.float()
-    else:
-        effective_weight = None
+    weight = getattr(self, "weight", None)
+    if weight is None:
+        raise RuntimeError(f"{self.__class__.__name__} has no RMSNorm weight for NPU RMSNorm kernel.")
 
-    if effective_weight is not None:
-        return torch_npu.npu_rms_norm(hidden_states, effective_weight.to(hidden_states.dtype), epsilon=_eps)[0]
-    else:
-        return torch_npu.npu_rms_norm(hidden_states, self.weight, epsilon=_eps)[0]
+    effective_weight = weight.float()
+
+    return torch_npu.npu_rms_norm(hidden_states, effective_weight.to(hidden_states.dtype), epsilon=_eps)[0]
+
+
+def npu_residual_rms_norm_forward(self, hidden_states):
+    """NPU forward implementation for residual RMSNorm.
+
+    Residual RMSNorm uses ``scale = 1.0 + weight`` where ``weight`` is initialized
+    to 0 in the original transformers implementation.
+
+    Args:
+        self (nn.Module): The residual RMSNorm module with ``weight`` and either ``variance_epsilon`` or ``eps``.
+        hidden_states (Tensor): Input hidden states tensor.
+
+    Returns:
+        Tensor: Normalized tensor consistent with residual RMSNorm behavior.
+    """
+    _eps = getattr(self, "variance_epsilon", None) or getattr(self, "eps", 1e-6)
+
+    weight = getattr(self, "weight", None)
+    if weight is None:
+        raise RuntimeError(f"{self.__class__.__name__} has no RMSNorm weight for NPU RMSNorm kernel.")
+
+    effective_weight = 1.0 + weight.float()
+
+    return torch_npu.npu_rms_norm(hidden_states, effective_weight.to(hidden_states.dtype), epsilon=_eps)[0]
 
 
 def npu_gated_rms_norm_forward(self, hidden_states, gate=None):
     """NPU forward implementation for Gated RMSNorm with high-precision FP32 computation.
 
     This function performs RMSNorm and gated SiLU multiplication in FP32 for numerical
-    stability. Unlike standard RMSNorm, Gated RMSNorm in Qwen3.5 uses standard
-    parameterization (``scale = weight`` where weight is initialized to 1), so the
-    residual weight adjustment (``1.0 + weight``) is not applied here.
+    stability. The supported gated RMSNorm modules use ``scale = weight`` with weight
+    initialized to 1, unlike the residual RMSNorm variants that use ``1.0 + weight``.
 
     Args:
         self (nn.Module): The Gated RMSNorm module instance.
         hidden_states (Tensor): Input hidden states tensor.
-        gate (Tensor, optional): Gate tensor for SiLU activation. Defaults to ``None``.
+        gate (Tensor): Gate tensor for SiLU activation.
 
     Returns:
         Tensor: Output tensor cast back to the original input dtype.
+
+    Raises:
+        ValueError: If the gate tensor is not provided.
     """
+    if gate is None:
+        raise ValueError(f"{self.__class__.__name__} requires a gate tensor for NPU Gated RMSNorm.")
+
     input_dtype = hidden_states.dtype
     hidden_states = hidden_states.to(torch.float32)
     _eps = getattr(self, "variance_epsilon", None) or getattr(self, "eps", 1e-6)
 
     hidden_states = torch_npu.npu_rms_norm(hidden_states, self.weight.float(), epsilon=_eps)[0]
-
-    if gate is not None:
-        hidden_states = hidden_states * F.silu(gate.to(torch.float32))
+    hidden_states = hidden_states * F.silu(gate.to(torch.float32))
 
     return hidden_states.to(input_dtype)
 
 
-@register_kernel
+_MODEL_TYPE_TO_PATCHES = {
+    "qwen3": {
+        "Qwen3RMSNorm": npu_rms_norm_forward,
+    },
+    "qwen3_moe": {
+        "Qwen3MoeRMSNorm": npu_rms_norm_forward,
+    },
+    "qwen3_next": {
+        "Qwen3NextRMSNorm": npu_residual_rms_norm_forward,
+        "Qwen3NextRMSNormGated": npu_gated_rms_norm_forward,
+    },
+    "qwen3_omni_moe": {
+        "Qwen3OmniMoeThinkerTextRMSNorm": npu_rms_norm_forward,
+        "Qwen3OmniMoeTextRMSNorm": npu_rms_norm_forward,
+        "Qwen3OmniMoeRMSNorm": npu_rms_norm_forward,
+        "Qwen3OmniMoeCode2WavRMSNorm": npu_rms_norm_forward,
+    },
+    "qwen3_omni_moe_thinker": {
+        "Qwen3OmniMoeThinkerTextRMSNorm": npu_rms_norm_forward,
+        "Qwen3OmniMoeTextRMSNorm": npu_rms_norm_forward,
+    },
+    "qwen3_vl": {
+        "Qwen3VLTextRMSNorm": npu_rms_norm_forward,
+    },
+    "qwen3_vl_moe": {
+        "Qwen3VLMoeTextRMSNorm": npu_rms_norm_forward,
+    },
+    "qwen3_5": {
+        "Qwen3_5RMSNorm": npu_residual_rms_norm_forward,
+        "Qwen3_5RMSNormGated": npu_gated_rms_norm_forward,
+    },
+    "qwen3_5_text": {
+        "Qwen3_5RMSNorm": npu_residual_rms_norm_forward,
+        "Qwen3_5RMSNormGated": npu_gated_rms_norm_forward,
+    },
+    "qwen3_5_moe": {
+        "Qwen3_5MoeRMSNorm": npu_residual_rms_norm_forward,
+        "Qwen3_5MoeRMSNormGated": npu_gated_rms_norm_forward,
+    },
+    "qwen3_5_moe_text": {
+        "Qwen3_5MoeRMSNorm": npu_residual_rms_norm_forward,
+        "Qwen3_5MoeRMSNormGated": npu_gated_rms_norm_forward,
+    },
+}
+
+
+@KernelPlugin("npu_fused_rmsnorm").register()
 class NpuRMSNormKernel(BaseKernel):
     """NPU kernel wrapper for RMSNorm that applies the replacement within a model."""
 
-    _kernel_id = "npu_fused_rmsnorm"
-    _device = DeviceType.NPU
+    @staticmethod
+    def check_device() -> None:
+        current = get_current_accelerator().type
+        if current != DeviceType.NPU:
+            raise RuntimeError(f"NpuRMSNormKernel requires NPU, current accelerator is {current}.")
 
-    @classmethod
-    def apply(cls, **kwargs) -> "HFModel":
+    @staticmethod
+    def check_deps() -> None:
+        if _TORCH_NPU_IMPORT_ERROR is not None:
+            raise RuntimeError("NpuRMSNormKernel requires torch_npu.") from _TORCH_NPU_IMPORT_ERROR
+
+    @staticmethod
+    def _get_patch_forward(model_type: str, module: torch.nn.Module):
+        """Return the NPU forward function for a matched RMSNorm module."""
+        model_patches = _MODEL_TYPE_TO_PATCHES.get(model_type, {})
+        return model_patches.get(module.__class__.__name__)
+
+    @staticmethod
+    def _apply(**kwargs) -> "HFModel":
         """Iterate the model and apply NPU-optimized forward to matched RMSNorm modules.
 
-        Matches modules whose class name contains "RMSNorm" (case-insensitive) and binds
-        the appropriate NPU-optimized forward function as an instance method via
-        ``types.MethodType`` to replace the original ``forward``.
+        Matches modules configured for the current model type, then binds the corresponding
+        NPU-optimized forward function as an instance method via ``types.MethodType`` to
+        replace the original ``forward``.
 
         Args:
             **kwargs: Keyword arguments containing the model.
 
         Returns:
             HFModel: The model with NPU fused RMSNorm.
-
-        Raises:
-            RuntimeError: If ``torch_npu`` is not available.
-            ValueError: If the model is not provided.
         """
-        model = kwargs.get("model")
-        if model is None:
-            raise ValueError(f"HFModel instance is required for {cls.__name__}.")
+        model = kwargs["model"]
 
-        if not cls.check_deps():
-            raise RuntimeError(f"torch_npu is not available but {cls.__name__} was called.")
+        model_type = getattr(model.config, "model_type", None)
+        if model_type not in _MODEL_TYPE_TO_PATCHES:
+            return model
 
-        rms_norm_pattern = re.compile("RMSNorm", re.IGNORECASE)
+        patched_count = 0
+        for module in model.modules():
+            patch_forward = NpuRMSNormKernel._get_patch_forward(model_type, module)
+            if patch_forward is not None:
+                module.forward = types.MethodType(patch_forward, module)
+                patched_count += 1
 
-        for _, module in model.named_modules():
-            if re.search(rms_norm_pattern, module.__class__.__name__):
-                if "Gated" in module.__class__.__name__:
-                    module.forward = types.MethodType(npu_gated_rms_norm_forward, module)
-                else:
-                    module._npu_use_residual_rmsnorm = _should_use_residual_rmsnorm(module)
-                    module.forward = types.MethodType(npu_rms_norm_forward, module)
+        if patched_count:
+            logger.info_rank0(f"Applied NPU RMSNorm kernel to {patched_count} modules for model type: {model_type}.")
 
         return model

@@ -1,0 +1,139 @@
+name: docker-npu
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 2 * * *"
+      timezone: "Asia/Shanghai"
+  release:
+    types:
+      - published
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - device: "npu-a2"
+            os: "ubuntu"
+            base_image: "quay.io/ascend/cann:9.1.0-910b-ubuntu22.04-py3.12"
+          - device: "npu-a3"
+            os: "ubuntu"
+            base_image: "quay.io/ascend/cann:9.1.0-a3-ubuntu22.04-py3.12"
+          - device: "npu-a2"
+            os: "openeuler"
+            base_image: "quay.io/ascend/cann:9.1.0-910b-openeuler24.03-py3.12"
+          - device: "npu-a3"
+            os: "openeuler"
+            base_image: "quay.io/ascend/cann:9.1.0-a3-openeuler24.03-py3.12"
+          - device: "npu-a5"
+            os: "ubuntu"
+            base_image: "quay.io/ascend/cann:9.1.0-950-ubuntu22.04-py3.12"
+          - device: "npu-a5"
+            os: "openeuler"
+            base_image: "quay.io/ascend/cann:9.1.0-950-openeuler24.03-py3.12"
+
+    runs-on: ubuntu-latest
+
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-${{ matrix.device }}-${{ matrix.os }}
+      cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+    environment:
+      name: docker
+      url: https://hub.docker.com/r/hiyouga/llamafactory
+
+    steps:
+      - name: Free up disk space
+        uses: jlumbroso/free-disk-space@v1.3.1
+        with:
+          tool-cache: true
+          docker-images: false
+
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Get LlamaFactory version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "release" ]; then
+            echo "tag=$(grep -oP 'VERSION = "\K[^"]+' src/llamafactory/extras/env.py)" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=latest" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Get NPU image tag
+        id: npu_tag
+        env:
+          BASE_IMAGE: ${{ matrix.base_image }}
+          MATRIX_DEVICE: ${{ matrix.device }}
+          MATRIX_OS: ${{ matrix.os }}
+          LLAMAFACTORY_VERSION: ${{ steps.version.outputs.tag }}
+        run: |
+          base_image_tag="${BASE_IMAGE##*:}"
+          cann_version="${base_image_tag%%-*}"
+          torch_npu_version="$(sed -nE 's/^torch[-_]npu==([0-9]+(\.[0-9]+)*(\.post[0-9]+)?).*/\1/p' requirements/npu.txt)"
+          soc="$(grep -oE '(910b|a3|950)' <<< "${base_image_tag}" | head -n 1)"
+          operating_system="$(grep -oE '(ubuntu|openeuler)[0-9]+(\.[0-9]+)*' <<< "${base_image_tag}" | head -n 1)"
+          python_version="$(grep -oE 'py[0-9]+\.[0-9]+' <<< "${base_image_tag}" | head -n 1)"
+
+          if [[ -z "${cann_version}" || -z "${torch_npu_version}" || -z "${soc}" || -z "${operating_system}" || -z "${python_version}" ]]; then
+            echo "Failed to derive the NPU image tag from ${BASE_IMAGE} and requirements/npu.txt" >&2
+            exit 1
+          fi
+
+          if [[ "${operating_system}" != "${MATRIX_OS}"* ]]; then
+            echo "Operating system ${operating_system} derived from ${BASE_IMAGE} does not match matrix OS family ${MATRIX_OS}" >&2
+            exit 1
+          fi
+
+          case "${MATRIX_DEVICE}" in
+            npu-a2) expected_soc="910b" ;;
+            npu-a3) expected_soc="a3" ;;
+            npu-a5) expected_soc="950" ;;
+            *)
+              echo "Unsupported NPU device ${MATRIX_DEVICE}" >&2
+              exit 1
+              ;;
+          esac
+
+          if [[ "${soc}" != "${expected_soc}" ]]; then
+            echo "SoC ${soc} derived from ${BASE_IMAGE} does not match matrix device ${MATRIX_DEVICE}" >&2
+            exit 1
+          fi
+
+          if [[ "${LLAMAFACTORY_VERSION}" == "latest" ]]; then
+            echo "tag=latest-${soc}-${MATRIX_OS}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${LLAMAFACTORY_VERSION}-cann${cann_version}-torch_npu${torch_npu_version}-${soc}-${operating_system}-${python_version}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Login to Quay
+        uses: docker/login-action@v3
+        with:
+          registry: quay.io
+          username: ${{ vars.QUAY_ASCEND_USERNAME }}
+          password: ${{ secrets.QUAY_ASCEND_TOKEN }}
+
+      - name: Build and push Docker image (${{ matrix.device }}-${{ matrix.os }})
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          file: ./docker/docker-npu/Dockerfile
+          build-args: |
+            BASE_IMAGE=${{ matrix.base_image }}
+          push: true
+          tags: |
+            docker.io/hiyouga/llamafactory:${{ steps.npu_tag.outputs.tag }}
+            quay.io/ascend/llamafactory:${{ steps.npu_tag.outputs.tag }}

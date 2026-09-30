@@ -50,6 +50,21 @@ def _prepare_hp_args(finetuning_args: "FinetuningArguments", model_args: "ModelA
     from hyper_parallel.integration.llamafactory import HyperParallelArguments  # pylint: disable=C0415
 
     hp_args = HyperParallelArguments.from_finetuning_args(finetuning_args)
+
+    if getattr(hp_args, "cp_size", None) != finetuning_args.hyper_parallel_cp_size:
+        setattr(hp_args, "cp_size", finetuning_args.hyper_parallel_cp_size)
+
+    if getattr(hp_args, "ep_size", None) != finetuning_args.hyper_parallel_ep_size:
+        setattr(hp_args, "ep_size", finetuning_args.hyper_parallel_ep_size)
+
+    if getattr(hp_args, "efsdp_size", None) != finetuning_args.hyper_parallel_efsdp_size:
+        setattr(hp_args, "efsdp_size", finetuning_args.hyper_parallel_efsdp_size)
+
+    if getattr(hp_args, "token_dispatcher", None) != finetuning_args.hyper_parallel_token_dispatcher:
+        setattr(hp_args, "token_dispatcher", finetuning_args.hyper_parallel_token_dispatcher)
+
+    hp_args.validate()
+
     if hp_args.activation_mode != "none":
         model_args.disable_gradient_checkpointing = True
     return hp_args

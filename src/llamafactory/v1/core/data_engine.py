@@ -58,8 +58,9 @@ class DataEngine(Dataset):
         """Dict of (dataset_name, dataset)"""
         self.dataset_infos: dict[str, DatasetInfo] = {}
         """Dict of (dataset_name, dataset_info)"""
-        self.data_index: list[tuple[str, int]] = []
-        """List of (dataset_name, sample_index)"""
+        self.data_index: list[tuple[str, int, int | None]] = []
+        """List of (dataset_name, sample_index, cut). ``cut`` is the prefix length for multi-turn
+        split (messages[:cut], ending at one supervised assistant turn), or None for a whole sample."""
         self.streaming: bool = False
         """Whether dataset is streaming."""
         self._get_dataset_info()
@@ -98,12 +99,23 @@ class DataEngine(Dataset):
                 self.datasets[dataset_name] = DataLoaderPlugin(dataset_info["source"]).load(dataset_info)
 
     def _build_data_index(self) -> None:
-        """Build dataset index."""
+        """Build dataset index.
+
+        Multi-turn SFT conversations are prefix-expanded: one index entry per supervised assistant
+        turn, so ``len()`` reflects the true number of training samples (each trained on its last
+        turn). Entries are ``(dataset_name, sample_index, cut)``; ``cut`` is the prefix length
+        ``messages[:cut]`` ending at one supervised turn, or ``None`` for a whole sample (DPO,
+        streaming, or no supervised turn).
+        """
         for dataset_name, dataset in self.datasets.items():
-            if self.streaming:
-                data_index = [(dataset_name, -1) for _ in range(1000)]
+            if self.streaming:  # cannot pre-count turns -> keep whole, unsplit
+                data_index = [(dataset_name, -1, None) for _ in range(1000)]
             else:
-                data_index = [(dataset_name, sample_index) for sample_index in range(len(dataset))]
+                data_index = []
+                for sample_index in range(len(dataset)):
+                    sample = self._convert_data_sample(dataset[sample_index], dataset_name)
+                    for cut in self._prefix_cuts(sample):
+                        data_index.append((dataset_name, sample_index, cut))
 
             size = self.dataset_infos[dataset_name].get("size")
             weight = self.dataset_infos[dataset_name].get("weight")
@@ -113,6 +125,20 @@ class DataEngine(Dataset):
                 data_index = adjust_data_index(data_index, size, weight)
 
             self.data_index.extend(data_index)
+
+    @staticmethod
+    def _prefix_cuts(sample: Sample) -> list[int | None]:
+        """Prefix lengths to split a multi-turn conversation on: one per supervised assistant turn.
+
+        ``u1 a1 u2 a2`` -> ``[2, 4]`` (samples ``messages[:2]`` and ``messages[:4]``, each trained on
+        its last assistant turn). Non-SFT samples (no ``messages``) or those with no supervised turn
+        are kept whole (``[None]``).
+        """
+        messages = sample.get("messages")
+        if not messages:
+            return [None]
+        cuts = [i + 1 for i, m in enumerate(messages) if m["role"] == "assistant" and m.get("loss_weight", 1.0) > 1e-6]
+        return cuts or [None]
 
     def _convert_data_sample(self, raw_sample: dict[str, Any], dataset_name: str) -> Sample:
         """Convert dataset sample.
@@ -156,20 +182,22 @@ class DataEngine(Dataset):
             raise ValueError("Streaming dataset does not support index access.")
 
         if isinstance(index, int):
-            dataset_name, sample_index = self.data_index[index]
-            return self._convert_data_sample(self.datasets[dataset_name][sample_index], dataset_name)
+            return self._get(*self.data_index[index])
         else:  # data selector plugin
             from ..plugins.data_plugins.loader import select_data_sample
 
             selected_index = select_data_sample(self.data_index, index)
             if isinstance(selected_index, list):
-                return [
-                    self._convert_data_sample(self.datasets[dataset_name][sample_index], dataset_name)
-                    for dataset_name, sample_index in selected_index
-                ]
+                return [self._get(*entry) for entry in selected_index]
             else:
-                dataset_name, sample_index = selected_index
-                return self._convert_data_sample(self.datasets[dataset_name][sample_index], dataset_name)
+                return self._get(*selected_index)
+
+    def _get(self, dataset_name: str, sample_index: int, cut: int | None = None) -> Sample:
+        """Convert one raw row, truncating to a multi-turn prefix when ``cut`` is set."""
+        sample = self._convert_data_sample(self.datasets[dataset_name][sample_index], dataset_name)
+        if cut is not None and "messages" in sample:
+            sample = {**sample, "messages": sample["messages"][:cut]}
+        return sample
 
     def __iter__(self) -> Iterable[Sample]:
         """Get dataset iterator.

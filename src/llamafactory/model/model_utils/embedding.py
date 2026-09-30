@@ -120,9 +120,7 @@ def _noisy_mean_initialization(
     avg_weight = _existing_embeddings(embed_weight, num_new_tokens, token_ids).mean(dim=0, keepdim=True)
 
     if token_ids:
-        noise_weight = torch.empty(
-            len(token_ids), embedding_dim, device=embed_weight.device, dtype=embed_weight.dtype
-        )
+        noise_weight = torch.empty(len(token_ids), embedding_dim, device=embed_weight.device, dtype=embed_weight.dtype)
         noise_weight.normal_(mean=0, std=(1.0 / math.sqrt(embedding_dim)))
         embed_weight[token_ids] = avg_weight + noise_weight
     else:
@@ -202,8 +200,7 @@ def _description_based_initialization(
             if len(valid_token_ids) == 0:
                 # Fallback: use mean of all existing embeddings
                 logger.warning_rank0(
-                    f"Description for token '{token_str}' contains no valid tokens. "
-                    "Using mean of existing embeddings."
+                    f"Description for token '{token_str}' contains no valid tokens. Using mean of existing embeddings."
                 )
                 base_embedding = fallback_embedding
             else:

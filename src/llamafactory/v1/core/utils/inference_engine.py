@@ -25,7 +25,7 @@ from ...accelerator.interface import DistributedInterface
 from ...config import ModelArguments, SampleArguments
 from ...utils.helper import get_tokenizer
 from ...utils.types import HFModel, Message, Sample, TorchDataset
-from .rendering import Renderer
+from ..rendering import Renderer
 
 
 class BaseEngine(ABC):

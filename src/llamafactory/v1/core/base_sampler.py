@@ -16,8 +16,8 @@ from collections.abc import AsyncGenerator
 
 from ..config import ModelArguments, SampleArguments, SampleBackend
 from ..utils.types import HFModel, Message, Sample, TorchDataset
+from .rendering import Renderer
 from .utils.inference_engine import HuggingFaceEngine
-from .utils.rendering import Renderer
 
 
 class BaseSampler:

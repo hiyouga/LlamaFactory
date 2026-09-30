@@ -104,6 +104,37 @@ sudo usermod -aG docker $USER
 # Log out and back in for changes to take effect
 ```
 
+## Megatron Bridge Image
+
+`Dockerfile.megatron` builds a CUDA runtime for LLaMA-Factory + [Megatron Bridge](https://docs.nvidia.com/nemo/megatron-bridge/latest/):
+
+| Component | Version |
+| --- | --- |
+| Base | `ubuntu:22.04` (Python 3.12) |
+| PyTorch | 2.12.1+cu126 (CUDA libs from wheels) |
+| TransformerEngine | 2.17.0 |
+| megatron-core | 0.18.x (via megatron-bridge) |
+| megatron-bridge | 0.5.0 |
+
+### Build
+
+From repo root:
+
+```bash
+docker build -f docker/docker-cuda/Dockerfile.megatron \
+  -t llamafactory-megatron-bridge:latest .
+```
+
+### Run training
+
+```bash
+docker run --rm -it --gpus all --ipc=host --shm-size=16g \
+  -e DISABLE_VERSION_CHECK=1 \
+  -e USE_MEGATRON_BRIDGE=1 \
+  -v "$PWD":/app -w /app \
+  llamafactory-megatron-bridge:latest
+```
+
 ## Additional Notes
 
 - The default image is built on Ubuntu 22.04 (x86_64), CUDA 12.4, Python 3.11, PyTorch 2.6.0, and Flash-attn 2.7.4

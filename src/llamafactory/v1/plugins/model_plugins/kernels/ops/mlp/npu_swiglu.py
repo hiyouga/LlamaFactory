@@ -20,21 +20,24 @@ Init Phase:
 
 """
 
-import re
 import types
 
 import torch
 
-from ......accelerator.helper import DeviceType
+from ......accelerator.helper import DeviceType, get_current_accelerator
+from ......utils.logging import get_logger
 from ......utils.types import HFModel
-from ...base import BaseKernel
-from ...registry import register_kernel
+from ...base import BaseKernel, KernelPlugin
 
+
+logger = get_logger(__name__)
 
 try:
     import torch_npu
-except ImportError:
-    pass
+except ImportError as exc:
+    _TORCH_NPU_IMPORT_ERROR = exc
+else:
+    _TORCH_NPU_IMPORT_ERROR = None
 
 
 def npu_swiglu_forward(self, hidden_state):
@@ -52,80 +55,77 @@ def npu_swiglu_forward(self, hidden_state):
     )
 
 
-def _npu_swiglu_glm4_forward(self, hidden_states):
-    """SwiGLU forward pass for GLM4 on NPU.
+_MODEL_TYPE_TO_PATCHES = {
+    "qwen3": {
+        "Qwen3MLP": npu_swiglu_forward,
+    },
+    "qwen3_moe": {
+        "Qwen3MoeMLP": npu_swiglu_forward,
+    },
+    "qwen3_next": {
+        "Qwen3NextMLP": npu_swiglu_forward,
+    },
+    "qwen3_omni_moe": {
+        "Qwen3OmniMoeThinkerTextMLP": npu_swiglu_forward,
+        "Qwen3OmniMoeMLP": npu_swiglu_forward,
+        "Qwen3OmniMoeTalkerTextMLP": npu_swiglu_forward,
+        "Qwen3OmniMoeCode2WavMlp": npu_swiglu_forward,
+    },
+    "qwen3_omni_moe_thinker": {
+        "Qwen3OmniMoeThinkerTextMLP": npu_swiglu_forward,
+    },
+    "qwen3_vl": {
+        "Qwen3VLTextMLP": npu_swiglu_forward,
+    },
+    "qwen3_vl_moe": {
+        "Qwen3VLMoeTextMLP": npu_swiglu_forward,
+    },
+    "qwen3_5": {
+        "Qwen3_5MLP": npu_swiglu_forward,
+    },
+    "qwen3_5_text": {
+        "Qwen3_5MLP": npu_swiglu_forward,
+    },
+    "qwen3_5_moe": {
+        "Qwen3_5MoeMLP": npu_swiglu_forward,
+    },
+    "qwen3_5_moe_text": {
+        "Qwen3_5MoeMLP": npu_swiglu_forward,
+    },
+}
 
-    Args:
-        self: The GLM4 MLP layer instance.
-        hidden_states (Tensor): Input hidden states.
 
-    Returns:
-        Tensor: Output of SwiGLU.
-    """
-    up_states = self.gate_up_proj(hidden_states)
-    gate, up_states = up_states.chunk(2, dim=-1)
-    return self.down_proj(torch_npu.npu_swiglu(torch.cat((gate, up_states), dim=-1), dim=-1))
-
-
-def _npu_swiglu_gemma3ntext_forward(self, hidden_states):
-    """SwiGLU forward pass for Gemma3nText on NPU.
-
-    Args:
-        self: The Gemma3nText MLP layer instance.
-        hidden_states (Tensor): Input hidden states.
-
-    Returns:
-        Tensor: Output of SwiGLU.
-    """
-    gate_proj = self.gate_proj(hidden_states)
-    if self.activation_sparsity > 0.0:
-        gate_proj = self._gaussian_topk(gate_proj)
-    down_proj = self.down_proj(
-        torch_npu.npu_swiglu(torch.cat((gate_proj, self.up_proj(hidden_states)), dim=-1), dim=-1)
-    )
-    return down_proj
-
-
-@register_kernel
+@KernelPlugin("npu_fused_swiglu").register()
 class NpuSwiGluKernel(BaseKernel):
     """NPU Kernel for fused SwiGLU activation."""
 
-    # just support apply to the following module layers
-    expect_modules = frozenset(
-        {
-            "Qwen3VLMoeTextMLP",
-            "Qwen3VLTextMLP",
-            "Qwen3OmniMoeThinkerTextMLP",
-            "Qwen3OmniMoeMLP",
-            "Qwen3OmniMoeTalkerTextMLP",
-            "Qwen3OmniMoeCode2WavMlp",
-            "Qwen3NextMLP",
-            "Qwen3MoeMLP",
-            "Qwen3MLP",
-            "Qwen2MLP",
-            "Qwen2MoeMLP",
-            "Qwen2_5_VLMLP",
-            "Qwen2_5OmniMLP",
-            "Llama4TextMLP",
-            "LlamaMLP",
-            "Glm4MLP",
-            "Glm4MoeMLP",
-            "Glm4vMoeTextMLP",
-            "Gemma3MLP",
-            "Gemma2MLP",
-            "Gemma3nTextMLP",
-            "Phi3MLP",
-            "DeepseekV2MLP",
-            "DeepseekV3MLP",
-            "SeedOssMLP",
-        }
-    )
+    @staticmethod
+    def check_device() -> None:
+        current = get_current_accelerator().type
+        if current != DeviceType.NPU:
+            raise RuntimeError(f"NpuSwiGluKernel requires NPU, current accelerator is {current}.")
 
-    _kernel_id = "npu_fused_swiglu"
-    _device = DeviceType.NPU
+    @staticmethod
+    def check_deps() -> None:
+        if _TORCH_NPU_IMPORT_ERROR is not None:
+            raise RuntimeError("NpuSwiGluKernel requires torch_npu.") from _TORCH_NPU_IMPORT_ERROR
 
-    @classmethod
-    def apply(cls, **kwargs) -> "HFModel":
+    @staticmethod
+    def _get_patch_forward(model_type: str, module: torch.nn.Module):
+        """Return the NPU forward function for a matched SwiGLU MLP module."""
+        model_patches = _MODEL_TYPE_TO_PATCHES.get(model_type, {})
+        patch_forward = model_patches.get(module.__class__.__name__)
+        if patch_forward is None:
+            return None
+
+        config = getattr(module, "config", None)
+        if getattr(config, "hidden_act", None) != "silu":
+            return None
+
+        return patch_forward
+
+    @staticmethod
+    def _apply(**kwargs) -> "HFModel":
         """Applies the NPU fused SwiGLU kernel to the model.
 
         Args:
@@ -133,36 +133,21 @@ class NpuSwiGluKernel(BaseKernel):
 
         Returns:
             HFModel: The model with patched SwiGLU forward functions.
-
-        Raises:
-            ValueError: If the model is not provided.
-            RuntimeError: If dependencies are not met.
         """
-        model = kwargs.get("model", None)
-        if model is None:
-            raise ValueError(f"HFModel instance is required for {cls.__name__}.")
+        model = kwargs["model"]
 
-        if not cls.check_deps():
-            raise RuntimeError("torch_npu is not available but NpuSwiGluKernel was called.")
+        model_type = getattr(model.config, "model_type", None)
+        if model_type not in _MODEL_TYPE_TO_PATCHES:
+            return model
 
-        # Mapping of specific mlp modules to their corresponding kernel implementations
-        kernel_mapping = {
-            "Glm4MLP": _npu_swiglu_glm4_forward,
-            "Glm4vTextMLP": _npu_swiglu_glm4_forward,
-            "Phi3MLP": _npu_swiglu_glm4_forward,
-            "Gemma3nTextMLP": _npu_swiglu_gemma3ntext_forward,
-        }
+        patched_count = 0
+        for module in model.modules():
+            patch_forward = NpuSwiGluKernel._get_patch_forward(model_type, module)
+            if patch_forward is not None:
+                module.forward = types.MethodType(patch_forward, module)
+                patched_count += 1
 
-        swiglu_pattern = re.compile("MLP", re.IGNORECASE)
-        for name, module in model.named_modules():
-            # Match any module whose class name contains "MLP"
-            if (
-                re.search(swiglu_pattern, module.__class__.__name__)
-                and module.__class__.__name__ in cls.expect_modules
-            ):
-                # Bind function as an instance method to preserve `self` semantics
-                # and replace the original forward
-                kernel_func = kernel_mapping.get(module.__class__.__name__, npu_swiglu_forward)
-                module.forward = types.MethodType(kernel_func, module)
+        if patched_count:
+            logger.info_rank0(f"Applied NPU SwiGLU kernel to {patched_count} modules for model type: {model_type}.")
 
         return model

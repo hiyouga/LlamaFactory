@@ -14,15 +14,42 @@
 
 
 from ..accelerator.interface import DistributedInterface
-from ..config import InputArgument, get_args
+from ..config import InputArgument, TrainingArguments, get_args
 from ..core.base_trainer import BaseTrainer
 from ..core.data_engine import DataEngine
 from ..core.model_engine import ModelEngine
-from ..utils.types import BatchInput, Tensor
+from ..core.rendering import Renderer
+from ..utils.callbacks import TrainerCallback
+from ..utils.types import BatchInput, HFModel, Tensor, TorchDataset
 
 
 class SFTTrainer(BaseTrainer):
+    def __init__(
+        self,
+        args: TrainingArguments,
+        model: HFModel,
+        renderer: Renderer,
+        train_dataset: TorchDataset,
+        callbacks: list[TrainerCallback] | None = None,
+    ) -> None:
+        self._chunk_loss = None
+        if args.chunk_loss_size is not None:
+            from ..plugins.model_plugins.chunk_loss import LossPlugin
+
+            self._chunk_loss = LossPlugin("chunk_loss")(model, args.chunk_loss_size)
+
+        super().__init__(args, model, renderer, train_dataset, callbacks)
+
     def compute_loss(self, batch: BatchInput) -> Tensor:
+        if self.cp_size > 1:
+            from ..plugins.model_plugins.parallelization.sequence_parallel import SequenceParallelLossPlugin
+
+            return SequenceParallelLossPlugin("sequence_parallel_loss")(
+                self.model, batch, loss_fn=self._chunk_loss, uses_mrope=self._uses_mrope
+            )
+        if self._chunk_loss is not None:
+            return self._chunk_loss.compute_loss(self.model, batch, device=self.device, uses_mrope=self._uses_mrope)
+
         shift_loss_weights = batch["loss_weights"].to(self.device, non_blocking=True)[..., 1:]
         log_probs = self.compute_log_probs(self.model, batch)
         loss = (-log_probs * shift_loss_weights).sum() / (shift_loss_weights.sum() + 1e-6)
@@ -31,7 +58,7 @@ class SFTTrainer(BaseTrainer):
 
 def run_sft(args: InputArgument = None):
     model_args, data_args, training_args, _ = get_args(args)
-    DistributedInterface(training_args.dist_config)
+    DistributedInterface(training_args)
     train_dataset = DataEngine(data_args.train_dataset)
     model_engine = ModelEngine(model_args, is_train=True)
     trainer = SFTTrainer(

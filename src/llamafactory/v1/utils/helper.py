@@ -1,4 +1,4 @@
-# Copyright 2025 the LlamaFactory team.
+# Copyright 2026 the LlamaFactory team.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -23,7 +23,7 @@ from transformers import set_seed as hf_set_seed
 from ..accelerator.helper import is_torch_npu_available
 from ..accelerator.interface import DistributedInterface
 from .constants import IGNORE_INDEX
-from .types import BatchInput, ModelInput, Processor, Tensor
+from .types import BatchInput, Processor
 
 
 def enable_full_determinism(seed: int) -> None:
@@ -79,37 +79,6 @@ def get_tokenizer(processor: Processor) -> PreTrainedTokenizer:
     return processor.tokenizer if hasattr(processor, "tokenizer") else processor
 
 
-def _pad_and_truncate(tensor: Tensor, max_seqlen: int, pad_value: int = 0) -> Tensor:
-    if tensor.shape[-1] >= max_seqlen:
-        return tensor[..., :max_seqlen]
-
-    pad_shape = list(tensor.shape)
-    pad_shape[-1] = max_seqlen - tensor.shape[-1]
-    pad_tensor = torch.full(pad_shape, pad_value, dtype=tensor.dtype, device=tensor.device)
-    return torch.cat([tensor, pad_tensor], dim=-1)
-
-
-def pad_and_truncate(samples: list[ModelInput], max_seqlen: int) -> list[BatchInput]:
-    max_length = min(max(len(sample["input_ids"]) for sample in samples), max_seqlen)
-    padded_samples = []
-    for sample in samples:
-        padded_sample = {}
-        for key, value in sample.items():
-            if "label" in key:
-                pad_value = IGNORE_INDEX
-            else:
-                pad_value = 0
-
-            if not isinstance(value, str):
-                padded_sample[key] = _pad_and_truncate(torch.tensor(value), max_length, pad_value)
-            else:
-                padded_sample[key] = value
-
-        padded_samples.append(padded_sample)
-
-    return padded_samples
-
-
 def compute_valid_tokens(batches: list[BatchInput]) -> int:
     """Compute valid tokens in batches.
 
@@ -125,3 +94,15 @@ def compute_valid_tokens(batches: list[BatchInput]) -> int:
         for batch in batches
         if "labels" in batch
     )
+
+
+def model_uses_mrope(config) -> bool:
+    """Whether the model uses multimodal RoPE (3D position ids built from grid_thw).
+
+    Detected from the (text) config's rope settings carrying an ``mrope_section`` (Qwen2.5-VL /
+    Qwen3-VL / Qwen3.5 family). Such models compute their own multimodal position ids inside
+    ``forward`` when ``position_ids`` is not provided.
+    """
+    text_config = getattr(config, "text_config", config)
+    rope = getattr(text_config, "rope_scaling", None) or getattr(text_config, "rope_parameters", None)
+    return isinstance(rope, dict) and "mrope_section" in rope
