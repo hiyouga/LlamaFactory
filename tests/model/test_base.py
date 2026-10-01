@@ -13,9 +13,12 @@
 # limitations under the License.
 
 import os
+from types import SimpleNamespace
 
 import pytest
+import torch
 
+from llamafactory.model.loader import _patch_missing_hf_device_map
 from llamafactory.train.test_utils import compare_model, load_infer_model, load_reference_model
 
 
@@ -41,3 +44,18 @@ def test_valuehead():
     model = load_infer_model(add_valuehead=True, **INFER_ARGS)
     ref_model = load_reference_model(TINY_LLAMA_VALUEHEAD, add_valuehead=True)
     compare_model(model, ref_model)
+
+
+class DummyModel(torch.nn.Module):
+    @property
+    def device(self):
+        return torch.device("cpu")
+
+
+def test_patch_missing_hf_device_map():
+    model = DummyModel()
+    model_args = SimpleNamespace(export_dir="output/export", export_device="auto")
+
+    _patch_missing_hf_device_map(model, model_args)
+
+    assert model.hf_device_map == {"": "cpu"}
