@@ -695,6 +695,8 @@ llamafactory-cli export examples/merge_lora/qwen3_lora_sft.yaml
 llamafactory-cli webui
 ```
 
+设置 `LLAMABOARD_UI=modern` 可体验新版界面布局（侧边栏导航、浅色 / 深色主题，需要 Gradio 5）。
+
 ### 构建 Docker
 
 CUDA 用户：
