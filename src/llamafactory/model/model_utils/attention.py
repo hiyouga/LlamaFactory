@@ -75,9 +75,16 @@ def configure_attn_implementation(config: "PretrainedConfig", model_args: "Model
 
         requested_attn_implementation = "sdpa"
     elif model_args.flash_attn == AttentionFunction.FA2:
-        from transformers import is_torch_npu_available
+        from transformers import is_torch_npu_available, is_torch_xpu_available
+        from transformers.utils import is_kernels_available
 
-        if not (is_flash_attn_2_available() or is_torch_npu_available()):
+        if is_torch_xpu_available():  # FA2 on XPU is provided by the `kernels` hub kernel
+            if not is_kernels_available():
+                logger.warning_rank0(
+                    "FlashAttention-2 on XPU requires `kernels`: `pip install transformers[kernels]`."
+                )
+                return
+        elif not (is_flash_attn_2_available() or is_torch_npu_available()):
             logger.warning_rank0("FlashAttention-2 is not installed.")
             return
 
