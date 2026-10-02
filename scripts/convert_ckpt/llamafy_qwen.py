@@ -155,7 +155,7 @@ def llamafy_qwen(
     try:
         os.makedirs(output_dir, exist_ok=False)
     except Exception as e:
-        raise print("Output dir already exists", e)
+        raise ValueError("Output dir already exists") from e
 
     torch_dtype = save_weight(input_dir, output_dir, shard_size, save_safetensors)
     save_config(input_dir, output_dir, torch_dtype)
