@@ -1316,6 +1316,30 @@ register_template(
 )
 
 
+# Gemma 4 E2B / E4B with thinking off: token-identical to the Hugging Face chat template with `enable_thinking=False`,
+# i.e. no default system prompt, no `<|think|>` signal and no thought channel before the reply (`gemma4n` adds all
+# three, even with `enable_thinking: false`). Not for 12B / 26B-A4B / 31B, whose generation prompt with thinking off
+# ends with an empty thought channel.
+register_template(
+    name="gemma4n_nothink",
+    format_user=StringFormatter(slots=["<|turn>user\n{{content}}<turn|>\n<|turn>model\n"]),
+    format_assistant=StringFormatter(slots=["{{content}}<turn|>\n"]),
+    format_system=StringFormatter(slots=["<|turn>system\n{{content}}<turn|>\n"]),
+    format_observation=StringFormatter(slots=["<|turn>tool\n{{content}}<turn|>\n<|turn>model\n"]),
+    format_tools=ToolFormatter(tool_format="gemma4"),
+    format_function=FunctionFormatter(slots=["<|tool>{{content}}<tool|>"], tool_format="gemma4"),
+    format_prefix=EmptyFormatter(slots=[{"bos_token"}]),
+    stop_words=["<turn|>"],
+    replace_eos=True,
+    mm_plugin=get_mm_plugin(
+        "gemma4",
+        image_token="<|image|>",
+        video_token="<|video|>",
+        audio_token="<|audio|>",
+    ),
+)
+
+
 register_template(
     name="glm5_next",
     format_user=StringFormatter(slots=["<|user|>{{content}}<|assistant|><think>"]),

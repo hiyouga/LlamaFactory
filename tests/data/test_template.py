@@ -427,6 +427,23 @@ def test_tiny_aya_template(model_id: str):
 
 @pytest.mark.runs_on(["cpu", "mps", "xpu"])
 @pytest.mark.xfail(not HF_TOKEN, reason="Authorization.")
+@pytest.mark.parametrize("model_id", ["google/gemma-4-E2B-it", "google/gemma-4-E4B-it"])
+def test_gemma4n_nothink_template(model_id: str):
+    prompt_str = (
+        f"<bos><|turn>user\n{MESSAGES[0]['content']}<turn|>\n<|turn>model\n{MESSAGES[1]['content']}<turn|>\n"
+        f"<|turn>user\n{MESSAGES[2]['content']}<turn|>\n<|turn>model\n"
+    )
+    answer_str = f"{MESSAGES[3]['content']}<turn|>\n"
+    _check_template(model_id, "gemma4n_nothink", prompt_str, answer_str)
+    tokenizer = AutoTokenizer.from_pretrained(model_id)  # the generation prompt with thinking off ends the same way
+    assert (
+        tokenizer.apply_chat_template(MESSAGES[:3], tokenize=False, add_generation_prompt=True, enable_thinking=False)
+        == prompt_str
+    )
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
+@pytest.mark.xfail(not HF_TOKEN, reason="Authorization.")
 def test_qwen2_5_template():
     prompt_str = (
         "<|im_start|>system\nYou are Qwen, created by Alibaba Cloud. You are a helpful assistant.<|im_end|>\n"
