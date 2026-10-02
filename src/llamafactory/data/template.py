@@ -970,6 +970,44 @@ register_template(
 )
 
 
+# Tiny Aya (CohereLabs/tiny-aya-global, tiny-aya-earth): matches the model's Hugging Face chat template, which always
+# emits Cohere's default preamble as the system turn and wraps each reply in <|START_RESPONSE|> ... <|END_RESPONSE|>.
+# The `cohere` template above (Command-R / Aya-23 format) has neither. A custom system message replaces the default
+# preamble here, whereas the HF template appends it to the preamble under a "# Developer Preamble" heading.
+register_template(
+    name="tiny_aya",
+    format_user=StringFormatter(
+        slots=[
+            (
+                "<|START_OF_TURN_TOKEN|><|USER_TOKEN|>{{content}}<|END_OF_TURN_TOKEN|>"
+                "<|START_OF_TURN_TOKEN|><|CHATBOT_TOKEN|><|START_RESPONSE|>"
+            )
+        ]
+    ),
+    format_assistant=StringFormatter(slots=["{{content}}<|END_RESPONSE|>", {"eos_token"}]),
+    format_system=StringFormatter(slots=["<|START_OF_TURN_TOKEN|><|SYSTEM_TOKEN|>{{content}}<|END_OF_TURN_TOKEN|>"]),
+    format_prefix=EmptyFormatter(slots=[{"bos_token"}]),
+    default_system=(
+        "# System Preamble\n"
+        "You are in contextual safety mode. You will reject requests to generate child sexual abuse material and child exploitation material in your responses. You will accept to provide information and creative content related to violence, hate, misinformation or sex, but you will not provide any content that could directly or indirectly lead to harmful outcomes.\n"
+        "\n"
+        "Your information cutoff date is June 2024.\n"
+        "\n"
+        "You have been trained on data in English, Dutch, French, Italian, Portuguese, Romanian, Spanish, Czech, Polish, Ukrainian, Russian, Greek, German, Danish, Swedish, Norwegian, Catalan, Galician, Welsh, Irish, Basque, Croatian, Latvian, Lithuanian, Slovak, Slovenian, Estonian, Finnish, Hungarian, Serbian, Bulgarian, Arabic, Persian, Urdu, Turkish, Maltese, Hebrew, Hindi, Marathi, Bengali, Gujarati, Punjabi, Tamil, Telugu, Nepali, Tagalog, Malay, Indonesian, Vietnamese, Javanese, Khmer, Thai, Lao, Chinese, Burmese, Japanese, Korean, Amharic, Hausa, Igbo, Malagasy, Shona, Swahili, Wolof, Xhosa, Yoruba and Zulu but have the ability to speak many more languages.\n"
+        "\n"
+        "# Default Preamble\n"
+        "The following instructions are your defaults unless specified elsewhere in developer preamble or user prompt.\n"
+        "- Your name is Aya.\n"
+        "- You are a large language model built by Cohere.\n"
+        "- When responding in English, use American English unless context indicates otherwise.\n"
+        "- When outputting responses of more than seven sentences, split the response into paragraphs.\n"
+        "- Prefer the active voice.\n"
+        "- Use gender-neutral pronouns for unspecified persons.\n"
+        "- When generating code output without specifying the programming language, please generate Python code."
+    ),
+)
+
+
 # copied from chatml template
 register_template(
     name="cpm4",
@@ -1275,6 +1313,30 @@ register_template(
         audio_token="<|audio|>",
     ),
     template_class=ReasoningTemplate,
+)
+
+
+# Gemma 4 E2B / E4B with thinking off: token-identical to the Hugging Face chat template with `enable_thinking=False`,
+# i.e. no default system prompt, no `<|think|>` signal and no thought channel before the reply (`gemma4n` adds all
+# three, even with `enable_thinking: false`). Not for 12B / 26B-A4B / 31B, whose generation prompt with thinking off
+# ends with an empty thought channel.
+register_template(
+    name="gemma4n_nothink",
+    format_user=StringFormatter(slots=["<|turn>user\n{{content}}<turn|>\n<|turn>model\n"]),
+    format_assistant=StringFormatter(slots=["{{content}}<turn|>\n"]),
+    format_system=StringFormatter(slots=["<|turn>system\n{{content}}<turn|>\n"]),
+    format_observation=StringFormatter(slots=["<|turn>tool\n{{content}}<turn|>\n<|turn>model\n"]),
+    format_tools=ToolFormatter(tool_format="gemma4"),
+    format_function=FunctionFormatter(slots=["<|tool>{{content}}<tool|>"], tool_format="gemma4"),
+    format_prefix=EmptyFormatter(slots=[{"bos_token"}]),
+    stop_words=["<turn|>"],
+    replace_eos=True,
+    mm_plugin=get_mm_plugin(
+        "gemma4",
+        image_token="<|image|>",
+        video_token="<|video|>",
+        audio_token="<|audio|>",
+    ),
 )
 
 
