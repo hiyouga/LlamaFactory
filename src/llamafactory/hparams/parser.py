@@ -34,7 +34,11 @@ from transformers.utils import is_torch_bf16_gpu_available, is_torch_npu_availab
 from ..extras import logging
 from ..extras.constants import CHECKPOINT_NAMES, EngineName
 from ..extras.misc import check_dependencies, check_version, get_current_device, is_env_enabled
-from ..extras.packages import is_mcore_adapter_available, is_megatron_bridge_available
+from ..extras.packages import (
+    is_mcore_adapter_available,
+    is_megatron_bridge_available,
+    is_sentence_transformers_available,
+)
 from .data_args import DataArguments
 from .evaluation_args import EvaluationArguments
 from .finetuning_args import FinetuningArguments
@@ -422,8 +426,14 @@ def get_train_args(args: dict[str, Any] | list[str] | None = None) -> _TRAIN_CLS
         if data_args.neat_packing:
             raise ValueError("`neat_packing` cannot be set as True except SFT.")
 
+        if data_args.packing_strategy == "semantic_aware":
+            raise ValueError("`packing_strategy=semantic_aware` cannot be set except SFT.")
+
         if data_args.train_on_prompt or data_args.mask_history:
             raise ValueError("`train_on_prompt` or `mask_history` cannot be set as True except SFT.")
+
+    if data_args.packing_strategy == "semantic_aware" and not is_sentence_transformers_available():
+        raise ValueError("Please install `sentence-transformers` to use `packing_strategy=semantic_aware`.")
 
     if finetuning_args.stage == "sft" and training_args.do_predict and not training_args.predict_with_generate:
         raise ValueError("Please enable `predict_with_generate` to save model predictions.")
