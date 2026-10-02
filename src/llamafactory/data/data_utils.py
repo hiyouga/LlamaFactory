@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import json
+import os
 from enum import StrEnum, unique
 from typing import TYPE_CHECKING, Any, Optional, TypedDict, Union
 
@@ -46,6 +47,49 @@ class Role(StrEnum):
 class DatasetModule(TypedDict):
     train_dataset: Optional[Union["Dataset", "IterableDataset"]]
     eval_dataset: Optional[Union["Dataset", "IterableDataset", dict[str, "Dataset"]]]
+
+
+_THREAD_LIMIT_ENV_VARS = (
+    "OMP_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "OPENBLAS_NUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+    "VECLIB_MAXIMUM_THREADS",
+)
+
+
+def _get_available_cpu_count() -> int:
+    r"""Return the number of CPUs usable by this process, respecting cgroup/taskset limits when possible."""
+    if hasattr(os, "sched_getaffinity"):
+        try:
+            return len(os.sched_getaffinity(0))
+        except OSError:
+            pass
+
+    return os.cpu_count() or 1
+
+
+def configure_preprocessing_thread_limits(num_proc: Optional[int]) -> None:
+    r"""Cap intra-process thread pools before forking `num_proc` dataset preprocessing workers.
+
+    `datasets.map`/`load_dataset` fork `num_proc` worker processes when `num_proc > 1`. Each worker
+    independently invokes the tokenizer (Rust/rayon-threaded) and/or the fast image processor
+    (torchvision/OpenMP/BLAS-threaded), and each spins up its own thread pool sized to *all* CPU cores
+    by default. With `num_proc` workers doing this concurrently, the machine is oversubscribed by
+    roughly `num_proc` times, causing severe preprocessing slowdowns (see issue #8600).
+
+    This must be called before the first `num_proc`-based fork so that the forked children inherit the
+    capped environment. It is a no-op when `num_proc` is `None` or `<= 1` (the default), leaving the
+    single-process path unaffected, and it never overrides a value the user has already set.
+    """
+    if num_proc is None or num_proc <= 1:
+        return
+
+    num_threads = str(max(1, _get_available_cpu_count() // num_proc))
+    for env_var in _THREAD_LIMIT_ENV_VARS:
+        os.environ.setdefault(env_var, num_threads)
+
+    os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 
 def merge_dataset(
