@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import os
 import shutil
 from typing import TYPE_CHECKING, Any, Optional
@@ -19,6 +20,7 @@ from typing import TYPE_CHECKING, Any, Optional
 import torch
 import torch.distributed as dist
 from transformers import EarlyStoppingCallback, PreTrainedModel
+from transformers.utils import cached_file
 
 from ..data import get_template_and_fix_tokenizer
 from ..extras import logging
@@ -61,6 +63,8 @@ if is_ray_available():
 
 if TYPE_CHECKING:
     from transformers import TrainerCallback
+
+    from ..hparams import ModelArguments
 
 
 logger = logging.get_logger(__name__)
@@ -173,6 +177,58 @@ def run_exp(args: Optional[dict[str, Any]] = None, callbacks: Optional[list["Tra
         _training_function(config={"args": args, "callbacks": callbacks})
 
 
+def _fix_tokenizer_config_for_compat(export_dir: str, model_args: "ModelArguments") -> None:
+    r"""Make the exported tokenizer config loadable with transformers<5 (e.g., vLLM pinned to transformers 4.x).
+
+    transformers>=5 may save ``tokenizer_class: TokenizersBackend`` and a list-valued ``extra_special_tokens``,
+    neither of which can be parsed by transformers 4.x.
+    """
+    config_path = os.path.join(export_dir, "tokenizer_config.json")
+    if not os.path.isfile(config_path):
+        return
+
+    with open(config_path, encoding="utf-8") as f:
+        tokenizer_config = json.load(f)
+
+    changed = False
+    extra_special_tokens = tokenizer_config.get("extra_special_tokens")
+    if isinstance(extra_special_tokens, list):  # transformers 4.x expects a dict here
+        additional_special_tokens = tokenizer_config.get("additional_special_tokens") or []
+        additional_special_tokens += [tok for tok in extra_special_tokens if tok not in additional_special_tokens]
+        tokenizer_config["additional_special_tokens"] = additional_special_tokens
+        tokenizer_config.pop("extra_special_tokens")
+        changed = True
+
+    if tokenizer_config.get("tokenizer_class") == "TokenizersBackend":  # not a valid class in transformers 4.x
+        tokenizer_class = None
+        try:
+            base_config_path = cached_file(
+                model_args.model_name_or_path,
+                "tokenizer_config.json",
+                cache_dir=model_args.cache_dir,
+                revision=model_args.model_revision,
+                token=model_args.hf_hub_token,
+                _raise_exceptions_for_missing_entries=False,
+            )
+            if base_config_path is not None:
+                with open(base_config_path, encoding="utf-8") as f:
+                    tokenizer_class = json.load(f).get("tokenizer_class")
+        except Exception:
+            pass
+
+        if tokenizer_class in (None, "TokenizersBackend"):
+            tokenizer_class = "PreTrainedTokenizerFast"
+
+        tokenizer_config["tokenizer_class"] = tokenizer_class
+        changed = True
+
+    if changed:
+        with open(config_path, "w", encoding="utf-8") as f:
+            f.write(json.dumps(tokenizer_config, indent=2, sort_keys=True, ensure_ascii=False) + "\n")
+
+        logger.info_rank0("Rewrote tokenizer_config.json to stay compatible with transformers<5.")
+
+
 def export_model(args: Optional[dict[str, Any]] = None) -> None:
     model_args, data_args, finetuning_args, _ = get_infer_args(args)
 
@@ -270,6 +326,9 @@ def export_model(args: Optional[dict[str, Any]] = None) -> None:
             processor.save_pretrained(model_args.export_dir)
             if model_args.export_hub_model_id is not None:
                 processor.push_to_hub(model_args.export_hub_model_id, token=model_args.hf_hub_token)
+
+        if is_transformers_version_greater_than("5.0.0"):
+            _fix_tokenizer_config_for_compat(model_args.export_dir, model_args)
 
     except Exception as e:
         logger.warning_rank0(f"Cannot save tokenizer, please copy the files manually: {e}.")
