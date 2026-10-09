@@ -1,0 +1,152 @@
+[
+  {
+    "instruction": "Generate an SVG illustration for the given description.",
+    "input": "a red circle on a white canvas",
+    "output": "<|START_OF_SVG|><|start_of_circle|>cx=\"50\" cy=\"50\" r=\"40\" fill=\"red\"<|end_of_circle|><|END_OF_SVG|>"
+  },
+  {
+    "instruction": "Generate an SVG illustration for the given description.",
+    "input": "a blue square",
+    "output": "<|START_OF_SVG|><|start_of_rect|>x=\"20\" y=\"20\" width=\"60\" height=\"60\" fill=\"blue\"<|end_of_rect|><|END_OF_SVG|>"
+  },
+  {
+    "instruction": "Generate an SVG illustration for the given description.",
+    "input": "a green ellipse stretched horizontally",
+    "output": "<|START_OF_SVG|><|start_of_ellipse|>cx=\"50\" cy=\"50\" rx=\"40\" ry=\"20\" fill=\"green\"<|end_of_ellipse|><|END_OF_SVG|>"
+  },
+  {
+    "instruction": "Generate an SVG illustration for the given description.",
+    "input": "a black diagonal line drawn as a path",
+    "output": "<|START_OF_SVG|><|start_of_path|>d=\"M10 10 L90 90\" stroke=\"black\" stroke-width=\"2\"<|end_of_path|><|END_OF_SVG|>"
+  },
+  {
+    "instruction": "Generate an SVG illustration for the given description.",
+    "input": "the word Hi in dark gray",
+    "output": "<|START_OF_SVG|><|start_of_text|>x=\"10\" y=\"55\" font-size=\"40\" fill=\"#333\">Hi<|end_of_text|><|END_OF_SVG|>"
+  },
+  {
+    "instruction": "Generate an SVG illustration for the given description.",
+    "input": "two stacked rectangles grouped together",
+    "output": "<|START_OF_SVG|><|start_of_g|><|start_of_rect|>x=\"10\" y=\"10\" width=\"80\" height=\"30\" fill=\"orange\"<|end_of_rect|><|start_of_rect|>x=\"10\" y=\"60\" width=\"80\" height=\"30\" fill=\"purple\"<|end_of_rect|><|end_of_g|><|END_OF_SVG|>"
+  },
+  {
+    "instruction": "Generate an SVG illustration for the given description.",
+    "input": "a yellow circle inside a thin black border circle",
+    "output": "<|START_OF_SVG|><|start_of_circle|>cx=\"50\" cy=\"50\" r=\"45\" fill=\"none\" stroke=\"black\"<|end_of_circle|><|start_of_circle|>cx=\"50\" cy=\"50\" r=\"25\" fill=\"yellow\"<|end_of_circle|><|END_OF_SVG|>"
+  },
+  {
+    "instruction": "Generate an SVG illustration for the given description.",
+    "input": "a triangle drawn with a path",
+    "output": "<|START_OF_SVG|><|start_of_path|>d=\"M50 10 L90 90 L10 90 Z\" fill=\"teal\"<|end_of_path|><|END_OF_SVG|>"
+  },
+  {
+    "instruction": "Generate an SVG illustration for the given description.",
+    "input": "a rounded rectangle in light blue",
+    "output": "<|START_OF_SVG|><|start_of_rect|>x=\"15\" y=\"25\" width=\"70\" height=\"50\" rx=\"10\" fill=\"lightblue\"<|end_of_rect|><|END_OF_SVG|>"
+  },
+  {
+    "instruction": "Generate an SVG illustration for the given description.",
+    "input": "a small circle next to a small square",
+    "output": "<|START_OF_SVG|><|start_of_circle|>cx=\"30\" cy=\"50\" r=\"15\" fill=\"crimson\"<|end_of_circle|><|start_of_rect|>x=\"55\" y=\"35\" width=\"30\" height=\"30\" fill=\"navy\"<|end_of_rect|><|END_OF_SVG|>"
+  },
+  {
+    "instruction": "Generate an SVG illustration for the given description.",
+    "input": "a horizontal red line",
+    "output": "<|START_OF_SVG|><|start_of_path|>d=\"M10 50 L90 50\" stroke=\"red\" stroke-width=\"4\"<|end_of_path|><|END_OF_SVG|>"
+  },
+  {
+    "instruction": "Generate an SVG illustration for the given description.",
+    "input": "a styled blue heading text that says SVG",
+    "output": "<|START_OF_SVG|><|start_of_style|>.title { fill: blue; font-weight: bold; }<|end_of_style|><|start_of_text|>x=\"20\" y=\"55\" class=\"title\" font-size=\"36\">SVG<|end_of_text|><|END_OF_SVG|>"
+  },
+  {
+    "instruction": "Generate an SVG illustration for the given description.",
+    "input": "three dots in a row",
+    "output": "<|START_OF_SVG|><|start_of_g|><|start_of_circle|>cx=\"25\" cy=\"50\" r=\"8\" fill=\"black\"<|end_of_circle|><|start_of_circle|>cx=\"50\" cy=\"50\" r=\"8\" fill=\"black\"<|end_of_circle|><|start_of_circle|>cx=\"75\" cy=\"50\" r=\"8\" fill=\"black\"<|end_of_circle|><|end_of_g|><|END_OF_SVG|>"
+  },
+  {
+    "instruction": "Generate an SVG illustration for the given description.",
+    "input": "an orange ellipse",
+    "output": "<|START_OF_SVG|><|start_of_ellipse|>cx=\"50\" cy=\"50\" rx=\"35\" ry=\"25\" fill=\"orange\"<|end_of_ellipse|><|END_OF_SVG|>"
+  },
+  {
+    "instruction": "Generate an SVG illustration for the given description.",
+    "input": "a checkmark drawn as a path",
+    "output": "<|START_OF_SVG|><|start_of_path|>d=\"M20 50 L40 70 L80 25\" stroke=\"green\" stroke-width=\"6\" fill=\"none\"<|end_of_path|><|END_OF_SVG|>"
+  },
+  {
+    "instruction": "Generate an SVG illustration for the given description.",
+    "input": "a purple square with a centered white circle",
+    "output": "<|START_OF_SVG|><|start_of_rect|>x=\"10\" y=\"10\" width=\"80\" height=\"80\" fill=\"purple\"<|end_of_rect|><|start_of_circle|>cx=\"50\" cy=\"50\" r=\"20\" fill=\"white\"<|end_of_circle|><|END_OF_SVG|>"
+  },
+  {
+    "instruction": "Generate an SVG illustration for the given description.",
+    "input": "the letter A in red",
+    "output": "<|START_OF_SVG|><|start_of_text|>x=\"35\" y=\"60\" font-size=\"48\" fill=\"red\">A<|end_of_text|><|END_OF_SVG|>"
+  },
+  {
+    "instruction": "Generate an SVG illustration for the given description.",
+    "input": "a wavy line path in blue",
+    "output": "<|START_OF_SVG|><|start_of_path|>d=\"M10 50 Q30 20 50 50 T90 50\" stroke=\"blue\" stroke-width=\"3\" fill=\"none\"<|end_of_path|><|END_OF_SVG|>"
+  },
+  {
+    "instruction": "Generate an SVG illustration for the given description.",
+    "input": "a group with a circle and a label below it",
+    "output": "<|START_OF_SVG|><|start_of_g|><|start_of_circle|>cx=\"50\" cy=\"35\" r=\"20\" fill=\"gold\"<|end_of_circle|><|start_of_text|>x=\"30\" y=\"80\" font-size=\"16\">sun<|end_of_text|><|end_of_g|><|END_OF_SVG|>"
+  },
+  {
+    "instruction": "Generate an SVG illustration for the given description.",
+    "input": "a tall thin rectangle",
+    "output": "<|START_OF_SVG|><|start_of_rect|>x=\"40\" y=\"10\" width=\"20\" height=\"80\" fill=\"saddlebrown\"<|end_of_rect|><|END_OF_SVG|>"
+  },
+  {
+    "instruction": "Generate an SVG illustration for the given description.",
+    "input": "a pink circle",
+    "output": "<|START_OF_SVG|><|start_of_circle|>cx=\"50\" cy=\"50\" r=\"30\" fill=\"pink\"<|end_of_circle|><|END_OF_SVG|>"
+  },
+  {
+    "instruction": "Generate an SVG illustration for the given description.",
+    "input": "a closed pentagon path",
+    "output": "<|START_OF_SVG|><|start_of_path|>d=\"M50 10 L90 40 L75 90 L25 90 L10 40 Z\" fill=\"indigo\"<|end_of_path|><|END_OF_SVG|>"
+  },
+  {
+    "instruction": "Generate an SVG illustration for the given description.",
+    "input": "two overlapping ellipses",
+    "output": "<|START_OF_SVG|><|start_of_ellipse|>cx=\"40\" cy=\"50\" rx=\"30\" ry=\"18\" fill=\"cyan\"<|end_of_ellipse|><|start_of_ellipse|>cx=\"60\" cy=\"50\" rx=\"30\" ry=\"18\" fill=\"magenta\"<|end_of_ellipse|><|END_OF_SVG|>"
+  },
+  {
+    "instruction": "Generate an SVG illustration for the given description.",
+    "input": "a green rectangle with the word go centered",
+    "output": "<|START_OF_SVG|><|start_of_rect|>x=\"10\" y=\"30\" width=\"80\" height=\"40\" fill=\"green\"<|end_of_rect|><|start_of_text|>x=\"35\" y=\"57\" font-size=\"24\" fill=\"white\">go<|end_of_text|><|END_OF_SVG|>"
+  },
+  {
+    "instruction": "Generate an SVG illustration for the given description.",
+    "input": "a simple house: a square base and a triangle roof",
+    "output": "<|START_OF_SVG|><|start_of_g|><|start_of_rect|>x=\"25\" y=\"50\" width=\"50\" height=\"40\" fill=\"sienna\"<|end_of_rect|><|start_of_path|>d=\"M20 50 L50 20 L80 50 Z\" fill=\"firebrick\"<|end_of_path|><|end_of_g|><|END_OF_SVG|>"
+  },
+  {
+    "instruction": "Generate an SVG illustration for the given description.",
+    "input": "a dashed black circle outline",
+    "output": "<|START_OF_SVG|><|start_of_circle|>cx=\"50\" cy=\"50\" r=\"35\" fill=\"none\" stroke=\"black\" stroke-dasharray=\"6 4\"<|end_of_circle|><|END_OF_SVG|>"
+  },
+  {
+    "instruction": "Generate an SVG illustration for the given description.",
+    "input": "a styled red box class applied to a rectangle",
+    "output": "<|START_OF_SVG|><|start_of_style|>.box { fill: red; stroke: black; }<|end_of_style|><|start_of_rect|>x=\"20\" y=\"20\" width=\"60\" height=\"60\" class=\"box\"<|end_of_rect|><|END_OF_SVG|>"
+  },
+  {
+    "instruction": "Generate an SVG illustration for the given description.",
+    "input": "an arrow pointing right drawn as a path",
+    "output": "<|START_OF_SVG|><|start_of_path|>d=\"M10 50 L70 50 M55 35 L70 50 L55 65\" stroke=\"black\" stroke-width=\"4\" fill=\"none\"<|end_of_path|><|END_OF_SVG|>"
+  },
+  {
+    "instruction": "Generate an SVG illustration for the given description.",
+    "input": "a small grey ellipse shadow under a black circle",
+    "output": "<|START_OF_SVG|><|start_of_g|><|start_of_ellipse|>cx=\"50\" cy=\"80\" rx=\"25\" ry=\"6\" fill=\"lightgray\"<|end_of_ellipse|><|start_of_circle|>cx=\"50\" cy=\"45\" r=\"25\" fill=\"black\"<|end_of_circle|><|end_of_g|><|END_OF_SVG|>"
+  },
+  {
+    "instruction": "Generate an SVG illustration for the given description.",
+    "input": "the number 1 in blue",
+    "output": "<|START_OF_SVG|><|start_of_text|>x=\"42\" y=\"62\" font-size=\"44\" fill=\"blue\">1<|end_of_text|><|END_OF_SVG|>"
+  }
+]
