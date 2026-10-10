@@ -33,7 +33,14 @@ from typing_extensions import override
 
 from ..extras import logging
 from ..extras.constants import TRAINER_LOG, V_HEAD_SAFE_WEIGHTS_NAME, V_HEAD_WEIGHTS_NAME
-from ..extras.misc import get_peak_memory, is_env_enabled, is_torch_cuda_available, is_torch_npu_available, use_ray
+from ..extras.misc import (
+    get_peak_memory,
+    is_env_enabled,
+    is_torch_cuda_available,
+    is_torch_npu_available,
+    is_torch_xpu_available,
+    use_ray,
+)
 from ..extras.packages import is_safetensors_available
 
 
@@ -391,6 +398,8 @@ class TorchProfilerCallback(TrainerCallback):
                 activities.append(torch.profiler.ProfilerActivity.CUDA)
             if is_torch_npu_available():
                 activities.append(torch.profiler.ProfilerActivity.NPU)
+            if is_torch_xpu_available():
+                activities.append(torch.profiler.ProfilerActivity.XPU)
         except Exception:
             pass
 
@@ -508,6 +517,8 @@ class ModuleProfilerCallback(TrainerCallback):
             return torch.cuda.Event, torch.cuda.synchronize
         if is_torch_npu_available():
             return torch.npu.Event, torch.npu.synchronize
+        if is_torch_xpu_available():
+            return torch.xpu.Event, torch.xpu.synchronize
         return None, None
 
     def __init__(self, profile_modules: str) -> None:
@@ -563,7 +574,7 @@ class ModuleProfilerCallback(TrainerCallback):
     @override
     def on_train_begin(self, args: "TrainingArguments", state: "TrainerState", control: "TrainerControl", **kwargs):
         if not self.enabled:
-            logger.warning_rank0("ModuleProfiler: no supported accelerator (CUDA/NPU) found, profiling disabled.")
+            logger.warning_rank0("ModuleProfiler: no supported accelerator (CUDA/NPU/XPU) found, profiling disabled.")
             return
 
         model = kwargs.get("model")

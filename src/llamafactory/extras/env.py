@@ -31,7 +31,7 @@ def print_env() -> None:
     import peft
     import torch
     import transformers
-    from transformers.utils import is_torch_cuda_available, is_torch_npu_available
+    from transformers.utils import is_torch_cuda_available, is_torch_npu_available, is_torch_xpu_available
 
     info = OrderedDict(
         {
@@ -56,6 +56,13 @@ def print_env() -> None:
         info["PyTorch version"] += " (NPU)"
         info["NPU type"] = torch.npu.get_device_name()
         info["CANN version"] = torch.version.cann
+
+    if is_torch_xpu_available():
+        info["PyTorch version"] += " (XPU)"
+        info["XPU type"] = torch.xpu.get_device_name()
+        info["XPU number"] = torch.xpu.device_count()
+        info["XPU memory"] = f"{torch.xpu.mem_get_info()[1] / (1024**3):.2f}GB"
+        info["XPU driver version"] = torch.xpu.get_device_properties().driver_version
 
     try:
         import trl  # type: ignore
