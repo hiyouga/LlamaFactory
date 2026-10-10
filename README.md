@@ -569,11 +569,21 @@ python -c "import torch; print(torch.cuda.is_available())"
 
 If you see `True` then you have successfully installed PyTorch with CUDA support.
 
+For AMD ROCm users, install PyTorch from [AMD's TheRock index](https://github.com/ROCm/TheRock/blob/main/RELEASES.md) instead. Replace `gfx1201` with the target of your GPU, which `rocm-bootstrap-detect` prints (install it with `pip install rocm-bootstrap`), or look it up in the [GFX target table](https://github.com/ROCm/TheRock/blob/main/RELEASES.md#gfx-target-lookup-table):
+
+```bash
+pip uninstall torch torchvision torchaudio
+pip install --index-url https://stable.repo.amd.com/rocm/whl-next/ "torch[device-gfx1201]" "torchvision[device-gfx1201]" torchaudio
+python -c "import torch; print(torch.cuda.is_available(), torch.version.hip)"
+```
+
+The ROCm build uses the same `torch.cuda` API, so `True` means the GPU is usable. On `gfx1101`, `gfx1102`, `gfx1150`, `gfx1151` and `gfx1200`, PyTorch only enables the AOTriton flash and memory-efficient SDPA backends with `set TORCH_ROCM_AOTRITON_ENABLE_EXPERIMENTAL=1`. Without it, `scaled_dot_product_attention` on these GPUs falls back to the math backend, which is much slower and uses far more memory.
+
 Try `dataloader_num_workers: 0` if you encounter `Can't pickle local object` error.
 
 #### Install BitsAndBytes
 
-To enable Quantized LoRA (QLoRA) on Windows, you need to install bitsandbytes.
+To enable Quantized LoRA (QLoRA) on Windows, you need to install bitsandbytes. Official releases since 0.50.2 include ROCm builds for Windows as well, so the same package works on AMD GPUs.
 
 For most users, it is recommended to install the latest official release:
 
