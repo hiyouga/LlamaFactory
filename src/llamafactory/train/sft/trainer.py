@@ -31,6 +31,7 @@ from ...extras.constants import IGNORE_INDEX
 from ..callbacks import SaveProcessorCallback
 from ..fp8_utils import configure_fp8_environment, patch_accelerator_for_fp8, verify_fp8_status
 from ..trainer_utils import create_custom_optimizer, create_custom_scheduler
+from .mtp_utils import MtpHiddenStateHook, compute_mtp_loss, extend_layer_types, get_base_lm_model
 
 
 if TYPE_CHECKING:
@@ -105,6 +106,35 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
                 self.ref_model = self.accelerator.prepare_model(self.ref_model, evaluation_mode=True)
                 self.ref_model.eval()
 
+        # ------------------------------------------------------------------
+        # Non-intrusive Multi-Token Prediction (MTP) setup.
+        # Attach MtpModel to the base model before any distributed wrapping.
+        # ------------------------------------------------------------------
+        self.mtp_hook = None
+        self.mtp_loss_weight = 0.0
+        if finetuning_args.num_mtp_layers > 0:
+            if finetuning_args.use_asft_loss:
+                raise ValueError("MTP training is currently incompatible with ASFT loss.")
+
+            try:
+                from transformers.modeling_layers import MtpModel
+            except ImportError as e:
+                raise ImportError(
+                    "MTP training requires `transformers>=5.14.0`, "
+                    'please install it via `pip install "transformers>=5.14.0"`.'
+                ) from e
+
+            base_model_for_mtp = self.model.get_base_model() if hasattr(self.model, "get_base_model") else self.model
+            extend_layer_types(base_model_for_mtp.config, finetuning_args.num_mtp_layers)
+            self.model.mtp = MtpModel(base_model_for_mtp, finetuning_args.num_mtp_layers)
+            self.mtp_loss_weight = finetuning_args.mtp_loss_weight
+            text_model = get_base_lm_model(base_model_for_mtp)
+            self.mtp_hook = MtpHiddenStateHook(text_model.norm)
+            logger.info_rank0(
+                f"Attached external MtpModel with {finetuning_args.num_mtp_layers} layers, "
+                f"loss weight {self.mtp_loss_weight}."
+            )
+
         if finetuning_args.use_dft_loss:
             from ..trainer_utils import dft_loss_func
 
@@ -158,8 +188,26 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
                 ref_logits = ref_outputs.logits
             outputs = model(**inputs)
             return self.compute_loss_func(outputs, inputs["labels"], ref_logits)
-        else:
-            return super().compute_loss(model, inputs, *args, **kwargs)
+
+        base_loss = super().compute_loss(model, inputs, *args, **kwargs)
+
+        if self.mtp_hook is not None and "labels" in inputs:
+            hidden = self.mtp_hook.hidden
+            self.mtp_hook.hidden = None
+            if hidden is not None:
+                unwrapped_model = self.accelerator.unwrap_model(model)
+                mtp_model = getattr(unwrapped_model, "mtp", None)
+                if mtp_model is not None:
+                    mtp_loss = compute_mtp_loss(
+                        mtp_model,
+                        input_ids=inputs["input_ids"],
+                        main_hidden_states=hidden,
+                        labels=inputs["labels"],
+                        attention_mask=inputs.get("attention_mask"),
+                    )
+                    return base_loss + self.mtp_loss_weight * mtp_loss
+
+        return base_loss
 
     @override
     def prediction_step(
@@ -187,6 +235,22 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
             generated_tokens = generated_tokens.contiguous()
 
         return loss, generated_tokens, labels
+
+    @override
+    def save_model(self, output_dir: Optional[str] = None, _internal_call: bool = False):
+        r"""Save the base model as usual, plus an `mtp/` sub-directory if MTP is enabled."""
+        super().save_model(output_dir, _internal_call)
+        if output_dir is None:
+            return
+
+        unwrapped_model = self.accelerator.unwrap_model(self.model)
+        mtp_model = getattr(unwrapped_model, "mtp", None)
+        if mtp_model is not None:
+            state_dict = self.accelerator.get_state_dict(mtp_model)
+            if self.is_world_process_zero():
+                mtp_dir = os.path.join(output_dir, "mtp")
+                mtp_model.save_pretrained(mtp_dir, state_dict=state_dict)
+                logger.info_rank0(f"Saved external MTP weights to {mtp_dir}")
 
     def save_predictions(
         self, dataset: "Dataset", predict_results: "PredictionOutput", skip_special_tokens: bool = True
