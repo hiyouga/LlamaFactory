@@ -340,6 +340,7 @@ class MultiModalDataCollatorForSeq2Seq(DataCollatorForSeq2Seq):
         batch_imglens, batch_vidlens, batch_audlens, batch_input_ids = [], [], [], []
         packing_params_list: list[dict[str, Any] | None] = []
         for feature in features:
+            feature.pop("length", None)  # helper column for length-grouped sampling, not needed by the model
             images = feature.pop("images", None) or []
             videos = feature.pop("videos", None) or []
             audios = feature.pop("audios", None) or []
