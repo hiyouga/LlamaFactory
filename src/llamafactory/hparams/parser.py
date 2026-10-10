@@ -33,7 +33,13 @@ from transformers.utils import is_torch_bf16_gpu_available, is_torch_npu_availab
 
 from ..extras import logging
 from ..extras.constants import CHECKPOINT_NAMES, EngineName
-from ..extras.misc import check_dependencies, check_version, get_current_device, is_env_enabled
+from ..extras.misc import (
+    check_dependencies,
+    check_version,
+    get_current_device,
+    is_env_enabled,
+    is_torch_supa_available,
+)
 from ..extras.packages import is_mcore_adapter_available, is_megatron_bridge_available
 from .data_args import DataArguments
 from .evaluation_args import EvaluationArguments
@@ -223,6 +229,20 @@ def _set_env_vars() -> None:
         # avoid use fork method on NPU devices, see https://github.com/hiyouga/LLaMA-Factory/issues/7447
         os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
 
+    if is_torch_supa_available():
+        # register the fused SUDNN operators (torch.ops.sudnn.*) used by the supa kernel path.
+        # torch_supa itself is auto-loaded on `import torch`, but torch_supa_ext is not.
+        try:
+            import torch_supa_ext  # noqa: F401
+        except Exception:
+            logger.warning_rank0_once(
+                "Failed to import torch_supa_ext; fused supa operators (e.g. sudnn.rms_norm_func) "
+                "will be unavailable and the eager path may be extremely slow."
+            )
+
+        # supa uses fork-unsafe device handles; align with the NPU workaround.
+        os.environ["VLLM_WORKER_MULTIPROC_METHOD"] = "spawn"
+
 
 def _verify_model_args(
     model_args: "ModelArguments",
@@ -260,6 +280,9 @@ def _check_extra_dependencies(
         check_version("accelerate-kt", mandatory=True)
 
     if model_args.use_unsloth:
+        if is_torch_supa_available():
+            raise ValueError("`use_unsloth` is not supported on supa devices.")
+
         check_version("unsloth", mandatory=True)
 
     if model_args.enable_liger_kernel:
@@ -496,7 +519,11 @@ def get_train_args(args: dict[str, Any] | list[str] | None = None) -> _TRAIN_CLS
         raise ValueError("Please use scripts/pissa_init.py to initialize PiSSA in DeepSpeed ZeRO-3.")
 
     if finetuning_args.pure_bf16:
-        if not (is_torch_bf16_gpu_available() or (is_torch_npu_available() and torch.npu.is_bf16_supported())):
+        if not (
+            is_torch_bf16_gpu_available()
+            or (is_torch_npu_available() and torch.npu.is_bf16_supported())
+            or (is_torch_supa_available() and torch.supa.is_bf16_supported())
+        ):
             raise ValueError("This device does not support `pure_bf16`.")
 
         if is_deepspeed_zero3_enabled():

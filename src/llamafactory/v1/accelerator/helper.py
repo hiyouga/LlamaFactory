@@ -45,6 +45,7 @@ class DeviceType(StrEnum):
     META = "meta"
     MPS = "mps"
     NPU = "npu"
+    SUPA = "supa"
     XPU = "xpu"
 
 

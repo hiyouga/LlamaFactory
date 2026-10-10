@@ -37,6 +37,11 @@ def apply_liger_kernel(
     if not is_trainable or not model_args.enable_liger_kernel:
         return
 
+    if get_device_name() == "supa":
+        # liger kernels are Triton/CUDA(-NPU) specific and do not run on supa.
+        logger.warning_rank0("Liger kernel is not supported on supa, skipping. Use fused supa RMSNorm instead.")
+        return
+
     model_type = getattr(config, "model_type", None)
     if model_type == "gemma":
         from liger_kernel.transformers import apply_liger_kernel_to_gemma as apply_liger_kernel

@@ -25,11 +25,13 @@ from .ops.mlp.cuda_fused_moe import CudaFusedMoEKernel  # noqa: F401
 from .ops.mlp.npu_fused_moe import NpuFusedMoEKernel  # noqa: F401
 from .ops.mlp.npu_swiglu import NpuSwiGluKernel  # noqa: F401
 from .ops.rms_norm.npu_rms_norm import NpuRMSNormKernel  # noqa: F401
+from .ops.rms_norm.supa_rms_norm import SupaRMSNormKernel  # noqa: F401
 from .ops.rope.npu_rope import NpuRoPEKernel  # noqa: F401
 
 
 _AUTO_KERNELS = {
     DeviceType.NPU: ("npu_fused_moe", "npu_fused_rmsnorm", "npu_fused_rope", "npu_fused_swiglu"),
+    DeviceType.SUPA: ("supa_fused_rmsnorm",),
 }
 
 
