@@ -296,6 +296,9 @@ def _check_extra_dependencies(
     if finetuning_args.use_megatron_bridge:
         check_version("megatron-bridge", mandatory=True)
 
+    if finetuning_args.stage == "ppo":
+        check_version("trl>=0.8.6,<=0.9.6", mandatory=True)
+
     if training_args is not None:
         if training_args.deepspeed:
             check_version("deepspeed", mandatory=True)
