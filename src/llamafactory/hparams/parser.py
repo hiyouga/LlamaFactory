@@ -269,7 +269,7 @@ def _check_extra_dependencies(
         check_version("mixture-of-depth>=1.1.6", mandatory=True)
 
     if model_args.infer_backend == EngineName.VLLM:
-        check_version("vllm>=0.4.3,<=0.11.0")
+        check_version("vllm>=0.4.3,<0.29.0")
         check_version("vllm", mandatory=True)
     elif model_args.infer_backend == EngineName.SGLANG:
         check_version("sglang>=0.4.5")
