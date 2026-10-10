@@ -195,7 +195,9 @@ def read_cloud_json(cloud_path: str) -> list[Any]:
         fs = setup_fs(cloud_path)  # try again with credentials
 
     # filter out non-JSON files
-    files = [x["Key"] for x in fs.listdir(cloud_path)] if fs.isdir(cloud_path) else [cloud_path]
+    # "name" is the fsspec-standard field populated by every backend's listdir() (s3fs sets both
+    # "Key" and "name"; gcsfs only sets "name"), unlike "Key" which is an S3-only convenience alias.
+    files = [x["name"] for x in fs.listdir(cloud_path)] if fs.isdir(cloud_path) else [cloud_path]
     files = list(filter(lambda file: file.endswith(".json") or file.endswith(".jsonl"), files))
     if not files:
         raise ValueError(f"No JSON/JSONL files found in the specified path: {cloud_path}.")
