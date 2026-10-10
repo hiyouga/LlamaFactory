@@ -335,12 +335,15 @@ def _ray_training_function(ray_args: "RayArguments", config: dict[str, Any]) -> 
             raise ValueError(f"The `master_addr` ({master_addr}) is not in Ray cluster or not alive ")
 
     # create placementgroup for resource management
-    pg, bundle = get_placement_group(total_devices)
+    pg, bundle = get_placement_group(num_workers)
     ray.get(pg.ready())
     logger.info(f"Create placement group with {num_workers} bundles: {bundle}")
 
-    # get sorted_bundle_indices
-    sorted_bundle_indices = sort_placement_group_by_node_ip(pg, master_addr)
+    # get sorted_bundle_indices and resolve effective master_addr
+    # When the head node has no GPU, no bundles land there, so rank 0 will be placed on a
+    # worker node. We must use that worker node's IP as master_addr so that MASTER_ADDR in
+    # all workers points to the node where rank 0 actually runs, preventing NCCL hang.
+    sorted_bundle_indices, master_addr = sort_placement_group_by_node_ip(pg, master_addr)
 
     # get master port
     if master_port is None:
