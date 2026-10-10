@@ -304,15 +304,21 @@ class Gemma4ToolUtils(ToolUtils):
             # `function_formatter` writes dict arguments as `k:v,...` inside `{...}`.
             # The extractor captures only the inner text, so re-wrap it to parse as JSON object.
             object_like_text = "{" + text + "}"
-            # Convert Gemma string markers (<|"|>value<|"|>) to valid JSON strings.
+
+            # Convert Gemma string markers (<|"|>value<|"|>) to valid JSON strings and quote unquoted
+            # object keys in a single left-to-right pass, so text inside a string is never read as a key.
+            def _normalize(match: re.Match) -> str:
+                if match.group(1) is not None:
+                    return json.dumps(match.group(1), ensure_ascii=False)
+
+                return f'{match.group(2)}"{match.group(3)}"{match.group(4)}'
+
             normalized = re.sub(
-                r"<\|\"\|\>(.*?)<\|\"\|\>",
-                lambda m: json.dumps(m.group(1), ensure_ascii=False),
+                r"<\|\"\|\>(.*?)<\|\"\|\>|(^|[{\s,])([A-Za-z_][A-Za-z0-9_]*)(\s*:)",
+                _normalize,
                 object_like_text,
                 flags=re.DOTALL,
             )
-            # Quote unquoted object keys so the payload can be parsed by json.loads.
-            normalized = re.sub(r"(^|[{\s,])([A-Za-z_][A-Za-z0-9_]*)(\s*:)", r'\1"\2"\3', normalized)
             try:
                 return json.loads(normalized)
             except json.JSONDecodeError:

@@ -391,6 +391,33 @@ def test_lfm2_tool_round_trip():
 
 
 @pytest.mark.runs_on(["cpu", "mps", "xpu"])
+def test_gemma4_tool_extractor_colon_in_string():
+    formatter = ToolFormatter(tool_format="gemma4")
+    result = """<|tool_call>call:send_email{body:<|"|>Hi Tom, Re: the plan<|"|>,to:<|"|>tom<|"|>}<tool_call|>"""
+    assert formatter.extract(result) == [("send_email", """{"body": "Hi Tom, Re: the plan", "to": "tom"}""")]
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
+def test_gemma4_tool_round_trip():
+    formatter = FunctionFormatter(slots=["{{content}}"], tool_format="gemma4")
+    tool_formatter = ToolFormatter(tool_format="gemma4")
+    original = {
+        "name": "search",
+        "arguments": {
+            "query": "error code: 404",
+            "filters": {"note": "a, b: c", "tags": ["x: y", "z"]},
+            "limit": 5,
+            "exact": False,
+        },
+    }
+    formatted = formatter.apply(content=json.dumps(original))
+    extracted = tool_formatter.extract(formatted[0])
+    assert len(extracted) == 1
+    assert extracted[0][0] == original["name"]
+    assert json.loads(extracted[0][1]) == original["arguments"]
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
 def test_minicpm5_function_formatter():
     formatter = FunctionFormatter(slots=["{{content}}<|im_end|>\n"], tool_format="minicpm5")
     tool_calls = json.dumps(FUNCTION)
