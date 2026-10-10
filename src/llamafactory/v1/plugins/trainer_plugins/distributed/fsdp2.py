@@ -549,11 +549,12 @@ class FSDP2Engine:
                         renamed_key = key
                         source_pattern = None
                         if conversion_ctx is not None:
+                            # pass prefix positionally: transformers 5.10 renamed the kwarg to `base_model_prefix`
                             renamed_key, source_pattern = conversion_ctx["rename_source_key"](
                                 key,
                                 conversion_ctx["renamings"],
                                 conversion_ctx["converters"],
-                                prefix=conversion_ctx["prefix"],
+                                conversion_ctx["prefix"],
                                 meta_state_dict=conversion_ctx["meta_state_dict"],
                             )
 
