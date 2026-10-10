@@ -38,7 +38,7 @@ from transformers.utils.versions import require_version
 from . import logging
 
 
-_is_fp16_available = is_torch_npu_available() or is_torch_cuda_available()
+_is_fp16_available = is_torch_npu_available() or is_torch_cuda_available() or is_torch_xpu_available()
 try:
     _is_bf16_available = is_torch_bf16_gpu_available() or (is_torch_npu_available() and torch.npu.is_bf16_supported())
 except Exception:
