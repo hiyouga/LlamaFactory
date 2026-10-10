@@ -48,9 +48,11 @@ from .rm import run_rm
 from .sft import run_sft
 from .trainer_utils import (
     get_placement_group,
+    get_placement_group_node_ips,
     get_ray_head_node_ip,
     get_ray_remote_config_for_worker,
     get_swanlab_callback,
+    resolve_master_addr,
     sort_placement_group_by_node_ip,
 )
 
@@ -334,13 +336,17 @@ def _ray_training_function(ray_args: "RayArguments", config: dict[str, Any]) -> 
         if master_addr not in nodes:
             raise ValueError(f"The `master_addr` ({master_addr}) is not in Ray cluster or not alive ")
 
-    # create placementgroup for resource management
-    pg, bundle = get_placement_group(total_devices)
+    # create placementgroup for resource management, one bundle per worker
+    pg, bundle = get_placement_group(num_workers, num_cpus_per_worker=ray_args.ray_num_cpus_per_worker)
     ray.get(pg.ready())
     logger.info(f"Create placement group with {num_workers} bundles: {bundle}")
 
-    # get sorted_bundle_indices
-    sorted_bundle_indices = sort_placement_group_by_node_ip(pg, master_addr)
+    # get sorted_bundle_indices, rank 0 goes to `master_addr` when a bundle was placed there
+    bundle_node_ips = get_placement_group_node_ips(pg)
+    sorted_bundle_indices = sort_placement_group_by_node_ip(pg, master_addr, bundle_node_ips=bundle_node_ips)
+
+    # rank 0 may not have landed on `master_addr`, e.g. a head node without devices
+    master_addr = resolve_master_addr(master_addr, bundle_node_ips, sorted_bundle_indices)
 
     # get master port
     if master_port is None:
@@ -363,6 +369,7 @@ def _ray_training_function(ray_args: "RayArguments", config: dict[str, Any]) -> 
             master_addr=master_addr,
             master_port=master_port,
             env=current_env,
+            num_cpus=bundle["CPU"],
         )
         worker = RayWorker.options(**remote_config).remote()
         workers.append(worker)
