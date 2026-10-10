@@ -695,6 +695,8 @@ See [examples/README.md](examples/README.md) for advanced usage (including distr
 llamafactory-cli webui
 ```
 
+Set `LLAMABOARD_UI=modern` to try the redesigned layout (sidebar navigation, light / dark themes; requires Gradio 5).
+
 ### Build Docker
 
 For CUDA users:
