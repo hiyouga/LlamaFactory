@@ -251,6 +251,9 @@ def _get_preprocessed_dataset(
             load_from_cache_file=(not data_args.overwrite_cache) or (training_args.local_process_index != 0),
             desc="Running tokenizer on dataset",
         )
+        features = dataset_processor.get_dataset_features(dataset)
+        if features is not None:
+            kwargs["features"] = features
 
     dataset = dataset.map(
         dataset_processor.preprocess_dataset,
