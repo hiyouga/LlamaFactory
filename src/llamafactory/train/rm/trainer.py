@@ -117,16 +117,17 @@ class PairwiseTrainer(Trainer):
         if getattr(self.args, "save_safetensors", True):
             from collections import defaultdict
 
+            state_dict = state_dict.copy()
             ptrs = defaultdict(list)
             for name, tensor in state_dict.items():
                 if isinstance(tensor, torch.Tensor):
-                    ptrs[id(tensor)].append(name)
+                    ptrs[(tensor.device, tensor.data_ptr())].append(name)
 
             for names in ptrs.values():
                 if len(names) > 1:
                     names.sort()
                     for name in names[1:]:
-                        state_dict.pop(name, None)
+                        state_dict[name] = state_dict[name].clone()
 
         super()._save(output_dir, state_dict)
 
