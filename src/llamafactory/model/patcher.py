@@ -369,6 +369,9 @@ def patch_config(
     init_kwargs: dict[str, Any],
     is_trainable: bool,
 ) -> None:
+    if getattr(config, "model_type", None) == "xing4_0":
+        check_version("transformers>=5.0.0", mandatory=True)
+
     if model_args.compute_dtype is None:  # priority: bf16 > fp16 > fp32
         if model_args.infer_dtype != "auto" and not is_trainable:
             model_args.compute_dtype = getattr(torch, model_args.infer_dtype)

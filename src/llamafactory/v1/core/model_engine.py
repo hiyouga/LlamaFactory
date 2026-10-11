@@ -38,6 +38,7 @@ from ..accelerator.interface import DistributedInterface
 from ..config.model_args import ModelArguments, ModelClass
 from ..utils import logging
 from ..utils.helper import get_tokenizer, is_tokenizer
+from ..utils.packages import check_version
 from ..utils.types import HFConfig, HFModel, Processor
 from .rendering import Renderer
 
@@ -123,10 +124,14 @@ class ModelEngine:
 
     def _init_model_config(self) -> HFConfig:
         """Init model config."""
-        return AutoConfig.from_pretrained(
+        config = AutoConfig.from_pretrained(
             self.args.model,
             trust_remote_code=self.args.trust_remote_code,
         )
+        if getattr(config, "model_type", None) == "xing4_0":
+            check_version("transformers>=5.0.0", mandatory=True)
+
+        return config
 
     def _init_model(self) -> HFModel:
         """Init model.
