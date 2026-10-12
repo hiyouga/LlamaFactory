@@ -194,6 +194,14 @@ def export_model(args: Optional[dict[str, Any]] = None) -> None:
     if not isinstance(model, PreTrainedModel):
         raise ValueError("The model is not a `PreTrainedModel`, export aborted.")
 
+    if template.replace_eos:
+        # Export reloads the base config without the Trainer's special-token alignment.
+        model.config.eos_token_id = tokenizer.eos_token_id
+        eos_token_ids = model.generation_config.eos_token_id
+        eos_token_ids = [eos_token_ids] if isinstance(eos_token_ids, int) else (eos_token_ids or [])
+        if tokenizer.eos_token_id not in eos_token_ids:
+            model.generation_config.eos_token_id = [tokenizer.eos_token_id, *eos_token_ids]
+
     if getattr(model, "quantization_method", None) is not None:  # quantized model adopts float16 type
         setattr(model.config, "torch_dtype", torch.float16)
     else:
