@@ -129,6 +129,17 @@ class UlyssesAttention(torch.nn.Module):
         # in shape : e.g.,  [s/p:h:]
         # (bs, seq_len/N, head_cnt, head_size) -> (bs, seq_len, head_cnt/N, head_size)
         # scatter 2, gather 1
+        sp_world_size = get_ulysses_sequence_parallel_world_size(self.spg)
+        # apply_sequence_parallel() admits models whose KV head count divides the CP
+        # size, but the all2all splits the head dim with tensor_split, which hands the
+        # trailing ranks empty shards once there are fewer KV heads than ranks. Give
+        # each rank the KV head its query group needs by repeating heads in place.
+        num_kv_heads = key.shape[self.scatter_idx]
+        if num_kv_heads < sp_world_size:
+            repeats = sp_world_size // num_kv_heads
+            key = key.repeat_interleave(repeats, dim=self.scatter_idx)
+            value = value.repeat_interleave(repeats, dim=self.scatter_idx)
+
         q = SeqAllToAll4D.apply(self.spg, query, self.scatter_idx, self.gather_idx)
         k = SeqAllToAll4D.apply(self.spg, key, self.scatter_idx, self.gather_idx)
         v = SeqAllToAll4D.apply(self.spg, value, self.scatter_idx, self.gather_idx)
@@ -136,7 +147,6 @@ class UlyssesAttention(torch.nn.Module):
         if softmax_scale is None:
             softmax_scale = q.shape[-1] ** -0.5
 
-        sp_world_size = get_ulysses_sequence_parallel_world_size(self.spg)
         # HF FlashAttention only uses 2-D position IDs to detect packed sequences.
         position_ids = _get_text_position_ids(position_ids)
         if position_ids is not None:
@@ -261,7 +271,9 @@ def apply_ulysses_attention(model, cp_size: int, group: dist.ProcessGroup) -> No
         )
 
     assert num_attention_heads % cp_size == 0, "num_attention_heads must be divisible by cp_size"
-    assert num_key_value_heads % cp_size == 0, "num_key_value_heads must be divisible by cp_size"
+    assert num_key_value_heads % cp_size == 0 or cp_size % num_key_value_heads == 0, (
+        "one of num_key_value_heads and cp_size must be divisible by the other"
+    )
 
     origin_attn = transformers.modeling_flash_attention_utils._flash_attention_forward
     new_flash_attention_forward = partial(
