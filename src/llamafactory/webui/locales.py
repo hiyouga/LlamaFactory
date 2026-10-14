@@ -3101,6 +3101,13 @@ ALERTS = {
         "ko": "데모 모드에서는 훈련을 사용할 수 없습니다. 먼저 프라이빗 레포지토리로 작업 공간을 복제하십시오.",
         "ja": "デモモードではトレーニングは利用できません。最初にプライベートスペースに複製してください。",
     },
+    "err_dataset_info": {
+        "en": "Failed to load dataset_info.json, please check the file for invalid JSON or invalid dataset entries.",
+        "ru": "Не удалось загрузить dataset_info.json, проверьте файл на наличие недопустимого JSON или недопустимых записей набора данных.",
+        "zh": "dataset_info.json 加载失败，请检查文件中是否存在无效的 JSON 或无效的数据集条目。",
+        "ko": "dataset_info.json을(를) 불러오지 못했습니다. 파일에 잘못된 JSON 또는 잘못된 데이터 세트 항목이 있는지 확인하십시오.",
+        "ja": "dataset_info.json の読み込みに失敗しました。ファイルに無効な JSON または無効なデータセットエントリがないか確認してください。",
+    },
     "err_tool_name": {
         "en": "Tool name not found.",
         "ru": "Имя инструмента не найдено.",

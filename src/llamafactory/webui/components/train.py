@@ -451,7 +451,7 @@ def create_train_tab(engine: "Engine") -> dict[str, "Component"]:
         engine.runner.load_args, [lang, config_path], list(input_elems) + [output_box], concurrency_limit=None
     )
 
-    dataset.focus(list_datasets, [dataset_dir, training_stage], [dataset], queue=False)
+    dataset.focus(list_datasets, [lang, dataset_dir, training_stage], [dataset], queue=False)
     training_stage.change(change_stage, [training_stage], [dataset, packing], queue=False)
     reward_model.focus(list_checkpoints, [model_name, finetuning_type], [reward_model], queue=False)
     model_name.change(list_output_dirs, [model_name, finetuning_type, current_time], [output_dir], queue=False)
