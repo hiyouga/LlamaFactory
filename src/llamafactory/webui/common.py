@@ -57,8 +57,16 @@ def abort_process(pid: int) -> None:
 
 
 def get_save_dir(*paths: str) -> os.PathLike:
-    r"""Get the path to saved model checkpoints."""
-    if os.path.sep in paths[-1]:
+    r"""Get the path to saved model checkpoints.
+
+    Only an absolute last component bypasses the save dir. A relative one is always joined under
+    `saves/<model>/<finetuning_type>/`, including a user-typed relative output_dir such as
+    `my/custom/dir`, which earlier resolved against the cwd instead. That is deliberate: the
+    checkpoint dropdown now hands back nested values like `<run_dir>/checkpoint-<step>`, and
+    bypassing on any embedded separator would make those resolve outside the save dir (#9766).
+    Use an absolute path for a custom output location.
+    """
+    if os.path.isabs(paths[-1]):
         logger.warning_rank0("Found complex path, some features may be not available.")
         return paths[-1]
 
