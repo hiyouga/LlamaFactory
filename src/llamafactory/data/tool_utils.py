@@ -182,7 +182,11 @@ class DefaultToolUtils(ToolUtils):
                     required = ", required"
 
                 if param.get("enum", None):
-                    enum = ", should be one of [{}]".format(", ".join(param["enum"]))
+                    enum_values = [
+                        value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+                        for value in param["enum"]
+                    ]
+                    enum = ", should be one of [{}]".format(", ".join(enum_values))
 
                 if param.get("items", None):
                     items = ", where each item should be {}".format(param["items"].get("type", ""))
