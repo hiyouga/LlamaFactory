@@ -157,7 +157,9 @@ class FSDPTurboFSDP2Engine(FSDP2Engine):
             efsdp_mesh = self.parallel_state.efsdp_mesh
             if ep_mesh is None:
                 raise RuntimeError("FSDPTurbo EP mesh is not initialized.")
-            if self.ep_fsdp_size > 1 and efsdp_mesh is None:
+            # A unit EFSDP mesh can still provide the expert compute dtype and EP gradient divisor.
+            apply_efsdp = bool(ep_plan.apply_efsdp_modules) and (self.ep_fsdp_size > 1 or spec.wrap_unit_efsdp)
+            if apply_efsdp and efsdp_mesh is None:
                 raise RuntimeError("FSDPTurbo EFSDP mesh is not initialized.")
             if self.rank == 0:
                 logger.info("Applying FSDPTurbo EP backend.")
@@ -172,7 +174,7 @@ class FSDPTurboFSDP2Engine(FSDP2Engine):
                 if name in frozen_names:
                     param.requires_grad_(False)
 
-            if self.ep_fsdp_size > 1:
+            if apply_efsdp:
                 if self.rank == 0:
                     logger.info(f"FSDPTurbo EFSDP apply patterns: {ep_plan.apply_efsdp_modules}")
                     logger.info(f"FSDPTurbo EFSDP device mesh: {efsdp_mesh}")

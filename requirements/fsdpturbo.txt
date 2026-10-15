@@ -1,3 +1,2 @@
-# Install with: python -m pip install --no-deps -r requirements/fsdpturbo.txt
-# Preserve LlamaFactory dependencies; the full backend declares a newer Transformers requirement.
-fsdp-turbo @ git+https://gitcode.com/Ascend/FSDPTurbo.git@394560ec0a73ad6eb5fc6e6f0c2825f8f3f64e49
+# Install into the configured device runtime with: python -m pip install --no-deps -r requirements/fsdpturbo.txt
+fsdp-turbo @ git+https://gitcode.com/Ascend/FSDPTurbo.git@e601d6da2a850932788c719912a54b6251a99d24

@@ -22,11 +22,10 @@ model_engine.model_config: Get the model configuration.
 model_engine.model: Get the HF model.
 
 Init workflow:
-1. Init processor.
-2. Init render.
+1. Init processor and synchronize the chat template.
 2. Init model config.
-3. Init model.
-4. Init adapter.
+3. Select the renderer.
+4. Init model and adapters.
 """
 
 import torch
@@ -40,7 +39,7 @@ from ..utils import logging
 from ..utils.helper import get_tokenizer, is_tokenizer
 from ..utils.packages import check_version
 from ..utils.types import HFConfig, HFModel, Processor
-from .rendering import Renderer
+from .rendering import create_renderer
 
 
 logger = logging.get_logger(__name__)
@@ -68,7 +67,9 @@ class ModelEngine:
         self._sync_chat_template()
         self.model_config = self._init_model_config()
         """Model configuration."""
-        self.renderer = Renderer(self.processor)
+        self.renderer = create_renderer(
+            self.processor, self.model_config, use_model_template=not bool(self.args.custom_chat_template)
+        )
         """Renderer."""
         self._deepspeed_zero3_enabled = False
 

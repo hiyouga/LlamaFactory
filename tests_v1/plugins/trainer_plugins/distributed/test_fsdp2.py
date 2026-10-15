@@ -179,3 +179,87 @@ def test_fsdp2_meta_loading_buffers_and_tied_weights():
         mb = meta_non_persistent[key]
         assert nb.shape == mb.shape, f"Buffer shape mismatch: {key}"
         assert torch.allclose(nb.float(), mb.float(), atol=1e-5), f"Buffer value mismatch: {key}"
+
+
+@pytest.fixture
+def tiny_v4_model():
+    pytest.importorskip("transformers.models.deepseek_v4.modeling_deepseek_v4")
+    from transformers import DeepseekV4Config, DeepseekV4ForCausalLM
+
+    config = DeepseekV4Config(
+        vocab_size=64,
+        hidden_size=32,
+        head_dim=16,
+        q_lora_rank=16,
+        num_attention_heads=4,
+        o_groups=2,
+        o_lora_rank=8,
+        partial_rotary_factor=0.5,
+        moe_intermediate_size=16,
+        n_routed_experts=4,
+        num_experts_per_tok=2,
+        num_hidden_layers=1,
+        num_hash_layers=1,
+        compress_ratios=[0],
+    )
+    model = DeepseekV4ForCausalLM(config)
+    # Nonzero references make a missing persistent-buffer copy observable.
+    for name, buffer in model.named_buffers():
+        if name in model.state_dict():
+            buffer.fill_(1)
+    return model
+
+
+@pytest.mark.parametrize("safetensors", [False, True])
+def test_fsdp2_loads_real_v4_expert_conversion_and_buffers(tmp_path, safetensors, tiny_v4_model):
+    reference = tiny_v4_model
+    expected = {name: value.clone() for name, value in reference.state_dict().items()}
+    checkpoint = dict(expected)
+    prefix = "model.layers.0.mlp.experts"
+    gates, ups = checkpoint.pop(prefix + ".gate_up_proj").chunk(2, dim=1)
+    downs = checkpoint.pop(prefix + ".down_proj")
+    for expert in range(4):
+        checkpoint[f"{prefix}.{expert}.w1.weight"] = gates[expert].contiguous()
+        checkpoint[f"{prefix}.{expert}.w3.weight"] = ups[expert].contiguous()
+        checkpoint[f"{prefix}.{expert}.w2.weight"] = downs[expert].contiguous()
+    # Reference checkpoints name the final norm before the base-model prefix.
+    checkpoint["norm.weight"] = checkpoint.pop("model.norm.weight")
+    if safetensors:
+        from safetensors.torch import save_file
+
+        save_file(checkpoint, str(tmp_path / "model.safetensors"))
+    else:
+        torch.save(checkpoint, tmp_path / "pytorch_model.bin")
+    model = type(reference)(reference.config)
+    with torch.no_grad():
+        for value in model.state_dict().values():
+            value.zero_()
+    engine = object.__new__(FSDP2Engine)
+    engine.rank = 1
+    assert engine._try_build_hf_weight_conversion_context(model) is not None
+    engine._load_weights_from_hf_checkpoint(model, str(tmp_path))
+    for name, value in model.state_dict().items():
+        torch.testing.assert_close(value, expected[name], rtol=0, atol=0, msg=name)
+
+
+def test_fsdp2_native_model_export_reloads_all_weights(tmp_path, tiny_v4_model):
+    model = tiny_v4_model
+    original_class = type(model)
+    expected = {name: value.clone() for name, value in model.state_dict().items()}
+    dist.init_process_group("gloo", store=dist.FileStore(str(tmp_path / "group"), 1), rank=0, world_size=1)
+    fully_shard(model, mesh=init_device_mesh("cpu", (1,)))
+    wrapper_class = type(model)
+    fsdp2_module._save_pretrained(model, str(tmp_path), expected)
+    assert type(model) is wrapper_class
+    restored, info = original_class.from_pretrained(tmp_path, output_loading_info=True)
+    assert not any(info.values()), info
+    for name, value in restored.state_dict().items():
+        torch.testing.assert_close(value, expected[name], rtol=0, atol=0, msg=name)
+    with torch.no_grad():
+        for value in restored.state_dict().values():
+            value.zero_()
+    engine = object.__new__(FSDP2Engine)
+    engine.rank = 1
+    engine._load_weights_from_hf_checkpoint(restored, str(tmp_path))
+    for name, value in restored.state_dict().items():
+        torch.testing.assert_close(value, expected[name], rtol=0, atol=0, msg=name)

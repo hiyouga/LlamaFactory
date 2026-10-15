@@ -48,6 +48,7 @@ def test_qwen35_ep_model_spec():
     [
         ("qwen3_moe", "model.layers.{*}.mlp.experts"),
         ("qwen3_5_moe", "model.language_model.layers.{*}.mlp.experts"),
+        ("deepseek_v4", "model.layers.{*}.mlp.experts"),
     ],
 )
 def test_fsdpturbo_efsdp_targets_only_routed_experts(model_type, experts_path):
@@ -84,7 +85,11 @@ def test_fsdpturbo_uses_class_plugin_and_strict_backend_params():
 
 @pytest.mark.parametrize("precision", ["bf16", "fp32"])
 @pytest.mark.parametrize("dispatcher", ["eager", "fused"])
-def test_fsdpturbo_sets_public_efsdp_plan(monkeypatch, precision, dispatcher):
+@pytest.mark.parametrize(
+    ("model_type", "efsdp_size", "expect_efsdp"),
+    [("qwen3_5_moe", 2, True), ("qwen3_5_moe", 1, False), ("deepseek_v4", 1, True)],
+)
+def test_fsdpturbo_sets_public_efsdp_plan(monkeypatch, precision, dispatcher, model_type, efsdp_size, expect_efsdp):
     expert_parallel_module = pytest.importorskip("fsdp_turbo.distributed.expert_parallel.expert_parallel")
     expert_fully_shard_module = pytest.importorskip(
         "fsdp_turbo.distributed.expert_parallel.expert_fully_shard_parallel"
@@ -104,13 +109,17 @@ def test_fsdpturbo_sets_public_efsdp_plan(monkeypatch, precision, dispatcher):
     engine.dist_config = {"ep_dispatcher": dispatcher}
     engine.mixed_precision = precision
     engine.ep_size = 4
-    engine.ep_fsdp_size = 2
-    engine.parallel_state = SimpleNamespace(efsdp_size=2, ep_mesh=object(), efsdp_mesh=object())
+    engine.ep_fsdp_size = efsdp_size
+    engine.parallel_state = SimpleNamespace(efsdp_size=efsdp_size, ep_mesh=object(), efsdp_mesh=object())
     engine.rank = 0
 
-    engine.prepare_model_ep(_Model("qwen3_5_moe"))
+    engine.prepare_model_ep(_Model(model_type))
 
-    assert captured["gradient_divide_factor"] == 8.0
+    if not expect_efsdp:
+        assert not captured
+        return
+
+    assert captured["gradient_divide_factor"] == 4 * efsdp_size
     ep_plan = captured["ep_plan"]
     if hasattr(ep_plan, "use_fused_ops"):
         assert ep_plan.dispatcher == "all2all"

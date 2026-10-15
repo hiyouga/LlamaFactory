@@ -38,8 +38,22 @@ class SequenceParallelLossPlugin(BasePlugin):
 def apply_sequence_parallel(model, cp_size: int):
     from .hook import install_sequence_parallel_hook
 
-    install_sequence_parallel_hook(model)
     group = DistributedInterface().get_group(Dim.CP)
+    if getattr(model.config, "model_type", None) == "deepseek_v4":
+        from ....models.deepseek_v4.context_parallel import (
+            apply_deepseek_v4_sequence_parallel,
+            validate_deepseek_v4_sequence_parallel_inputs,
+        )
+
+        if getattr(model.config, "_attn_implementation", None) != "eager":
+            raise ValueError("DeepSeek V4 sequence parallelism requires its upstream eager attention implementation.")
+        apply_deepseek_v4_sequence_parallel(model, group)
+        install_sequence_parallel_hook(model, input_validator=validate_deepseek_v4_sequence_parallel_inputs)
+        return
+
+    if getattr(model.config, "_attn_implementation", None) != "flash_attention_2":
+        raise ValueError("Sequence parallelism requires flash attention. Please set `flash_attn: flash_attention_2`.")
+    install_sequence_parallel_hook(model)
     apply_ulysses_attention(model, cp_size, group)
     apply_gdn_attention(model, cp_size)
 
