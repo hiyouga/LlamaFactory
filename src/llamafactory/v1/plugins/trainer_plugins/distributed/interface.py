@@ -49,7 +49,7 @@ class FSDPTurboParams:
     pin_memory: bool = True
     dcp_path: str | None = None
     ep_size: int = 1
-    ep_dispatcher: str = "eager"
+    ep_dispatcher: Literal["eager", "fused"] = "eager"
     fsdp_ignored_modules: list[str] = field(default_factory=list)
     hook_modules: list[str] = field(default_factory=list)
     fsdp_implementation: str = "native"
@@ -57,6 +57,8 @@ class FSDPTurboParams:
     def __post_init__(self) -> None:
         if self.ep_size < 1:
             raise ValueError(f"ep_size must be positive, got {self.ep_size}.")
+        if self.ep_dispatcher not in ("eager", "fused"):
+            raise ValueError("ep_dispatcher must be 'eager' or 'fused'.")
 
 
 @dataclass
@@ -109,6 +111,12 @@ class FSDPTurboDistributed(BaseDistributed):
         from .fsdpturbo import FSDPTurboFSDP2Engine
 
         return FSDPTurboFSDP2Engine(asdict(dist_config), bf16=bool(kwargs.get("bf16"))).shard_model(model)
+
+    @staticmethod
+    def synchronize_gradients(model: HFModel) -> None:
+        from .fsdpturbo import synchronize_gradients
+
+        synchronize_gradients(model)
 
     @staticmethod
     def clip_grad_norm(model: HFModel, max_norm: float, **kwargs) -> float:

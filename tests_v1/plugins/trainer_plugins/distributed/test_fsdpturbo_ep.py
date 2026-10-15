@@ -17,12 +17,12 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from llamafactory.v1.plugins.trainer_plugins.distributed import fsdpturbo as fsdpturbo_module
 from llamafactory.v1.plugins.trainer_plugins.distributed.fsdpturbo import (
     FSDPTurboEPModelSpec,
     FSDPTurboFSDP2Engine,
     FSDPTurboParallelState,
 )
+from llamafactory.v1.plugins.trainer_plugins.distributed.fsdpturbo import parallel_state as fsdpturbo_module
 from llamafactory.v1.plugins.trainer_plugins.distributed.interface import (
     DistributedPlugin,
     FSDPTurboParams,
@@ -84,7 +84,8 @@ def test_fsdpturbo_uses_class_plugin_and_strict_backend_params():
 
 @pytest.mark.parametrize("precision", ["bf16", "fp32"])
 @pytest.mark.parametrize("dispatcher", ["eager", "fused"])
-def test_fsdpturbo_sets_public_efsdp_plan(monkeypatch, precision, dispatcher):
+@pytest.mark.parametrize("efsdp_size", [1, 2])
+def test_fsdpturbo_sets_public_efsdp_plan(monkeypatch, precision, dispatcher, efsdp_size):
     expert_parallel_module = pytest.importorskip("fsdp_turbo.distributed.expert_parallel.expert_parallel")
     expert_fully_shard_module = pytest.importorskip(
         "fsdp_turbo.distributed.expert_parallel.expert_fully_shard_parallel"
@@ -104,20 +105,17 @@ def test_fsdpturbo_sets_public_efsdp_plan(monkeypatch, precision, dispatcher):
     engine.dist_config = {"ep_dispatcher": dispatcher}
     engine.mixed_precision = precision
     engine.ep_size = 4
-    engine.ep_fsdp_size = 2
-    engine.parallel_state = SimpleNamespace(efsdp_size=2, ep_mesh=object(), efsdp_mesh=object())
+    engine.ep_fsdp_size = efsdp_size
+    engine.parallel_state = SimpleNamespace(efsdp_size=efsdp_size, ep_mesh=object(), efsdp_mesh=object())
     engine.rank = 0
 
     engine.prepare_model_ep(_Model("qwen3_5_moe"))
 
-    assert captured["gradient_divide_factor"] == 8.0
+    assert captured["gradient_divide_factor"] == 4 * efsdp_size
     ep_plan = captured["ep_plan"]
-    if hasattr(ep_plan, "use_fused_ops"):
-        assert ep_plan.dispatcher == "all2all"
-        assert ep_plan.use_fused_ops == (dispatcher == "fused")
-        assert callable(expert_parallel_module.get_experts_forward_fn(None, ep_plan, ep_plan.dispatcher))
-    else:
-        assert ep_plan.dispatcher == dispatcher
+    assert ep_plan.dispatcher == "all2all"
+    assert ep_plan.use_fused_ops == (dispatcher == "fused")
+    assert callable(expert_parallel_module.get_experts_forward_fn(None, ep_plan, ep_plan.dispatcher))
     from fsdp_turbo.distributed.fully_shard_parallel.fully_shard_parallel import get_mixprecision_policy
 
     policy = get_mixprecision_policy(captured["fsdp_plan"])
@@ -168,8 +166,6 @@ def test_fsdpturbo_owns_expert_mesh_topology(monkeypatch):
 
 @pytest.mark.parametrize("model_type", ["qwen3_moe", "qwen3_5_moe"])
 def test_fsdpturbo_real_efsdp_selection_excludes_dense_moe_parameters(model_type):
-    from torch.distributed.fsdp._fully_shard._fsdp_init import _get_managed_modules, _get_managed_states
-
     backend = pytest.importorskip("fsdp_turbo.distributed.expert_parallel.expert_fully_shard_parallel")
     from fsdp_turbo.fsdp_turbo_config import EPPlanConfig
 
@@ -195,9 +191,21 @@ def test_fsdpturbo_real_efsdp_selection_excludes_dense_moe_parameters(model_type
         apply_modules=spec.ep_modules, apply_efsdp_modules=FSDPTurboFSDP2Engine._get_ep_fsdp_modules(spec)
     )
     targets = backend.get_efsdp_modules(model, plan)
-    parameters, _ = _get_managed_states(_get_managed_modules(tuple(targets)))
+    parameters = {param for module in targets for param in module.parameters()}
     assert set(parameters) == set(layer.mlp.experts.parameters())
     assert not set(parameters).intersection(layer.mlp.gate.parameters())
     if model_type == "qwen3_5_moe":
         assert not set(parameters).intersection(layer.mlp.shared_expert.parameters())
         assert not set(parameters).intersection(layer.mlp.shared_expert_gate.parameters())
+
+
+def test_deepseek_v4_ep_model_spec():
+    spec = FSDPTurboEPModelSpec.get(_Model("deepseek_v4"))
+    assert spec is not None
+    assert spec.ep_modules == ["model.layers.{*}.mlp.experts"]
+    assert spec.ep_fsdp_modules == spec.ep_modules
+
+
+def test_ep_dispatcher_rejects_unknown_mode():
+    with pytest.raises(ValueError, match="ep_dispatcher"):
+        FSDPTurboParams(ep_dispatcher="unknown")

@@ -30,7 +30,7 @@ import torch
 
 from ...utils.constants import IGNORE_INDEX
 from ...utils.helper import get_tokenizer, is_tokenizer
-from ...utils.types import Message, ModelInput, Processor, Sample
+from ...utils.types import HFConfig, Message, ModelInput, Processor, Sample
 from ..utils.collation import _MULTIMODAL_PASSTHROUGH_KEYS
 from .escape import _escape_special, _escape_special_in_messages, _special_token_strings
 from .format import (
@@ -58,7 +58,7 @@ def _render_messages(
     is_multimodal = not is_tokenizer(processor)
 
     template_caller = processor if is_multimodal else tokenizer
-    if not getattr(template_caller, "chat_template", None):
+    if not getattr(template_caller, "chat_template", None) and not kwargs.get("chat_template"):
         template_caller.chat_template = _FALLBACK_CHATML_JINJA
 
     # 0. Neutralize special-token strings in user-controlled text (no-op for normal data).
@@ -176,9 +176,8 @@ def _render_messages(
 
 class Renderer:
     def __init__(self, processor: Processor, config=None):
-        # ``config`` is accepted for call-site compatibility (ModelEngine passes the model config)
-        # but is no longer needed: supervision is located by a prompt/full diff, not a per-model
-        # marker table, so the renderer is model-agnostic.
+        # Keep ``config`` for compatibility with older callers. Supervision uses a
+        # prompt/full token diff; model-specific template selection lives in create_renderer.
         self.processor = processor
 
     def render_messages(
@@ -319,3 +318,12 @@ class Renderer:
                 model_inputs.append(model_input)
 
         return model_inputs
+
+
+def create_renderer(processor: Processor, config: HFConfig, *, use_model_template: bool = True) -> Renderer:
+    """Select a renderer by model type, preserving explicit user template overrides."""
+    if use_model_template and getattr(config, "model_type", None) == "deepseek_v4":
+        from ...models.deepseek_v4.template import DeepseekV4Renderer
+
+        return DeepseekV4Renderer(processor)
+    return Renderer(processor)
