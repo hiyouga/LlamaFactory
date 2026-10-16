@@ -14,6 +14,7 @@
 
 import json
 import os
+import sys
 from collections.abc import Generator
 from copy import deepcopy
 from subprocess import Popen, TimeoutExpired
@@ -39,6 +40,7 @@ from .common import (
 )
 from .control import get_trainer_info
 from .locales import ALERTS, LOCALES
+from .runner_paths import resolve_cli_executable
 
 
 if is_gradio_available():
@@ -141,7 +143,7 @@ class Runner:
             do_train=True,
             model_name_or_path=get("top.model_path"),
             cache_dir=user_config.get("cache_dir", None),
-            preprocessing_num_workers=16,
+            preprocessing_num_workers=1 if os.name == "nt" else 16,
             finetuning_type=finetuning_type,
             template=get("top.template"),
             rope_scaling=get("top.rope_scaling") if get("top.rope_scaling") != "none" else None,
@@ -307,7 +309,7 @@ class Runner:
             stage="sft",
             model_name_or_path=get("top.model_path"),
             cache_dir=user_config.get("cache_dir", None),
-            preprocessing_num_workers=16,
+            preprocessing_num_workers=1 if os.name == "nt" else 16,
             finetuning_type=finetuning_type,
             quantization_method=get("top.quantization_method"),
             template=get("top.template"),
@@ -380,6 +382,7 @@ class Runner:
             env = deepcopy(os.environ)
             env["LLAMABOARD_ENABLED"] = "1"
             env["LLAMABOARD_WORKDIR"] = args["output_dir"]
+            cli_exe = resolve_cli_executable(sys.executable, os.name)
             if args.get("deepspeed", None) is not None:
                 env["FORCE_TORCHRUN"] = "1"
 
@@ -387,7 +390,7 @@ class Runner:
             webui_log_path = os.path.join(args["output_dir"], "webui_subprocess.log")
             webui_log = open(webui_log_path, "a", encoding="utf-8")
             self.trainer = Popen(
-                ["llamafactory-cli", "train", save_cmd(args)],
+                [cli_exe, "train", save_cmd(args)],
                 env=env,
                 stdout=webui_log,
                 stderr=webui_log,
@@ -479,7 +482,11 @@ class Runner:
                 else:
                     stderr = "No subprocess log file found."
 
-            print(stderr)
+            try:
+                print(stderr)
+            except UnicodeEncodeError:
+                sys.stdout.buffer.write(stderr.encode("utf-8", errors="replace"))
+                sys.stdout.buffer.flush()
             finish_info = ALERTS["err_failed"][lang]
             finish_log = ALERTS["err_failed"][lang] + f" Exit code: {return_code}\n\n```\n{stderr}\n```\n"
 
