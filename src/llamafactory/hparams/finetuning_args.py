@@ -566,6 +566,40 @@ class FinetuningArguments(
         default=1.0,
         metadata={"help": "The alpha parameter for EAFT loss to control the power of adaptive weight."},
     )
+    use_cig_sft_loss: bool = field(
+        default=False,
+        metadata={
+            "help": (
+                "Whether to use the CIG-SFT loss. The per-token credit is read by a frozen reference model from the "
+                "instance with and without its content, which needs an erased view of the prompt, see "
+                "`cig_erased_prompt`. A frozen reference model is required, so only full/freeze fine-tuning is "
+                "supported out of the box."
+            )
+        },
+    )
+    cig_lambda: float = field(
+        default=0.3,
+        metadata={"help": "The lambda parameter controlling the CIG-SFT credit projection."},
+    )
+    cig_eps: float = field(
+        default=1e-8,
+        metadata={"help": "The numerical epsilon used when normalizing CIG-SFT credits."},
+    )
+    cig_max_beta: float = field(
+        default=60.0,
+        metadata={"help": "The upper bound of the CIG-SFT projection exponent."},
+    )
+    cig_credit_cache: str | None = field(
+        default=None,
+        metadata={
+            "help": (
+                "The path of the CIG-SFT credit cache. The credit only depends on the frozen reference model and on "
+                "fixed inputs, so it is constant over the whole run. It is materialized once and reused by later runs "
+                "that share the same data and reference model. Defaults to `cig_credit_cache.pt` under the output "
+                "directory."
+            )
+        },
+    )
     freeze_vision_tower: bool = field(
         default=True,
         metadata={"help": "Whether or not to freeze the vision tower in MLLM training."},
@@ -641,6 +675,19 @@ class FinetuningArguments(
 
         if int(self.use_galore) + int(self.use_apollo) + (self.use_badam) > 1:
             raise ValueError("Cannot use GaLore, APOLLO or BAdam together.")
+
+        if int(self.use_dft_loss) + int(self.use_asft_loss) + int(self.use_eaft_loss) + int(self.use_cig_sft_loss) > 1:
+            raise ValueError("Cannot use DFT, ASFT, EAFT and CIG-SFT losses together.")
+
+        if self.use_cig_sft_loss:
+            if self.cig_lambda <= 0:
+                raise ValueError("`cig_lambda` must be positive for the CIG-SFT loss.")
+
+            if self.cig_eps <= 0:
+                raise ValueError("`cig_eps` must be positive for the CIG-SFT loss.")
+
+            if self.cig_max_beta <= 0:
+                raise ValueError("`cig_max_beta` must be positive for the CIG-SFT loss.")
 
         if self.pissa_init and (self.stage in ["ppo", "kto"] or self.use_ref_model):
             raise ValueError("Cannot use PiSSA for current training stage.")

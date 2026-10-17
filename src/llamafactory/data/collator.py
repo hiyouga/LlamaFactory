@@ -506,6 +506,7 @@ class SFTDataCollatorWith4DAttentionMask(MultiModalDataCollatorForSeq2Seq):
     attn_implementation: Literal["eager", "sdpa", "flash_attention_2"] = "eager"
     compute_dtype: "torch.dtype" = torch.float32
     neat_packing: bool = False
+    use_cig_sft_loss: bool = False
 
     def __post_init__(self):
         super().__post_init__()
@@ -539,9 +540,61 @@ class SFTDataCollatorWith4DAttentionMask(MultiModalDataCollatorForSeq2Seq):
             elif key in keys_on_seq_dim_1 and value.dim() == 2 and value.size(0) == 1 and value.size(1) == seq_len:
                 features[key] = value.index_select(1, non_padding_indices)
 
+    def _pad_erased(
+        self,
+        erased_input_ids: list[list[int]],
+        erased_labels: list[list[int]],
+        seq_len: int,
+    ) -> tuple["torch.Tensor", "torch.Tensor", "torch.Tensor"]:
+        """Pad the erased view independently from the ordinary SFT view."""
+        seq_len = max(seq_len, max((len(ids) for ids in erased_input_ids), default=0))
+        batch_ids = torch.full((len(erased_input_ids), seq_len), self.tokenizer.pad_token_id, dtype=torch.long)
+        batch_masks = torch.zeros((len(erased_input_ids), seq_len), dtype=torch.long)
+        batch_labels = torch.full((len(erased_input_ids), seq_len), IGNORE_INDEX, dtype=torch.long)
+        padding_side = getattr(self.tokenizer, "padding_side", "right")
+        for index, (ids, labels) in enumerate(zip(erased_input_ids, erased_labels)):
+            length = min(len(ids), seq_len)
+            offset = seq_len - length if padding_side == "left" else 0
+            batch_ids[index, offset : offset + length] = torch.as_tensor(ids[:length], dtype=torch.long)
+            batch_masks[index, offset : offset + length] = 1
+            batch_labels[index, offset : offset + length] = torch.as_tensor(labels[:length], dtype=torch.long)
+
+        return batch_ids, batch_masks, batch_labels
+
     def __call__(self, features: list[dict[str, Any]]) -> dict[str, "torch.Tensor"]:
+        erased_input_ids = [feature.pop("erased_input_ids", None) for feature in features]
+        erased_labels = [feature.pop("erased_labels", None) for feature in features]
+        if self.use_cig_sft_loss:
+            if any(
+                (input_ids is None) != (labels is None) for input_ids, labels in zip(erased_input_ids, erased_labels)
+            ):
+                raise ValueError("Each CIG-SFT row must provide both `erased_input_ids` and `erased_labels`.")
+
+            if len({item is None for item in erased_input_ids}) > 1:
+                raise ValueError(
+                    "The CIG-SFT loss dropped the erased view of some rows of the batch but not of the others. "
+                    "The loss cannot be defined on such a batch; set `cig_erased_prompt` or provide the erased "
+                    "prompt column for every row."
+                )
+
+            if erased_input_ids and erased_input_ids[0] is None:
+                raise ValueError(
+                    "The CIG-SFT loss needs an erased view for every row; set `cig_erased_prompt` or provide the "
+                    "erased prompt dataset column."
+                )
+
+            if any(len(input_ids) != len(labels) for input_ids, labels in zip(erased_input_ids, erased_labels)):
+                raise ValueError("The CIG-SFT erased input and label sequences must have the same length.")
+
         features = super().__call__(features)
         has_dummy_image = features.pop("has_dummy_image", False)
+        if self.use_cig_sft_loss and erased_input_ids and erased_input_ids[0] is not None:
+            (
+                features["erased_input_ids"],
+                features["erased_attention_mask"],
+                features["erased_labels"],
+            ) = self._pad_erased(erased_input_ids, erased_labels, features["input_ids"].size(1))
+
         if self.block_diag_attn and self.attn_implementation != "flash_attention_2":
             features["attention_mask"] = prepare_4d_attention_mask(features["attention_mask"], self.compute_dtype)
 

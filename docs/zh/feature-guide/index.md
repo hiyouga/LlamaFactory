@@ -8,6 +8,7 @@
 |------|------|
 | [数据准备](data_preparation.md) | Messages 格式、数据集 YAML 和 converter |
 | [SFT](sft.md) | 全参、LoRA、Freeze、QLoRA |
+| [CIG-SFT](cig_sft.md) | CIG-SFT 的普通 Transformers SFT 适配 |
 | [DPO](dpo.md) | DPO、ORPO、SimPO 与偏好数据 |
 | [RM](rm.md) | 奖励模型训练 |
 
