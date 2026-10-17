@@ -129,7 +129,7 @@ class ModelEngine:
             trust_remote_code=self.args.trust_remote_code,
         )
         if getattr(config, "model_type", None) == "xing4_0":
-            check_version("transformers>=5.0.0", mandatory=True)
+            check_version("transformers>=5.4.0", mandatory=True)
 
         return config
 
