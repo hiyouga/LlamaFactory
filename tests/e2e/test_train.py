@@ -71,3 +71,11 @@ def test_export():
     export_dir = os.path.join("output", "llama3_export")
     export_model({"export_dir": export_dir, **INFER_ARGS})
     assert os.path.exists(export_dir)
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
+def test_export_dict_slot_template(tmp_path):
+    export_dir = str(tmp_path / "chatglm3_export")
+    export_model({**INFER_ARGS, "template": "chatglm3", "export_dir": export_dir})
+    assert os.path.exists(os.path.join(export_dir, "model.safetensors"))
+    assert not os.path.exists(os.path.join(export_dir, "Modelfile"))
