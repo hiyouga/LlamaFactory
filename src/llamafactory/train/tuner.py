@@ -275,8 +275,14 @@ def export_model(args: Optional[dict[str, Any]] = None) -> None:
         logger.warning_rank0(f"Cannot save tokenizer, please copy the files manually: {e}.")
 
     ollama_modelfile = os.path.join(model_args.export_dir, "Modelfile")
+    try:
+        modelfile = template.get_ollama_modelfile(tokenizer)
+    except ValueError as e:
+        logger.warning_rank0(f"Ollama modelfile is not generated for this template: {e}")
+        return
+
     with open(ollama_modelfile, "w", encoding="utf-8") as f:
-        f.write(template.get_ollama_modelfile(tokenizer))
+        f.write(modelfile)
         logger.info_rank0(f"Ollama modelfile saved in {ollama_modelfile}")
 
 
