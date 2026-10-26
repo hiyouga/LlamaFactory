@@ -171,8 +171,15 @@ def _save_standard_training_states(
     rank = DistributedInterface().get_rank()
     if rank == 0:
         model_to_save = model.module if hasattr(model, "module") else model
+        state_dict = model_to_save.state_dict()
+        # Drop MTP keys shared with the base model so save_pretrained does not raise the
+        # shared-tensors RuntimeError; they are re-shared by apply_mtp on load.
+        if getattr(model_to_save, "mtp", None) is not None:
+            from ...plugins.model_plugins.mtp import strip_shared_mtp_keys
+
+            strip_shared_mtp_keys(state_dict)
         model_dir = os.path.join(ckpt_dir, "model")
-        model_to_save.save_pretrained(model_dir, state_dict=model_to_save.state_dict(), max_shard_size="4GB")
+        model_to_save.save_pretrained(model_dir, state_dict=state_dict, max_shard_size="4GB")
         processor.save_pretrained(model_dir)
 
         os.makedirs(os.path.join(ckpt_dir, "optimizer"), exist_ok=True)
