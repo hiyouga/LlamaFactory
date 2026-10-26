@@ -1,0 +1,48 @@
+# Start HyperParallel FSDP2 full fine-tuning on Ascend NPU
+# Usage:
+#   ASCEND_RT_VISIBLE_DEVICES=0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15 accelerate launch \
+#       --config_file examples/accelerate/fsdp2_config_qwen38.yaml \
+#       src/train.py examples/ascend/qwen3_8_full_sft_hyper_fsdp2.yaml
+#
+# Note: Change both the visible-device list and `num_processes` for your hardware.
+
+### model
+model_name_or_path: Qwen/Qwen3.8-27B
+trust_remote_code: true
+use_v1_kernels: true
+flash_attn: fa2
+
+### method
+stage: sft
+do_train: true
+finetuning_type: full
+use_hyper_parallel: true
+
+### dataset
+dataset: alpaca_en_demo
+template: qwen3_8
+cutoff_len: 2048
+max_samples: 1000
+overwrite_cache: true
+preprocessing_num_workers: 16
+dataloader_num_workers: 4
+
+### output
+output_dir: saves/Qwen3.8-27B/full/sft
+logging_steps: 1
+save_steps: 500
+max_steps: 500
+plot_loss: true
+overwrite_output_dir: true
+save_only_model: false
+report_to: none  # choices: [none, wandb, tensorboard, swanlab, mlflow]
+
+### train
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 1
+learning_rate: 1.0e-5
+lr_scheduler_type: cosine
+warmup_ratio: 0.1
+bf16: true
+ddp_timeout: 1800
+resume_from_checkpoint: null
