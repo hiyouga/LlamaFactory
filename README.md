@@ -65,6 +65,7 @@ Start cloud training:
 - **Colab (free)**: https://colab.research.google.com/drive/1eRTPn37ltBbYsISy9Aw2NuI2Aq5CQrD9?usp=sharing
 - **PAI-DSW (free trial)**: https://gallery.pai-ml.com/#/preview/deepLearning/nlp/llama_factory
 - **AMD GPU Cloud (free credits)**: https://github.com/AMD-AIM/AMD_Developers_Notebooks/blob/main/en/AMD_developer_LLaMAFactory_note_en.md
+- **CloudGPU (LLaMA-Factory template, per-minute billing)**: https://cloudgpu.app/marketplace?utm_source=github&utm_medium=referral&utm_campaign=202611_seg08_finetune&utm_content=gh_llamafactory_readme
 
 Read technical notes:
 - **Documentation (WIP)**: https://llamafactory.readthedocs.io/en/latest/
