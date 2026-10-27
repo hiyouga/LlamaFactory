@@ -21,6 +21,9 @@ and non-persistent buffers by comparing it with the standard non-meta path.
 from types import SimpleNamespace
 
 import torch
+import torch.distributed as dist
+from torch.distributed.device_mesh import init_device_mesh
+from torch.distributed.fsdp import FSDPModule, fully_shard
 from transformers import AutoConfig
 
 from llamafactory.v1.accelerator.interface import DistributedInterface
@@ -43,6 +46,28 @@ def collect_non_persistent_buffers(model):
             if buf is not None:
                 result[fqn] = buf.detach().cpu().clone()
     return result
+
+
+def test_fsdp2_save_pretrained_uses_original_model_class():
+    """Save using the original custom model class and restore the FSDP2 wrapper."""
+    saved_classes = []
+
+    class CustomModel(torch.nn.Module):
+        _auto_class = "AutoModel"
+
+        def save_pretrained(self, *args, **kwargs):
+            saved_classes.append(type(self))
+
+    model = CustomModel()
+    dist.init_process_group("gloo", store=dist.HashStore(), rank=0, world_size=1)
+    fully_shard(model, mesh=init_device_mesh("cpu", (1,)))
+    wrapper_cls = type(model)
+    assert isinstance(model, FSDPModule)
+
+    fsdp2_module._save_pretrained(model, "unused", {})
+
+    assert saved_classes == [CustomModel]
+    assert type(model) is wrapper_cls
 
 
 def test_fsdp2_rank0_syncs_non_persistent_buffers(monkeypatch):
