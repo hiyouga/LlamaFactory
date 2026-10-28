@@ -86,6 +86,7 @@ class ChatMessage(BaseModel):
     role: Role
     content: str | list[MultimodalInputItem] | None = None
     tool_calls: list[FunctionCall] | None = None
+    tool_call_id: str | None = None
 
 
 class ChatCompletionMessage(BaseModel):
