@@ -41,6 +41,8 @@ services:
         BASE_IMAGE: quay.io/ascend/cann:9.1.0-910b-ubuntu22.04-py3.12
     container_name: llamafactory-910b-ubuntu
     image: llamafactory:npu-910b-ubuntu
+    environment:
+      - GRADIO_SERVER_NAME=0.0.0.0
     ports:
       - "7860:7860"
       - "8000:8000"
@@ -55,6 +57,8 @@ services:
         BASE_IMAGE: quay.io/ascend/cann:9.1.0-a3-ubuntu22.04-py3.12
     container_name: llamafactory-a3-ubuntu
     image: llamafactory:npu-a3-ubuntu
+    environment:
+      - GRADIO_SERVER_NAME=0.0.0.0
     ports:
       - "7861:7860"
       - "8001:8000"
@@ -69,6 +73,8 @@ services:
         BASE_IMAGE: quay.io/ascend/cann:9.1.0-910b-openeuler24.03-py3.12
     container_name: llamafactory-910b-openeuler
     image: llamafactory:npu-910b-openeuler
+    environment:
+      - GRADIO_SERVER_NAME=0.0.0.0
     ports:
       - "7862:7860"
       - "8002:8000"
@@ -83,6 +89,8 @@ services:
         BASE_IMAGE: quay.io/ascend/cann:9.1.0-a3-openeuler24.03-py3.12
     container_name: llamafactory-a3-openeuler
     image: llamafactory:npu-a3-openeuler
+    environment:
+      - GRADIO_SERVER_NAME=0.0.0.0
     ports:
       - "7863:7860"
       - "8003:8000"
@@ -97,6 +105,8 @@ services:
         BASE_IMAGE: quay.io/ascend/cann:9.1.0-950-ubuntu22.04-py3.12
     container_name: llamafactory-950-ubuntu
     image: llamafactory:npu-950-ubuntu
+    environment:
+      - GRADIO_SERVER_NAME=0.0.0.0
     ports:
       - "7864:7860"
       - "8004:8000"
@@ -111,6 +121,8 @@ services:
         BASE_IMAGE: quay.io/ascend/cann:9.1.0-950-openeuler24.03-py3.12
     container_name: llamafactory-950-openeuler
     image: llamafactory:npu-950-openeuler
+    environment:
+      - GRADIO_SERVER_NAME=0.0.0.0
     ports:
       - "7865:7860"
       - "8005:8000"
