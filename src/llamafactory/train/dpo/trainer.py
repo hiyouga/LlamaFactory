@@ -30,7 +30,7 @@ from trl.trainer import disable_dropout_in_model
 from typing_extensions import override
 
 from ...extras.constants import IGNORE_INDEX
-from ...extras.packages import is_transformers_version_greater_than
+from ...extras.packages import is_transformers_version_greater_than, is_trl_version_greater_than
 from ..callbacks import SaveProcessorCallback
 from ..trainer_utils import create_custom_optimizer, create_custom_scheduler, get_batch_logps, nested_detach
 
@@ -203,8 +203,14 @@ class CustomDPOTrainer(DPOTrainer):
             chosen_rewards = self.beta * policy_chosen_logps.to(self.accelerator.device).detach()
             rejected_rewards = self.beta * policy_rejected_logps.to(self.accelerator.device).detach()
         else:
+            # TRL 0.20+ selects the loss from an argument instead of self.loss_type.
+            loss_kwargs = {"loss_type": self.loss_type} if is_trl_version_greater_than("0.20.0") else {}
             losses, chosen_rewards, rejected_rewards = self.dpo_loss(
-                policy_chosen_logps, policy_rejected_logps, reference_chosen_logps, reference_rejected_logps
+                policy_chosen_logps,
+                policy_rejected_logps,
+                reference_chosen_logps,
+                reference_rejected_logps,
+                **loss_kwargs,
             )
 
             if self.bco_gemma > 1e-6:

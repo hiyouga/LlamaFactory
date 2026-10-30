@@ -128,6 +128,11 @@ def is_torch_version_greater_than(content: str):
     return _get_package_version("torch") >= version.parse(content)
 
 
+@lru_cache
+def is_trl_version_greater_than(content: str):
+    return _get_package_version("trl") >= version.parse(content)
+
+
 def is_uvicorn_available():
     return _is_package_available("uvicorn")
 
