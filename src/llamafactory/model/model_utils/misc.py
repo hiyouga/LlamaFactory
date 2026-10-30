@@ -15,7 +15,7 @@
 from typing import TYPE_CHECKING
 
 from ...extras import logging
-from .visual import COMPOSITE_MODELS
+from .visual import COMPOSITE_MODELS, is_target_module
 
 
 if TYPE_CHECKING:
@@ -46,13 +46,17 @@ def find_all_linear_modules(model: "PreTrainedModel", freeze_vision_tower: bool)
             continue
 
         if "Linear" in module.__class__.__name__ and "Embedding" not in module.__class__.__name__:
-            module_names.add(name.split(".")[-1])
+            module_name = name.split(".")[-1]
+            # Numeric names can match unrelated module indices, so keep the path to disambiguate them.
+            module_names.add(name if module_name.isdigit() else module_name)
 
     logger.info_rank0("Found linear modules: {}".format(",".join(module_names)))
     return list(module_names)
 
 
-def find_expanded_modules(model: "PreTrainedModel", target_modules: list[str], num_layer_trainable: int) -> list[str]:
+def find_expanded_modules(
+    model: "PreTrainedModel", target_modules: list[str], num_layer_trainable: int, strict_numeric: bool = False
+) -> list[str]:
     r"""Find the modules in the expanded blocks to apply lora."""
     num_layers = getattr(model.config, "num_hidden_layers", None)
     if not num_layers:
@@ -68,7 +72,7 @@ def find_expanded_modules(model: "PreTrainedModel", target_modules: list[str], n
     trainable_layers = [f".{idx:d}." for idx in trainable_layer_ids]
     module_names = []
     for name, _ in model.named_modules():
-        if any(target_module in name for target_module in target_modules) and any(
+        if is_target_module(name, target_modules, strict_numeric) and any(
             trainable_layer in name for trainable_layer in trainable_layers
         ):
             module_names.append(name)

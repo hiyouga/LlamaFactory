@@ -17,8 +17,9 @@ from types import SimpleNamespace
 
 import pytest
 import torch
+from peft import LoraConfig, get_peft_model
 from safetensors.torch import load_file
-from transformers import AutoConfig, AutoModelForImageTextToText
+from transformers import AutoConfig, AutoModelForImageTextToText, PretrainedConfig
 
 from llamafactory.extras.packages import is_transformers_version_greater_than
 from llamafactory.hparams import FinetuningArguments, ModelArguments
@@ -60,6 +61,29 @@ class _MossVLFixture(torch.nn.Module):
         layer.self_attn = torch.nn.Module()
         layer.self_attn.q_proj = torch.nn.Linear(4, 4)
         return layer
+
+
+class _NumericMossVLFixture(_MossVLFixture):
+    def __init__(self) -> None:
+        super().__init__()
+        self.config = PretrainedConfig()
+        self.config.model_type = "moss_vl"
+        self.config.text_config = SimpleNamespace(num_hidden_layers=2)
+        self.model.visual.blocks[0].numeric_adapter = self._make_numeric_adapter()
+        self.model.visual.merger.numeric_adapter = self._make_numeric_adapter()
+        self.model.language_model.numeric_adapter = self._make_numeric_adapter()
+
+    @staticmethod
+    def _make_numeric_adapter() -> torch.nn.ModuleDict:
+        return torch.nn.ModuleDict(
+            {
+                "0": torch.nn.Linear(4, 4),
+                "01": torch.nn.SiLU(),
+                "0_extra": torch.nn.SiLU(),
+                "2": torch.nn.Linear(4, 4),
+                "10": torch.nn.SiLU(),
+            }
+        )
 
 
 @pytest.mark.parametrize("freeze_vision_tower", (False, True))
@@ -130,6 +154,72 @@ def test_moss_vl_lora_target_all(freeze_vision_tower: bool):
     assert all("patch_embed" not in name for name in target_modules)
     assert all("merger" not in name for name in target_modules)
     assert all("lm_head" not in name for name in target_modules)
+
+
+def test_moss_vl_lora_explicit_target_preserves_substring_matching():
+    model = _MossVLFixture()
+    finetuning_args = FinetuningArguments(
+        finetuning_type="lora",
+        lora_target="proj",
+        freeze_vision_tower=False,
+        freeze_multi_modal_projector=True,
+        freeze_language_model=False,
+    )
+
+    target_modules = patch_target_modules(model, finetuning_args, ["proj"])
+
+    assert target_modules == [
+        "model.language_model.layers.0.self_attn.q_proj",
+        "model.language_model.layers.1.self_attn.q_proj",
+    ]
+
+
+@pytest.mark.parametrize("freeze_vision_tower", (False, True))
+@pytest.mark.parametrize("freeze_multi_modal_projector", (False, True))
+@pytest.mark.parametrize("freeze_language_model", (False, True))
+def test_moss_vl_lora_numeric_targets(
+    freeze_vision_tower: bool,
+    freeze_multi_modal_projector: bool,
+    freeze_language_model: bool,
+):
+    model = _NumericMossVLFixture()
+    finetuning_args = FinetuningArguments(
+        finetuning_type="lora",
+        lora_target="all",
+        freeze_vision_tower=freeze_vision_tower,
+        freeze_multi_modal_projector=freeze_multi_modal_projector,
+        freeze_language_model=freeze_language_model,
+    )
+
+    target_modules = find_all_linear_modules(model, freeze_vision_tower)
+    target_modules = patch_target_modules(model, finetuning_args, target_modules, strict_numeric=True)
+
+    numeric_targets = {name for name in target_modules if "numeric_adapter" in name}
+    expected_targets = set()
+    if not freeze_vision_tower:
+        expected_targets.update(
+            {
+                "model.visual.blocks.0.numeric_adapter.0",
+                "model.visual.blocks.0.numeric_adapter.2",
+            }
+        )
+    if not freeze_language_model:
+        expected_targets.update(
+            {
+                "model.language_model.numeric_adapter.0",
+                "model.language_model.numeric_adapter.2",
+            }
+        )
+
+    assert numeric_targets == expected_targets
+    assert all("model.visual.merger" not in name for name in target_modules)
+    assert all(isinstance(model.get_submodule(name), torch.nn.Linear) for name in target_modules)
+
+    if target_modules:
+        peft_model = get_peft_model(model, LoraConfig(r=2, lora_alpha=4, target_modules=target_modules))
+        adapted_modules = {name for name, module in peft_model.named_modules() if hasattr(module, "lora_A")}
+        assert len(adapted_modules) == len(target_modules)
+        assert all(any(name.endswith(target) for name in adapted_modules) for target in target_modules)
 
 
 def test_moss_vl_projector_modules():

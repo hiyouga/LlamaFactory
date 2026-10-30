@@ -193,8 +193,21 @@ def get_forbidden_modules(config: "PretrainedConfig", finetuning_args: "Finetuni
     return forbidden_modules
 
 
+def is_target_module(name: str, target_modules: list[str], strict_numeric: bool = False) -> bool:
+    r"""Return whether a module name matches one of the target modules."""
+    return any(
+        name == target_module
+        if strict_numeric and target_module.rsplit(".", maxsplit=1)[-1].isdigit()
+        else target_module in name
+        for target_module in target_modules
+    )
+
+
 def patch_target_modules(
-    model: "PreTrainedModel", finetuning_args: "FinetuningArguments", target_modules: list[str]
+    model: "PreTrainedModel",
+    finetuning_args: "FinetuningArguments",
+    target_modules: list[str],
+    strict_numeric: bool = False,
 ) -> list[str]:
     r"""Freeze vision tower for VLM LoRA tuning."""
     model_type = getattr(model.config, "model_type", None)
@@ -203,7 +216,7 @@ def patch_target_modules(
         forbidden_modules.update(COMPOSITE_MODELS[model_type].lora_conflict_keys)
         module_names = []
         for name, _ in model.named_modules():
-            if any(target_module in name for target_module in target_modules) and not any(
+            if is_target_module(name, target_modules, strict_numeric) and not any(
                 forbidden_module in name for forbidden_module in forbidden_modules
             ):
                 module_names.append(name)
