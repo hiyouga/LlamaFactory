@@ -13,12 +13,14 @@
 # limitations under the License.
 
 from .logging_callback import LoggingCallback
+from .profiler_callback import ProfilerCallback
 from .trainer_callback import CallbackHandler, TrainerCallback, TrainerState
 
 
 __all__ = [
     "CallbackHandler",
     "LoggingCallback",
+    "ProfilerCallback",
     "TrainerCallback",
     "TrainerState",
 ]

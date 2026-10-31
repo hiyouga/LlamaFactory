@@ -74,6 +74,84 @@ class TrainingArguments:
         default=True,
         metadata={"help": "Enable activation checkpointing for training."},
     )
+    enable_torch_profiler: bool = field(
+        default=False,
+        metadata={"help": "Whether to enable torch profiler for collecting CPU/CUDA/NPU performance traces."},
+    )
+    profiler_output_dir: str | None = field(
+        default=None,
+        metadata={"help": "Directory to write profiler traces. Defaults to <output_dir>/profiler if not set."},
+    )
+    profiler_skip_first: int = field(
+        default=0,
+        metadata={"help": "Number of steps to skip before the first profiler wait/warmup/active cycle."},
+    )
+    profiler_wait_steps: int = field(
+        default=1,
+        metadata={"help": "Number of steps to skip at the start of each profiling cycle."},
+    )
+    profiler_warmup_steps: int = field(
+        default=1,
+        metadata={"help": "Number of profiler warm-up steps per cycle."},
+    )
+    profiler_active_steps: int = field(
+        default=1,
+        metadata={"help": "Number of steps to actively record per cycle."},
+    )
+    profiler_repeat: int = field(
+        default=1,
+        metadata={"help": "Number of profiling cycles. Set to 0 for continuous profiling."},
+    )
+    profiler_record_shapes: bool | None = field(
+        default=None,
+        metadata={"help": "Whether to record tensor shapes during profiling.", "nargs": "?", "const": True},
+    )
+    profiler_profile_memory: bool | None = field(
+        default=None,
+        metadata={"help": "Whether to profile memory usage.", "nargs": "?", "const": True},
+    )
+    profiler_with_stack: bool | None = field(
+        default=None,
+        metadata={"help": "Whether to record stack traces during profiling.", "nargs": "?", "const": True},
+    )
+    profiler_with_flops: bool = field(
+        default=False,
+        metadata={"help": "Whether to estimate FLOPs where supported by the profiler backend."},
+    )
+    profiler_with_modules: bool = field(
+        default=False,
+        metadata={"help": "Whether to record module hierarchy where supported by the profiler backend."},
+    )
+    profiler_activities: str = field(
+        default="auto",
+        metadata={"help": "Profiler activities to collect. Choices: auto, all, cpu, device."},
+    )
+    profiler_rank_mode: str = field(
+        default="all",
+        metadata={"help": "Profiler rank collection mode. Choices: all, rank0."},
+    )
+    profiler_level: str = field(
+        default="level0",
+        metadata={"help": "NPU profiler collection level. Choices: none, level0, level1, level2."},
+    )
+    profiler_aic_metrics: str = field(
+        default="auto",
+        metadata={
+            "help": (
+                "NPU AI Core metric: auto, none, pipe_utilization, arithmetic_utilization, memory, "
+                "memory_l0, memory_ub, l2_cache, memory_access, or resource_conflict_ratio."
+            )
+        },
+    )
+    profiler_backend_options: dict | None = field(
+        default=None,
+        metadata={
+            "help": (
+                "Backend-specific profiler mapping. Currently supports npu.data_simplification, npu.host_sys, "
+                "npu.sys_io, npu.sys_interconnection, and npu.gc_detect_threshold."
+            )
+        },
+    )
     dist_config: PluginConfig | None = field(
         default=None,
         metadata={"help": "Distributed backend plugin configuration."},
