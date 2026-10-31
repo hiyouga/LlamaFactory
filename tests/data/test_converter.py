@@ -62,3 +62,58 @@ def test_sharegpt_converter():
         "_videos": None,
         "_audios": None,
     }
+
+
+def _openai_dataset_attr() -> DatasetAttr:
+    dataset_attr = DatasetAttr("hf_hub", "x", formatting="openai")
+    dataset_attr.messages = "messages"
+    dataset_attr.role_tag = "role"
+    dataset_attr.content_tag = "content"
+    dataset_attr.user_tag = "user"
+    dataset_attr.assistant_tag = "assistant"
+    dataset_attr.observation_tag = "tool"
+    dataset_attr.function_tag = "function"
+    dataset_attr.system_tag = "system"
+    return dataset_attr
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
+def test_openai_converter_skips_conversation_ending_on_tool_response():
+    converter = get_dataset_converter("openai", _openai_dataset_attr(), DataArguments())
+    example = {
+        "messages": [
+            {"role": "user", "content": "What's the weather?"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"function": {"name": "get_weather", "arguments": "{}"}}],
+            },
+            {"role": "tool", "content": "Sunny, 25C"},
+        ]
+    }
+    result = converter(example)
+    # The trailing tool response makes this an incomplete tool cycle; it must be skipped,
+    # not silently truncated into [user] -> [tool_call] (which dropped the tool response).
+    assert result["_prompt"] == []
+    assert result["_response"] == []
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
+def test_openai_converter_keeps_completed_tool_cycle():
+    converter = get_dataset_converter("openai", _openai_dataset_attr(), DataArguments())
+    example = {
+        "messages": [
+            {"role": "user", "content": "What's the weather?"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{"function": {"name": "get_weather", "arguments": "{}"}}],
+            },
+            {"role": "tool", "content": "Sunny, 25C"},
+            {"role": "assistant", "content": "It is sunny, 25C."},
+        ]
+    }
+    result = converter(example)
+    all_content = str(result["_prompt"]) + str(result["_response"])
+    assert "Sunny, 25C" in all_content
+    assert result["_response"][-1] == {"role": Role.ASSISTANT.value, "content": "It is sunny, 25C."}
