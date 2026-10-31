@@ -33,7 +33,10 @@ def configure_attn_implementation(config: "PretrainedConfig", model_args: "Model
     from transformers.utils import is_flash_attn_2_available
 
     if getattr(config, "model_type", None) == "gpt_oss":
-        from transformers.integrations.hub_kernels import load_and_register_kernel
+        try:  # transformers >= 5.0.0
+            from transformers.integrations.hub_kernels import load_and_register_attn_kernel as load_and_register_kernel
+        except ImportError:
+            from transformers.integrations.hub_kernels import load_and_register_kernel
 
         flash_attn3_kernel = "kernels-community/vllm-flash-attn3"
         load_and_register_kernel(flash_attn3_kernel)
