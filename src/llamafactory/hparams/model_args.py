@@ -202,6 +202,16 @@ class BaseModelArguments:
         default=False,
         metadata={"help": "Whether to trust the execution of code from datasets/models defined on the Hub or not."},
     )
+    ignore_mismatched_sizes: bool = field(
+        default=False,
+        metadata={
+            "help": (
+                "Whether to ignore mismatched tensor shapes when loading model weights. "
+                "Useful for models with GQA or other architectural variants where checkpoint "
+                "shapes legitimately differ (e.g. GLM-OCR)."
+            )
+        },
+    )
 
     def __post_init__(self):
         if self.model_name_or_path is None:
