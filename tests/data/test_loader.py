@@ -17,6 +17,7 @@ import os
 
 import pytest
 from datasets.exceptions import DatasetNotFoundError
+from huggingface_hub.constants import HF_HOME, HF_HUB_OFFLINE
 
 from llamafactory.train.test_utils import load_dataset_module
 
@@ -79,12 +80,19 @@ def test_load_dataset_revision(tmp_path, revision, expected_length):
         }
     }
     (tmp_path / "dataset_info.json").write_text(json.dumps(dataset_info))
-    args = TRAIN_ARGS | {"dataset": "pinned", "dataset_dir": str(tmp_path), "use_cpu": True, "fp16": False}
+    args = TRAIN_ARGS | {
+        "dataset": "pinned",
+        "dataset_dir": str(tmp_path),
+        "cache_dir": os.path.join(HF_HOME, "dataset-revisions", revision),
+        "use_cpu": True,
+        "fp16": False,
+    }
     dataset_module = load_dataset_module(**args)
     assert len(dataset_module["train_dataset"]) == expected_length
 
 
 @pytest.mark.runs_on(["cpu", "mps", "xpu"])
+@pytest.mark.skipif(HF_HUB_OFFLINE, reason="Checking a missing Hub revision requires an online lookup.")
 def test_load_missing_dataset_revision(tmp_path):
     revision = "nonexistent-dataset-revision"
     dataset_info = {"pinned": {"hf_hub_url": "llamafactory/tiny-supervised-dataset", "revision": revision}}
