@@ -18,16 +18,74 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from ...extras import logging
 from ...extras.constants import IGNORE_INDEX
+from ..mm_plugin import Qwen2VLPlugin
 from .processor_utils import DatasetProcessor, greedy_knapsack, infer_seqlen
 
 
 if TYPE_CHECKING:
+    from transformers import PreTrainedTokenizer
+
     from ..mm_plugin import AudioInput, ImageInput, VideoInput
 
 
 logger = logging.get_logger(__name__)
 
 MAX_SU_SEQ_IDX = 2**32  # maximum sub-sequence index
+
+
+def _qwen2_vl_media_was_truncated(
+    tokenizer: "PreTrainedTokenizer",
+    plugin: Qwen2VLPlugin,
+    encoded_pairs: list[tuple[list[int], list[int]]],
+    input_ids: list[int],
+    prefix_ids: list[int],
+    num_images: int,
+    num_videos: int,
+) -> bool:
+    r"""Check whether truncation removed any Qwen2-VL media or boundary token."""
+    tokens = [plugin.vision_bos_token, plugin.vision_eos_token]
+    if num_images:
+        tokens.append(plugin.image_token)
+    if num_videos:
+        tokens.append(plugin.video_token)
+
+    token_ids = []
+    special_ids = set(tokenizer.all_special_ids)
+    for token in tokens:
+        if token is None:
+            return True
+
+        token_id = tokenizer.convert_tokens_to_ids(token)
+        if (
+            token_id is None
+            or token_id == tokenizer.unk_token_id
+            or token_id not in special_ids
+            or tokenizer.convert_ids_to_tokens(token_id) != token
+            or tokenizer.encode(token, add_special_tokens=False) != [token_id]
+        ):
+            return True
+
+        token_ids.append(token_id)
+
+    if len(set(token_ids)) != len(token_ids):
+        return True
+
+    original = {
+        token_id: sum(source.count(token_id) + target.count(token_id) for source, target in encoded_pairs)
+        for token_id in token_ids
+    }
+    retained = {token_id: input_ids.count(token_id) - prefix_ids.count(token_id) for token_id in token_ids}
+    if original[token_ids[0]] < num_images + num_videos or original[token_ids[1]] < num_images + num_videos:
+        return True
+
+    if num_images and original[token_ids[2]] < num_images:
+        return True
+
+    video_index = 3 if num_images else 2
+    if num_videos and original[token_ids[video_index]] < num_videos:
+        return True
+
+    return any(original[token_id] != retained[token_id] for token_id in token_ids)
 
 
 @dataclass
@@ -59,22 +117,20 @@ class SupervisedDatasetProcessor(DatasetProcessor):
         videos: list["VideoInput"],
         audios: list["AudioInput"],
     ) -> Optional[tuple[list[int], list[int]]]:
-        r"""Encode one example, or return None when multimodal tokens get truncated.
-
-        Truncation is applied to the already-expanded token ids, so cutting a
-        sequence that carries images/videos/audios can land inside an image
-        token span. The media themselves are kept intact, so the collator later
-        derives a full-length image grid that no longer matches the truncated
-        `input_ids`, and `get_rope_index` fails with a shape mismatch during
-        training. Drop such examples instead of emitting inconsistent features.
-        """
+        r"""Encode one example, dropping Qwen2-VL samples with truncated media tokens."""
         messages = self.template.mm_plugin.process_messages(prompt + response, images, videos, audios, self.processor)
         input_ids, labels = self.template.mm_plugin.process_token_ids(
             [], [], images, videos, audios, self.tokenizer, self.processor
         )
+        # Other multimodal plugins use different token layouts.
+        check_qwen2_vl = bool(images or videos) and type(self.template.mm_plugin) is Qwen2VLPlugin
+        prefix_ids = input_ids.copy() if check_qwen2_vl else []
         discarding_history_cot = self.data_args.mask_history and not self.template.preserve_thinking
         encoded_pairs = self.template.encode_multiturn(self.tokenizer, messages, system, tools, discarding_history_cot)
-        untruncated_length = sum(len(source_ids) + len(target_ids) for source_ids, target_ids in encoded_pairs)
+        untruncated_length = (
+            sum(len(source_ids) + len(target_ids) for source_ids, target_ids in encoded_pairs) if check_qwen2_vl else 0
+        )
+        retained_length = 0
         total_length = len(input_ids) + (1 if self.template.efficient_eos else 0)
         if self.data_args.mask_history:
             encoded_pairs = encoded_pairs[::-1]  # high priority for last turns
@@ -89,6 +145,7 @@ class SupervisedDatasetProcessor(DatasetProcessor):
             source_ids = source_ids[:source_len]
             target_ids = target_ids[:target_len]
             total_length += source_len + target_len
+            retained_length += source_len + target_len
 
             if self.data_args.train_on_prompt:
                 source_label = source_ids
@@ -109,19 +166,24 @@ class SupervisedDatasetProcessor(DatasetProcessor):
                 input_ids += source_ids + target_ids
                 labels += source_label + target_label
 
+        if check_qwen2_vl and retained_length < untruncated_length:
+            if _qwen2_vl_media_was_truncated(
+                self.tokenizer, self.template.mm_plugin, encoded_pairs, input_ids, prefix_ids, len(images), len(videos)
+            ):
+                return None
+
         if self.template.efficient_eos:
             input_ids += [self.tokenizer.eos_token_id]
             labels += [self.tokenizer.eos_token_id]
-
-        if (images or videos or audios) and len(input_ids) < untruncated_length:
-            return None
 
         return input_ids, labels
 
     def preprocess_dataset(self, examples: dict[str, list[Any]]) -> dict[str, list[Any]]:
         # build inputs with format `<bos> X Y <eos>` and labels with format `<ignore> ... <ignore> Y <eos>`
         # for multiturn examples, we only mask the prompt part in each prompt-response pair.
-        model_inputs = defaultdict(list)
+        model_inputs = defaultdict(
+            list, {key: [] for key in ("input_ids", "attention_mask", "labels", "images", "videos", "audios")}
+        )
         for i in range(len(examples["_prompt"])):
             if len(examples["_prompt"][i]) % 2 != 1 or len(examples["_response"][i]) != 1:
                 logger.warning_rank0(
@@ -138,12 +200,10 @@ class SupervisedDatasetProcessor(DatasetProcessor):
                 videos=examples["_videos"][i] or [],
                 audios=examples["_audios"][i] or [],
             )
-            if encoded_example is None:  # truncated inside a multimodal token span
+            if encoded_example is None:
                 logger.warning_rank0(
-                    "Dropped example truncated inside its multimodal tokens: {}. "
-                    "Consider raising `cutoff_len` or lowering `image_max_pixels`.".format(
-                        examples["_prompt"][i] + examples["_response"][i]
-                    )
+                    "Dropped a Qwen2-VL example because truncation may have removed image/video tokens. "
+                    "Consider raising `cutoff_len` or reducing media size."
                 )
                 continue
 
@@ -191,12 +251,10 @@ class PackedSupervisedDatasetProcessor(SupervisedDatasetProcessor):
                 videos=examples["_videos"][i] or [],
                 audios=examples["_audios"][i] or [],
             )
-            if encoded_example is None:  # truncated inside a multimodal token span
+            if encoded_example is None:
                 logger.warning_rank0(
-                    "Dropped example truncated inside its multimodal tokens: {}. "
-                    "Consider raising `cutoff_len` or lowering `image_max_pixels`.".format(
-                        examples["_prompt"][i] + examples["_response"][i]
-                    )
+                    "Dropped a Qwen2-VL example because truncation may have removed image/video tokens. "
+                    "Consider raising `cutoff_len` or reducing media size."
                 )
                 continue
 
@@ -214,8 +272,17 @@ class PackedSupervisedDatasetProcessor(SupervisedDatasetProcessor):
                 batch_audios.append(examples["_audios"][i] or [])
                 valid_num += 1
 
-        model_inputs = defaultdict(list)
+        model_inputs = defaultdict(
+            list,
+            {
+                key: []
+                for key in ("input_ids", "attention_mask", "position_ids", "labels", "images", "videos", "audios")
+            },
+        )
         requires_packing_params = self.data_args.neat_packing
+        if requires_packing_params:
+            model_inputs["packing_params"] = []
+
         knapsacks = greedy_knapsack(lengths, self.data_args.cutoff_len)
         for knapsack in knapsacks:
             packed_input_ids, packed_attention_masks, packed_position_ids, packed_labels = [], [], [], []
