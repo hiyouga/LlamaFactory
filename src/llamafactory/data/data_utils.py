@@ -111,7 +111,7 @@ def split_dataset(
                 eval_dict["validation"] = dataset.take(int(data_args.val_size))
                 train_dict["train"] = dataset.skip(int(data_args.val_size))
             else:
-                val_size = int(data_args.val_size) if data_args.val_size > 1 else data_args.val_size
+                val_size = int(data_args.val_size) if data_args.val_size >= 1 else data_args.val_size
                 split_result = dataset.train_test_split(test_size=val_size, seed=seed)
                 train_dict["train"] = split_result["train"]
                 eval_dict["validation"] = split_result["test"]
