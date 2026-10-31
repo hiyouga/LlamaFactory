@@ -20,7 +20,7 @@ from llamafactory.data.parser import DatasetAttr
 from llamafactory.hparams import DataArguments
 
 
-@pytest.mark.runs_on(["cpu", "mps"])
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
 def test_alpaca_converter():
     dataset_attr = DatasetAttr("hf_hub", "llamafactory/tiny-supervised-dataset")
     data_args = DataArguments()
@@ -41,7 +41,7 @@ def test_alpaca_converter():
     }
 
 
-@pytest.mark.runs_on(["cpu", "mps"])
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
 def test_sharegpt_converter():
     dataset_attr = DatasetAttr("hf_hub", "llamafactory/tiny-supervised-dataset")
     data_args = DataArguments()

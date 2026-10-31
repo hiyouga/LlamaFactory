@@ -262,6 +262,15 @@ _register_composite_model(
 
 
 _register_composite_model(
+    model_type="glm5_next",
+    projector_keys=["model.visual.merger", "model.visual.downsample"],
+    vision_model_keys=["model.visual.patch_embed", "model.visual.blocks", "model.visual.post_layernorm"],
+    language_model_keys=["model.language_model", "lm_head"],
+    lora_conflict_keys=["patch_embed"],
+)
+
+
+_register_composite_model(
     model_type="glm_ocr",
     projector_keys=["visual.merger"],
     vision_model_keys=["visual.patch_embed", "visual.blocks"],

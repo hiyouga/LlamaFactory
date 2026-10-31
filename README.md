@@ -338,6 +338,7 @@ Read technical notes:
 | [Seed (OSS/Coder)](https://huggingface.co/ByteDance-Seed)         | 8B/36B                           | seed_oss/seed_coder  |
 | [StarCoder 2](https://huggingface.co/bigcode)                     | 3B/7B/15B                        | -                    |
 | [TeleChat 2-2.5](https://huggingface.co/Tele-AI)                  | 3B/7B/35B/115B                   | telechat2            |
+| [Xing4.0-29B-A4B](https://huggingface.co/XingChen-AGI)            | 29B-A4B                          | xing4_0              |
 | [Yuan 2](https://huggingface.co/IEITYuan)                         | 2B/51B/102B                      | yuan                 |
 
 > [!NOTE]
@@ -613,14 +614,18 @@ You can also download the pre-built Docker images:
 # Docker Hub
 docker pull hiyouga/llamafactory:latest-910b-ubuntu
 docker pull hiyouga/llamafactory:latest-a3-ubuntu
+docker pull hiyouga/llamafactory:latest-950-ubuntu
 docker pull hiyouga/llamafactory:latest-910b-openeuler
 docker pull hiyouga/llamafactory:latest-a3-openeuler
+docker pull hiyouga/llamafactory:latest-950-openeuler
 
 # quay.io
 docker pull quay.io/ascend/llamafactory:latest-910b-ubuntu
 docker pull quay.io/ascend/llamafactory:latest-a3-ubuntu
+docker pull quay.io/ascend/llamafactory:latest-950-ubuntu
 docker pull quay.io/ascend/llamafactory:latest-910b-openeuler
 docker pull quay.io/ascend/llamafactory:latest-a3-openeuler
+docker pull quay.io/ascend/llamafactory:latest-950-openeuler
 ```
 
 #### Install BitsAndBytes

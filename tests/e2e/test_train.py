@@ -49,7 +49,7 @@ INFER_ARGS = {
 OS_NAME = os.getenv("OS_NAME", "")
 
 
-@pytest.mark.runs_on(["cpu", "mps"])
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
 @pytest.mark.parametrize(
     "stage,dataset",
     [
@@ -66,7 +66,7 @@ def test_run_exp(stage: str, dataset: str):
     assert os.path.exists(output_dir)
 
 
-@pytest.mark.runs_on(["cpu", "mps"])
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
 def test_export():
     export_dir = os.path.join("output", "llama3_export")
     export_model({"export_dir": export_dir, **INFER_ARGS})

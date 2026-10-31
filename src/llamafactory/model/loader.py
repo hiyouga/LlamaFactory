@@ -60,6 +60,7 @@ def _get_init_kwargs(model_args: "ModelArguments") -> dict[str, Any]:
     """
     skip_check_imports()
     model_args.model_name_or_path = try_download_model_from_other_hub(model_args)
+
     return {
         "trust_remote_code": model_args.trust_remote_code,
         "cache_dir": model_args.cache_dir,

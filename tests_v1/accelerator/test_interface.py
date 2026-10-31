@@ -52,7 +52,7 @@ def test_all_device():
     assert DistributedInterface().get_local_world_size() == int(os.getenv("LOCAL_WORLD_SIZE", "1"))
 
 
-@pytest.mark.runs_on(["cuda", "npu"])
+@pytest.mark.runs_on(["cuda", "npu", "xpu"])
 @pytest.mark.require_distributed(2)
 def test_multi_device():
     master_port = find_available_port()

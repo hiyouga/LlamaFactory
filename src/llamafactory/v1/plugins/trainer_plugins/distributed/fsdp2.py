@@ -29,6 +29,7 @@ from torch.distributed.checkpoint.state_dict import (
 )
 from torch.distributed.fsdp import (
     CPUOffloadPolicy,
+    FSDPModule,
     MixedPrecisionPolicy,
     fully_shard,
 )
@@ -124,6 +125,19 @@ def get_transformer_layer_cls(model: HFModel) -> set[type[nn.Module]]:
     return set()
 
 
+def _save_pretrained(model: HFModel, output_dir: str, state_dict: dict) -> None:
+    """Serialize remote model code using its original class instead of FSDP2's generated wrapper."""
+    model_cls = type(model)
+    if isinstance(model, FSDPModule) and getattr(model_cls, "_auto_class", None) is not None:
+        # fully_shard creates a class with bases (FSDPModule, original_model_class).
+        # HF otherwise copies PyTorch's FSDP source and writes an unloadable auto_map.
+        model.__class__ = model_cls.__bases__[1]
+    try:
+        model.save_pretrained(output_dir, state_dict=state_dict, max_shard_size="4GB")
+    finally:
+        model.__class__ = model_cls
+
+
 def save_model(model: HFModel, output_dir: str, processor: Processor) -> None:
     if DistributedInterface().get_rank() == 0:
         logger.info("Gathering state dict for saving...")
@@ -134,7 +148,7 @@ def save_model(model: HFModel, output_dir: str, processor: Processor) -> None:
 
     if DistributedInterface().get_rank() == 0:
         model_to_save = model.module if hasattr(model, "module") else model
-        model_to_save.save_pretrained(output_dir, state_dict=state_dict, max_shard_size="4GB")
+        _save_pretrained(model_to_save, output_dir, state_dict)
         processor.save_pretrained(output_dir, max_shard_size="4GB")
         logger.info(f"Model saved to {output_dir}")
 
@@ -164,7 +178,7 @@ def save_checkpoint(model: HFModel, optimizer: torch.optim.Optimizer, ckpt_dir: 
         if DistributedInterface().get_rank() == 0:
             model_to_save = model.module if hasattr(model, "module") else model
             hf_dir = os.path.join(ckpt_dir, "hf_model")
-            model_to_save.save_pretrained(hf_dir, state_dict=hf_state_dict, max_shard_size="4GB")
+            _save_pretrained(model_to_save, hf_dir, hf_state_dict)
             if processor is not None:
                 processor.save_pretrained(hf_dir, max_shard_size="4GB")
 
