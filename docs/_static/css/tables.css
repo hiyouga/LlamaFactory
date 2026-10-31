@@ -1,0 +1,5 @@
+.rst-content table.docutils td code {
+    white-space: nowrap;
+    overflow-wrap: normal;
+    word-break: normal;
+}

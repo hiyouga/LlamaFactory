@@ -21,7 +21,7 @@ import pytest
 
 
 @pytest.mark.xfail(reason="CI machines may OOM when heavily loaded.")
-@pytest.mark.runs_on(["cuda", "npu"])
+@pytest.mark.runs_on(["cuda", "npu", "xpu"])
 def test_fsdp2_dpo_trainer(tmp_path: Path):
     """Test FSDP2 DPO trainer with sigmoid loss by simulating `llamafactory-cli dpo config.yaml`."""
     config_yaml = """\

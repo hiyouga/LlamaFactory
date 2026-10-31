@@ -26,6 +26,7 @@ html_js_files = [
 
 html_css_files = [
     "css/lang-switcher.css",
+    "css/tables.css",
 ]
 
 myst_enable_extensions = [

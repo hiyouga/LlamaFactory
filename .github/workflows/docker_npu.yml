@@ -27,6 +27,12 @@ jobs:
           - device: "npu-a3"
             os: "openeuler"
             base_image: "quay.io/ascend/cann:9.1.0-a3-openeuler24.03-py3.12"
+          - device: "npu-a5"
+            os: "ubuntu"
+            base_image: "quay.io/ascend/cann:9.1.0-950-ubuntu22.04-py3.12"
+          - device: "npu-a5"
+            os: "openeuler"
+            base_image: "quay.io/ascend/cann:9.1.0-950-openeuler24.03-py3.12"
 
     runs-on: ubuntu-latest
 
@@ -68,7 +74,7 @@ jobs:
           base_image_tag="${BASE_IMAGE##*:}"
           cann_version="${base_image_tag%%-*}"
           torch_npu_version="$(sed -nE 's/^torch[-_]npu==([0-9]+(\.[0-9]+)*(\.post[0-9]+)?).*/\1/p' requirements/npu.txt)"
-          soc="$(grep -oE '(910b|a3)' <<< "${base_image_tag}" | head -n 1)"
+          soc="$(grep -oE '(910b|a3|950)' <<< "${base_image_tag}" | head -n 1)"
           operating_system="$(grep -oE '(ubuntu|openeuler)[0-9]+(\.[0-9]+)*' <<< "${base_image_tag}" | head -n 1)"
           python_version="$(grep -oE 'py[0-9]+\.[0-9]+' <<< "${base_image_tag}" | head -n 1)"
 
@@ -85,6 +91,7 @@ jobs:
           case "${MATRIX_DEVICE}" in
             npu-a2) expected_soc="910b" ;;
             npu-a3) expected_soc="a3" ;;
+            npu-a5) expected_soc="950" ;;
             *)
               echo "Unsupported NPU device ${MATRIX_DEVICE}" >&2
               exit 1

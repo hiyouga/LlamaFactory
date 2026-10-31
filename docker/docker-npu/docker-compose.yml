@@ -23,6 +23,13 @@ x-npu-common: &npu-common
     - /dev/hisi_hdc
   restart: unless-stopped
 
+x-npu-950: &npu-950
+  <<: *npu-common
+  devices:
+    - /dev/davinci0
+    - /dev/davinci_manager
+    - /dev/hisi_hdc
+
 services:
   llamafactory-a2-ubuntu:
     <<: *npu-common
@@ -79,3 +86,31 @@ services:
     ports:
       - "7863:7860"
       - "8003:8000"
+
+  llamafactory-950-ubuntu:
+    <<: *npu-950
+    profiles: ["950-ubuntu"]
+    build:
+      <<: *build
+      args:
+        <<: *build-args
+        BASE_IMAGE: quay.io/ascend/cann:9.1.0-950-ubuntu22.04-py3.12
+    container_name: llamafactory-950-ubuntu
+    image: llamafactory:npu-950-ubuntu
+    ports:
+      - "7864:7860"
+      - "8004:8000"
+
+  llamafactory-950-openeuler:
+    <<: *npu-950
+    profiles: ["950-openeuler"]
+    build:
+      <<: *build
+      args:
+        <<: *build-args
+        BASE_IMAGE: quay.io/ascend/cann:9.1.0-950-openeuler24.03-py3.12
+    container_name: llamafactory-950-openeuler
+    image: llamafactory:npu-950-openeuler
+    ports:
+      - "7865:7860"
+      - "8005:8000"

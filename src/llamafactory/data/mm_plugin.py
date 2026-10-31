@@ -19,7 +19,7 @@ import inspect
 import math
 import os
 import re
-from copy import deepcopy
+from copy import copy, deepcopy
 from dataclasses import dataclass
 from io import BytesIO
 from types import SimpleNamespace
@@ -56,6 +56,7 @@ if TYPE_CHECKING:
     from transformers.feature_extraction_sequence_utils import SequenceFeatureExtractor
     from transformers.image_processing_utils import BaseImageProcessor
     from transformers.video_processing_utils import BaseVideoProcessor
+    from transformers.video_utils import VideoMetadata
 
     class EncodedImage(TypedDict):
         path: str | None
@@ -2777,6 +2778,213 @@ class Qwen3VLPlugin(Qwen2VLPlugin):
 
 
 @dataclass
+class Glm5NextPlugin(BasePlugin):
+    r"""GLM5-Next images and timestamped video frames using the native processors."""
+
+    @override
+    def _validate_input(
+        self,
+        processor: Optional["MMProcessor"],
+        images: list["ImageInput"],
+        videos: list["VideoInput"],
+        audios: list["AudioInput"],
+    ) -> None:
+        if processor is None and not (images or videos or audios):
+            return  # Preserve tokenizer-only text preprocessing.
+        super()._validate_input(processor, images, videos, audios)
+
+    def _decode_video(
+        self, video: "VideoInput", processor: "MMProcessor"
+    ) -> tuple[list["ImageObject"], "VideoMetadata"]:
+        r"""Decode sampled frames and preserve their source timing for the native processor."""
+        from transformers.video_utils import VideoMetadata
+
+        fps = getattr(processor, "video_fps", 2.0)
+        maxlen = getattr(processor, "video_maxlen", 128)
+        temporal = processor.video_processor.temporal_patch_size
+        if not math.isfinite(fps) or fps <= 0 or maxlen < temporal:
+            raise ValueError("glm5_next requires video_fps > 0 and video_maxlen >= temporal_patch_size.")
+        # Native sampling can duplicate the last frame for temporal patching.
+        # Use a private sampler so frame limits never mutate the shared processor.
+        sampler = copy(processor.video_processor)
+        sampler.max_frames = min(sampler.max_frames, maxlen // temporal * temporal)
+        if _check_video_is_nested_images(video):
+            if not video:
+                raise ValueError("glm5_next received an empty video frame list.")
+            total = len(video)
+            indices = np.linspace(0, total - 1, min(total, sampler.max_frames), dtype=int).tolist()
+            frames = self._regularize_images(
+                [video[i] for i in indices], image_max_pixels=float("inf"), image_min_pixels=0
+            )["images"]
+            # Frame lists have no source timing; video_fps describes their spacing.
+            metadata = VideoMetadata(total_num_frames=total, fps=fps, frames_indices=indices)
+        else:
+            with av.open(video, "r") as container:
+                stream = next((s for s in container.streams if s.type == "video"), None)
+                if stream is None or not stream.average_rate or stream.average_rate <= 0:
+                    raise ValueError("glm5_next requires a video stream with a valid source FPS.")
+                source_fps = float(stream.average_rate)
+                duration = float(stream.duration * stream.time_base) if stream.duration is not None else None
+                metadata = VideoMetadata(total_num_frames=stream.frames, fps=source_fps, duration=duration)
+                # Some containers omit frame counts. Count without retaining all
+                # decoded pixels, then seek back and retain only selected frames.
+                if not metadata.total_num_frames:
+                    metadata.total_num_frames = sum(1 for _ in container.decode(stream))
+                    container.seek(0)
+                if metadata.total_num_frames <= 0:
+                    raise ValueError("glm5_next received a video with no decodable frames.")
+                indices = sampler.sample_frames(metadata, fps=fps).tolist()
+                if not indices:  # Sub-second clips can round to zero in the native sampler.
+                    indices = [0]
+                indices = indices[: sampler.max_frames]
+                selected = set(indices)
+                decoded = {}
+                for i, frame in enumerate(container.decode(stream)):
+                    if i in selected:
+                        decoded[i] = frame.to_image()
+                    if i >= max(selected):
+                        break
+                if selected - decoded.keys():
+                    raise ValueError("glm5_next could not decode all sampled video frames.")
+                frames = [decoded[i] for i in indices]
+                metadata.frames_indices = indices
+        # Keep both pixels and timestamps aligned when repeating an odd last frame.
+        while len(frames) % temporal:
+            frames.append(frames[-1])
+            metadata.frames_indices.append(metadata.frames_indices[-1])
+        return frames, metadata
+
+    @override
+    def _get_mm_inputs(
+        self,
+        images: list["ImageInput"],
+        videos: list["VideoInput"],
+        audios: list["AudioInput"],
+        processor: "MMProcessor",
+    ) -> dict[str, Any]:
+        self._validate_input(processor, images, videos, audios)
+        mm_inputs = {}
+        if images:
+            # Only decode/convert here: resizing twice changes the native pixels.
+            images = self._regularize_images(images, image_max_pixels=float("inf"), image_min_pixels=0)["images"]
+            image_processor = processor.image_processor
+            pixels_per_token = (image_processor.patch_size * image_processor.merge_size) ** 2
+            kwargs = {}
+            if hasattr(processor, "image_max_pixels"):
+                kwargs["max_image_tokens"] = max(1, processor.image_max_pixels // pixels_per_token)
+            if hasattr(processor, "image_min_pixels"):
+                kwargs["min_image_tokens"] = max(1, math.ceil(processor.image_min_pixels / pixels_per_token))
+            mm_inputs.update(image_processor(images=images, return_tensors="pt", **kwargs))
+        if videos:
+            video_processor = processor.video_processor
+            pixels_per_token = (video_processor.patch_size * video_processor.merge_size) ** 2
+            processed = []
+            for video in videos:
+                frames, metadata = self._decode_video(video, processor)
+                temporal_tokens = len(frames) // video_processor.temporal_patch_size
+                # LlamaFactory limits pixels per frame; native GLM5 budgets tokens
+                # across the whole video (after temporal merging).
+                kwargs = {
+                    "min_image_tokens": max(
+                        1, math.ceil(getattr(processor, "video_min_pixels", 256) / pixels_per_token)
+                    )
+                    * temporal_tokens,
+                    "max_image_tokens": max(1, getattr(processor, "video_max_pixels", 65536) // pixels_per_token)
+                    * temporal_tokens,
+                }
+                processed.append(
+                    video_processor(
+                        videos=[np.stack([np.asarray(frame) for frame in frames])],
+                        video_metadata=[metadata],
+                        do_sample_frames=False,
+                        return_metadata=True,
+                        return_tensors="pt",
+                        **kwargs,
+                    )
+                )
+            for key in ("pixel_values_videos", "video_grid_thw"):
+                mm_inputs[key] = torch.cat([item[key] for item in processed])
+            mm_inputs["video_metadata"] = [item["video_metadata"][0] for item in processed]
+        return mm_inputs
+
+    @override
+    def process_messages(
+        self,
+        messages: list[dict[str, str]],
+        images: list["ImageInput"],
+        videos: list["VideoInput"],
+        audios: list["AudioInput"],
+        processor: Optional["MMProcessor"],
+    ) -> list[dict[str, str]]:
+        self._validate_input(processor, images, videos, audios)
+        self._validate_messages(messages, images, videos, audios)
+        messages = deepcopy(messages)
+        mm_inputs = self._get_mm_inputs(images, videos, audios, processor) if self.expand_mm_tokens else {}
+        image_idx, video_idx = 0, 0
+        for message in messages:
+            if message["role"] != "user" and any(
+                p in message["content"] for p in (IMAGE_PLACEHOLDER, VIDEO_PLACEHOLDER)
+            ):
+                raise ValueError("glm5_next supports images and videos in user messages only.")
+            while IMAGE_PLACEHOLDER in message["content"]:
+                tokens = (
+                    processor.replace_image_token(mm_inputs, image_idx) if self.expand_mm_tokens else self.image_token
+                )
+                message["content"] = message["content"].replace(
+                    IMAGE_PLACEHOLDER, f"<|begin_of_image|>{tokens}<|end_of_image|>", 1
+                )
+                image_idx += 1
+            while VIDEO_PLACEHOLDER in message["content"]:
+                tokens = (
+                    processor.replace_video_token(mm_inputs, video_idx) if self.expand_mm_tokens else self.video_token
+                )
+                message["content"] = message["content"].replace(
+                    VIDEO_PLACEHOLDER, f"<|begin_of_video|>{tokens}<|end_of_video|>", 1
+                )
+                video_idx += 1
+        return messages
+
+    @override
+    def get_mm_inputs(
+        self,
+        images: list["ImageInput"],
+        videos: list["VideoInput"],
+        audios: list["AudioInput"],
+        imglens: list[int],
+        vidlens: list[int],
+        audlens: list[int],
+        batch_ids: list[list[int]],
+        processor: Optional["MMProcessor"],
+    ) -> dict[str, Union[list[list[int]], "torch.Tensor"]]:
+        mm_inputs = self._get_mm_inputs(images, videos, audios, processor)
+        token_types = processor.create_mm_token_type_ids(batch_ids)
+        for count, ids in zip(vidlens, batch_ids):
+            boundaries = [token for token in ids if token in (processor.video_start_id, processor.video_end_id)]
+            if boundaries != [processor.video_start_id, processor.video_end_id] * count:
+                raise ValueError("glm5_next video boundaries do not match inputs; check cutoff_len.")
+        # Images and video frames share image_token_id: validate by modality,
+        # otherwise a truncated image could be hidden by extra video tokens.
+        for modality, lens, key, subprocessor in (
+            (1, imglens, "image_grid_thw", processor.image_processor),
+            (2, vidlens, "video_grid_thw", processor.video_processor),
+        ):
+            grids = mm_inputs.get(key, [])
+            offset = 0
+            for count, types in zip(lens, token_types):
+                expected = sum(
+                    int(grid.prod()) // subprocessor.merge_size**2 for grid in grids[offset : offset + count]
+                )
+                if types.count(modality) != expected:
+                    raise ValueError(
+                        "glm5_next image/video tokens do not match features; check cutoff_len and media limits."
+                    )
+                offset += count
+        mm_inputs.pop("video_metadata", None)  # Used for prompt timestamps, never forwarded to model.forward.
+        mm_inputs["mm_token_type_ids"] = token_types
+        return mm_inputs
+
+
+@dataclass
 class GLM4VPlugin(Qwen2VLPlugin):
     @override
     def _get_mm_inputs(
@@ -3249,6 +3457,7 @@ PLUGINS = {
     "gemma3n": Gemma3nPlugin,
     "gemma4": Gemma4Plugin,
     "glm4v": GLM4VPlugin,
+    "glm5_next": Glm5NextPlugin,
     "intern_vl": InternVLPlugin,
     "kimi_vl": KimiVLPlugin,
     "llama4": Llama4Plugin,
