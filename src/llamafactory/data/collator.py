@@ -28,6 +28,7 @@ from transformers import DataCollatorForSeq2Seq
 
 from ..extras.constants import AUDIO_PLACEHOLDER, IGNORE_INDEX, IMAGE_PLACEHOLDER, MROPE_MODELS
 from ..extras.packages import is_pillow_available
+from .mm_plugin import Qwen3VLPlugin
 
 
 if is_pillow_available():
@@ -489,6 +490,19 @@ class MultiModalDataCollatorForSeq2Seq(DataCollatorForSeq2Seq):
             mm_inputs = self.template.mm_plugin.post_process_mossvl_inputs(features, mm_inputs, self.processor)
 
         features.update(mm_inputs)
+
+        if (
+            self.model is None
+            and isinstance(self.template.mm_plugin, Qwen3VLPlugin)
+            and hasattr(self.processor, "create_mm_token_type_ids")
+            and "mm_token_type_ids" not in features
+        ):
+            # Generation has no attached model to precompute M-RoPE; use the fully padded batch.
+            features["mm_token_type_ids"] = torch.tensor(
+                self.processor.create_mm_token_type_ids(features["input_ids"].tolist()),
+                dtype=torch.long,
+                device=features["input_ids"].device,
+            )
 
         if "image_bound" in features:  # for minicpmv inputs
             bsz, seq_length = features["input_ids"].shape
