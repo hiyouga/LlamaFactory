@@ -12,9 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import os
 
 import pytest
+from datasets.exceptions import DatasetNotFoundError
 
 from llamafactory.train.test_utils import load_dataset_module
 
@@ -59,3 +61,40 @@ def test_load_eval_data():
     dataset_module = load_dataset_module(eval_dataset=TINY_DATA, **TRAIN_ARGS)
     assert dataset_module.get("train_dataset") is not None
     assert dataset_module.get("eval_dataset") is not None
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
+@pytest.mark.parametrize(
+    "revision,expected_length",
+    [
+        ("5047f1f9e08e770f3b7608b99fefbb1ebf0ca81e", 298),
+        ("69a1b759c08f6ceba7bedb2f1309461db04c829b", 300),
+    ],
+)
+def test_load_dataset_revision(tmp_path, revision, expected_length):
+    dataset_info = {
+        "pinned": {
+            "hf_hub_url": "llamafactory/tiny-supervised-dataset",
+            "revision": revision,
+        }
+    }
+    (tmp_path / "dataset_info.json").write_text(json.dumps(dataset_info))
+    args = TRAIN_ARGS | {"dataset": "pinned", "dataset_dir": str(tmp_path), "use_cpu": True, "fp16": False}
+    dataset_module = load_dataset_module(**args)
+    assert len(dataset_module["train_dataset"]) == expected_length
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
+def test_load_missing_dataset_revision(tmp_path):
+    revision = "nonexistent-dataset-revision"
+    dataset_info = {"pinned": {"hf_hub_url": "llamafactory/tiny-supervised-dataset", "revision": revision}}
+    (tmp_path / "dataset_info.json").write_text(json.dumps(dataset_info))
+    args = TRAIN_ARGS | {
+        "dataset": "pinned",
+        "dataset_dir": str(tmp_path),
+        "cache_dir": str(tmp_path / "cache"),
+        "use_cpu": True,
+        "fp16": False,
+    }
+    with pytest.raises(DatasetNotFoundError, match=revision):
+        load_dataset_module(**args)
