@@ -31,10 +31,10 @@ The image includes the following core components:
 
 | Component | Version |
 | --- | --- |
-| CANN | `9.1.0` |
+| CANN | `9.2.0` |
 | Python | `3.12` |
 | PyTorch | `2.10.0` |
-| TorchNPU | `2.10.0.post2` |
+| TorchNPU | `2.10.0.post7` |
 | torchvision / torchaudio | `0.25.0` / `2.10.0` |
 | Transformers | Latest compatible version at build time |
 | Triton Ascend | `3.2.1` |
@@ -67,8 +67,8 @@ Future NPU release images will use the full tag format below. Historical release
 | Field | Example | Description |
 | --- | --- | --- |
 | `LlamaFactory-version` | `0.9.5` | LlamaFactory release version |
-| `CANN-version` | `9.1.0` | Parsed from the CANN base image tag |
-| `TorchNPU-version` | `2.10.0.post2` | Full TorchNPU version used by the image, including suffixes such as `.postN` |
+| `CANN-version` | `9.2.0` | Parsed from the CANN base image tag |
+| `TorchNPU-version` | `2.10.0.post7` | Full TorchNPU version used by the image, including suffixes such as `.postN` |
 | `chip` | `910b`, `a3`, or `950` | Ascend chip model supported by the image |
 | `os` | `ubuntu22.04` or `openeuler24.03` | Container operating system family and version |
 | `Python-version` | `py3.12` | Parsed from the CANN base image tag |
@@ -76,7 +76,7 @@ Future NPU release images will use the full tag format below. Historical release
 For example:
 
 ```text
-0.9.5-cann9.1.0-torch_npu2.10.0.post2-a3-ubuntu22.04-py3.12
+0.9.5-cann9.2.0-torch_npu2.10.0.post7-a3-ubuntu22.04-py3.12
 ```
 
 ## Quick Start
@@ -117,6 +117,8 @@ docker run --rm -it \
 
 The host path for `npu-smi` may be `/usr/local/sbin/npu-smi` on some driver installations. Adjust the mount source when necessary. Add more `--device=/dev/davinci<N>` options to expose additional NPUs.
 
+For 950 hosts using UnifiedBus (UB), add `--device=/dev/uburma --device=/dev/ummu` to `docker run`, or append these two devices to `x-npu-950.devices` in your local Compose file. Only map device paths that exist on the host; omit `/dev/devmm_svm` from the example if it is absent.
+
 Verify the runtime inside the container:
 
 ```bash
@@ -133,7 +135,7 @@ Run the build from the repository root. The following example builds the A2 Ubun
 ```bash
 docker build \
   -f ./docker/docker-npu/Dockerfile \
-  --build-arg BASE_IMAGE=quay.io/ascend/cann:9.1.0-910b-ubuntu22.04-py3.12 \
+  --build-arg BASE_IMAGE=quay.io/ascend/cann:9.2.0-910b-ubuntu22.04-py3.12 \
   --build-arg PIP_INDEX=https://pypi.org/simple \
   -t llamafactory:npu-910b-ubuntu \
   .
@@ -143,7 +145,7 @@ Available build arguments:
 
 | Argument | Default | Purpose |
 | --- | --- | --- |
-| `BASE_IMAGE` | `quay.io/ascend/cann:9.1.0-910b-ubuntu22.04-py3.12` | Selects the base image that matches the device model and container operating system |
+| `BASE_IMAGE` | `quay.io/ascend/cann:9.2.0-910b-ubuntu22.04-py3.12` | Selects the base image that matches the device model and container operating system |
 | `PIP_INDEX` | `https://pypi.org/simple` | Selects the Python package index |
 | `PYTORCH_INDEX` | `https://download.pytorch.org/whl/cpu` | Selects the PyTorch wheel index used with TorchNPU |
 | `HTTP_PROXY` | Empty | Provides an optional HTTP/HTTPS proxy during the build |
