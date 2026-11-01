@@ -31,10 +31,10 @@ LlamaFactory 昇腾 NPU 镜像面向华为昇腾 Atlas NPU，提供可直接使�
 
 | 组件 | 版本 |
 | --- | --- |
-| CANN | `9.1.0` |
+| CANN | `9.2.0` |
 | Python | `3.12` |
 | PyTorch | `2.10.0` |
-| TorchNPU | `2.10.0.post2` |
+| TorchNPU | `2.10.0.post7` |
 | torchvision / torchaudio | `0.25.0` / `2.10.0` |
 | Transformers | 构建时的最新兼容版本 |
 | Triton Ascend | `3.2.1` |
@@ -67,8 +67,8 @@ latest-<芯片信息>-<操作系统>
 | 字段 | 示例 | 说明 |
 | --- | --- | --- |
 | `LlamaFactory版本` | `0.9.5` | LlamaFactory release 版本号 |
-| `CANN版本` | `9.1.0` | 从 CANN 基础镜像 tag 中提取 |
-| `TorchNPU版本` | `2.10.0.post2` | 镜像使用的 TorchNPU 完整版本，包含 `.postN` 等后缀 |
+| `CANN版本` | `9.2.0` | 从 CANN 基础镜像 tag 中提取 |
+| `TorchNPU版本` | `2.10.0.post7` | 镜像使用的 TorchNPU 完整版本，包含 `.postN` 等后缀 |
 | `芯片信息` | `910b`、`a3` 或 `950` | 镜像所适配的昇腾芯片型号 |
 | `操作系统` | `ubuntu22.04` 或 `openeuler24.03` | 容器操作系统类型和版本 |
 | `Python版本` | `py3.12` | 从 CANN 基础镜像 tag 中提取 |
@@ -76,7 +76,7 @@ latest-<芯片信息>-<操作系统>
 例如：
 
 ```text
-0.9.5-cann9.1.0-torch_npu2.10.0.post2-a3-ubuntu22.04-py3.12
+0.9.5-cann9.2.0-torch_npu2.10.0.post7-a3-ubuntu22.04-py3.12
 ```
 
 ## 快速开始
@@ -133,7 +133,7 @@ llamafactory-cli help
 ```bash
 docker build \
   -f ./docker/docker-npu/Dockerfile \
-  --build-arg BASE_IMAGE=quay.io/ascend/cann:9.1.0-910b-ubuntu22.04-py3.12 \
+  --build-arg BASE_IMAGE=quay.io/ascend/cann:9.2.0-910b-ubuntu22.04-py3.12 \
   --build-arg PIP_INDEX=https://pypi.org/simple \
   -t llamafactory:npu-910b-ubuntu \
   .
@@ -143,7 +143,7 @@ docker build \
 
 | 参数 | 默认值 | 用途 |
 | --- | --- | --- |
-| `BASE_IMAGE` | `quay.io/ascend/cann:9.1.0-910b-ubuntu22.04-py3.12` | 根据设备型号和容器操作系统选择对应的基础镜像 |
+| `BASE_IMAGE` | `quay.io/ascend/cann:9.2.0-910b-ubuntu22.04-py3.12` | 根据设备型号和容器操作系统选择对应的基础镜像 |
 | `PIP_INDEX` | `https://pypi.org/simple` | 指定 Python 软件包索引 |
 | `PYTORCH_INDEX` | `https://download.pytorch.org/whl/cpu` | 指定配合 TorchNPU 使用的 PyTorch wheel 索引 |
 | `HTTP_PROXY` | 空 | 构建期间可选的 HTTP/HTTPS 代理 |
