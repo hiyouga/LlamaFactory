@@ -184,6 +184,15 @@ To build an image with Docker Compose without starting a container, use `docker 
 - Legacy NPU tags are replaced by the `latest-<910b|a3|950>-<ubuntu|openeuler>` format.
 - Validate the exact driver, firmware, CANN, and SoC combination before production deployment.
 
+## Security Risks
+When running containers with these images, be aware of the following security risks:
+
+- Running as the `root` user: Containers run as the `root` user by default, which can introduce security risks. In production environments, it is recommended to create a non-privileged user to run the application.
+
+- Lack of CPU and memory resource limits: Not setting resource limits may cause a container to consume excessive system resources and affect host performance. It is recommended to use the `--cpus` and `--memory` parameters to limit resource usage.
+
+- Device use with `rwm` permissions: The NPU device is assigned read, write, and `mknod` permissions. Although these are required for functionality, the scope of permissions should be carefully evaluated in security-sensitive environments.
+
 ## License and Disclaimer
 
 LlamaFactory is distributed under the [Apache License 2.0](../../LICENSE).

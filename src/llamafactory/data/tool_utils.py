@@ -63,6 +63,15 @@ GLM5_NEXT_TOOL_PROMPT = (
     "<arg_key>{{arg-key-2}}</arg_key><arg_value>{{arg-value-2}}</arg_value>...</tool_call>"
 )
 
+XING4_TOOL_PROMPT = (
+    "\n\n# Tools\n\nYou may call one or more functions to assist with the user query.\n\n"
+    "You are provided with function signatures within <tools></tools> XML tags:\n<tools>{tool_text}"
+    "\n</tools>\n\nFor each function call, output the function name and arguments within the following XML format:\n"
+    "<tool_call>{{function-name}}<param_key>{{param-key-1}}</param_key>"
+    "<param_value>{{param-value-1}}</param_value><param_key>{{param-key-2}}</param_key>"
+    "<param_value>{{param-value-2}}</param_value>...</tool_call>"
+)
+
 LLAMA3_TOOL_PROMPT = (
     "Cutting Knowledge Date: December 2023\nToday Date: {date}\n\n"
     "You have access to the following functions. To call a function, please respond with JSON for a function call. "
@@ -850,6 +859,88 @@ class GLM5NextToolUtils(GLM4MOEToolUtils):
         return "".join(calls)
 
 
+class Xing4ToolUtils(ToolUtils):
+    r"""Xing4 tool using template."""
+
+    @override
+    @staticmethod
+    def tool_formatter(tools: list[dict[str, Any]]) -> str:
+        tool_text = "".join("\n" + json.dumps(tool, ensure_ascii=False) for tool in tools)
+        return XING4_TOOL_PROMPT.format(tool_text=tool_text)
+
+    @override
+    @staticmethod
+    def function_formatter(functions: list["FunctionCall"]) -> str:
+        calls = []
+        for name, arguments in functions:
+            if not isinstance(name, str) or not re.fullmatch(r"[^\s<>]+", name):
+                raise ValueError("Invalid xing4 function name.")
+
+            arguments = json.loads(arguments)
+            if not isinstance(arguments, dict):
+                raise ValueError("Xing4 function arguments must be a JSON object.")
+
+            call = f"<tool_call>{name}"
+            for key, value in arguments.items():
+                if not re.fullmatch(r"[^<>]+", key):
+                    raise ValueError("Invalid xing4 parameter name.")
+
+                value = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+                call += f"<param_key>{key}</param_key><param_value>{value}</param_value>"
+
+            calls.append(call + "</tool_call>")
+
+        return "".join(calls)
+
+    @override
+    @staticmethod
+    def tool_extractor(content: str) -> Union[str, list["FunctionCall"]]:
+        call_pattern = re.compile(r"<tool_call>(.*?)</tool_call>", re.DOTALL)
+        call_matches = list(re.finditer(call_pattern, content))
+        if not call_matches:
+            return content
+
+        if content.count("<tool_call>") != len(call_matches) or content.count("</tool_call>") != len(call_matches):
+            return content
+
+        results = []
+        param_pattern = re.compile(r"<param_key>(.*?)</param_key><param_value>(.*?)</param_value>", re.DOTALL)
+        for call_match in call_matches:
+            call_content = call_match.group(1)
+            name_match = re.match(r"\s*([^\s<>]+)", call_content)
+            if name_match is None:
+                return content
+
+            arguments = {}
+            params_content = call_content[name_match.end() :]
+            position = 0
+            for param_match in re.finditer(param_pattern, params_content):
+                if params_content[position : param_match.start()].strip():
+                    return content
+
+                key, raw_value = param_match.groups()
+                key = key.strip()
+                if not key:
+                    return content
+
+                try:
+                    value = json.loads(raw_value)
+                except json.JSONDecodeError:
+                    value = raw_value
+
+                arguments[key] = value
+                position = param_match.end()
+
+            if params_content[position:].strip():
+                return content
+
+            results.append(
+                FunctionCall(name_match.group(1), json.dumps(arguments, ensure_ascii=False))
+            )
+
+        return results
+
+
 class SeedToolUtils(ToolUtils):
     r"""Seed tool using template."""
 
@@ -1031,6 +1122,7 @@ TOOLS = {
     "qwen": QwenToolUtils(),
     "qwen3_5": Qwen35ToolUtils(),
     "qwen3_8": Qwen38ToolUtils(),
+    "xing4": Xing4ToolUtils(),
     "glm4_moe": GLM4MOEToolUtils(),
     "glm5_next": GLM5NextToolUtils(),
     "seed_oss": SeedToolUtils(),

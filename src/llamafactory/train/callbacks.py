@@ -39,6 +39,7 @@ from ..extras.misc import (
     is_torch_cuda_available,
     is_torch_npu_available,
     is_torch_xpu_available,
+    is_torch_supa_available,
     use_ray,
 )
 from ..extras.packages import is_safetensors_available
@@ -513,6 +514,8 @@ class ModuleProfilerCallback(TrainerCallback):
     @staticmethod
     def _get_accelerator():
         """Detect available accelerator and return (event_factory, synchronize_fn)."""
+        if is_torch_supa_available():
+            return torch.supa.Event, torch.supa.synchronize
         if is_torch_cuda_available():
             return torch.cuda.Event, torch.cuda.synchronize
         if is_torch_npu_available():
