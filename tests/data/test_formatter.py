@@ -303,6 +303,65 @@ def test_qwen_multi_tool_extractor():
 
 
 @pytest.mark.runs_on(["cpu", "mps", "xpu"])
+def test_xing4_function_formatter():
+    formatter = FunctionFormatter(slots=["{{content}}", "<_end>\n"], tool_format="xing4")
+    tool_calls = json.dumps(
+        {
+            "name": "tool_name",
+            "arguments": {"foo": "bar", "size": 10, "enabled": True, "items": [1, 2]},
+        }
+    )
+    assert formatter.apply(content=tool_calls) == [
+        "<tool_call>tool_name<param_key>foo</param_key><param_value>bar</param_value>"
+        "<param_key>size</param_key><param_value>10</param_value>"
+        "<param_key>enabled</param_key><param_value>true</param_value>"
+        "<param_key>items</param_key><param_value>[1, 2]</param_value></tool_call>",
+        "<_end>\n",
+    ]
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
+def test_xing4_multi_function_formatter():
+    formatter = FunctionFormatter(slots=["{{content}}"], tool_format="xing4")
+    tool_calls = json.dumps([FUNCTION, {"name": "another_tool", "arguments": {"city": "北京"}}])
+    assert formatter.apply(content=tool_calls) == [
+        "<tool_call>tool_name<param_key>foo</param_key><param_value>bar</param_value>"
+        "<param_key>size</param_key><param_value>10</param_value></tool_call>"
+        "<tool_call>another_tool<param_key>city</param_key><param_value>北京</param_value></tool_call>"
+    ]
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
+def test_xing4_tool_formatter():
+    formatter = ToolFormatter(tool_format="xing4")
+    assert formatter.apply(content=json.dumps(TOOLS)) == [
+        "\n\n# Tools\n\nYou may call one or more functions to assist with the user query.\n\n"
+        "You are provided with function signatures within <tools></tools> XML tags:\n<tools>"
+        f"\n{json.dumps(TOOLS[0], ensure_ascii=False)}"
+        "\n</tools>\n\nFor each function call, output the function name and arguments within the following "
+        "XML format:\n<tool_call>{function-name}<param_key>{param-key-1}</param_key>"
+        "<param_value>{param-value-1}</param_value><param_key>{param-key-2}</param_key>"
+        "<param_value>{param-value-2}</param_value>...</tool_call>"
+    ]
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
+def test_xing4_multi_tool_extractor():
+    formatter = ToolFormatter(tool_format="xing4")
+    result = (
+        "<think>check tools</think>"
+        "<tool_call>test_tool<param_key>foo</param_key><param_value>bar</param_value>"
+        "<param_key>size</param_key><param_value>10</param_value></tool_call>"
+        "<tool_call>another_tool<param_key>enabled</param_key><param_value>true</param_value>"
+        "<param_key>items</param_key><param_value>[1, 2]</param_value></tool_call>"
+    )
+    assert formatter.extract(result) == [
+        ("test_tool", """{"foo": "bar", "size": 10}"""),
+        ("another_tool", """{"enabled": true, "items": [1, 2]}"""),
+    ]
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
 def test_lfm2_function_formatter():
     formatter = FunctionFormatter(slots=["{{content}}<|im_end|>\n"], tool_format="lfm2")
     tool_calls = json.dumps(FUNCTION)

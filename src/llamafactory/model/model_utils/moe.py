@@ -156,6 +156,10 @@ def add_z3_leaf_module(model: "PreTrainedModel") -> None:
 
         _set_z3_leaf_modules(model, [Qwen3_5MoeSparseMoeBlock])
 
+    if model_type == "xing4_0":
+        # Xing4.0 uses custom code
+        _set_z3_leaf_modules(model, ["Xing4_0MoE"])
+
 
 def configure_moe(config: "PretrainedConfig", model_args: "ModelArguments", is_trainable: bool) -> None:
     if not is_trainable or not model_args.moe_aux_loss_coef:
