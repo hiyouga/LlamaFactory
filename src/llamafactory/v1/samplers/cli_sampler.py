@@ -18,6 +18,7 @@ from collections.abc import Generator
 from threading import Thread
 
 from ..config import InputArgument, ModelArguments, SampleArguments, SampleBackend, get_args
+from ..config.arg_utils import get_plugin_config
 from ..core.base_sampler import BaseSampler
 from ..core.data_engine import DataEngine
 from ..core.model_engine import ModelEngine
@@ -75,7 +76,7 @@ class SyncSampler(BaseSampler):
 def run_chat(args: InputArgument = None):
     model_args, data_args, _, sample_args = get_args(args)
     if sample_args.sample_backend != SampleBackend.HF:
-        model_args.init_plugin = {"name": "init_on_meta"}
+        model_args.init_config = get_plugin_config({"name": "init_on_meta"})
 
     model_engine = ModelEngine(model_args)
     sampler = SyncSampler(sample_args, model_args, model_engine.model, model_engine.renderer)
