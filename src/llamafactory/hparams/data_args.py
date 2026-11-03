@@ -156,7 +156,10 @@ class DataArguments:
     def __post_init__(self):
         def split_arg(arg):
             if isinstance(arg, str):
-                return [item.strip() for item in arg.split(",")]
+                # Drop empty items so that `--dataset ""` (or a trailing comma)
+                # becomes None instead of [""], which slips past the `is None`
+                # checks and only fails later with "Undefined dataset  in".
+                return [item.strip() for item in arg.split(",") if item.strip()]
             return arg
 
         self.dataset = split_arg(self.dataset)
