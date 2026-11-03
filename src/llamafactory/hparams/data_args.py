@@ -188,6 +188,9 @@ class DataArguments:
         if self.streaming and self.max_samples is not None:
             raise ValueError("`max_samples` is incompatible with `streaming`.")
 
+        if self.max_samples is not None and self.max_samples < 1:
+            raise ValueError("`max_samples` must be a positive integer.")
+
         if self.mask_history and self.train_on_prompt:
             raise ValueError("`mask_history` is incompatible with `train_on_prompt`.")
 
