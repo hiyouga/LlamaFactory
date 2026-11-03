@@ -59,3 +59,18 @@ def test_load_eval_data():
     dataset_module = load_dataset_module(eval_dataset=TINY_DATA, **TRAIN_ARGS)
     assert dataset_module.get("train_dataset") is not None
     assert dataset_module.get("eval_dataset") is not None
+
+
+@pytest.mark.parametrize("max_samples", [0, -1])
+def test_max_samples_must_be_positive(max_samples: int):
+    from llamafactory.hparams import DataArguments
+
+    with pytest.raises(ValueError, match="`max_samples` must be a positive integer"):
+        DataArguments(max_samples=max_samples)
+
+
+def test_max_samples_none_and_positive_are_accepted():
+    from llamafactory.hparams import DataArguments
+
+    assert DataArguments().max_samples is None
+    assert DataArguments(max_samples=100).max_samples == 100
