@@ -745,5 +745,8 @@
       "prompt": "content"
     },
     "folder": "python"
+  },
+  "add_tokens_demo": {
+    "file_name": "add_tokens_demo.json"
   }
 }
