@@ -675,6 +675,62 @@ class Glm47ReasoningTemplate(ReasoningTemplate):
         return self.thought_words[0] + content + self.thought_words[1]
 
 
+@dataclass
+class Xing4ReasoningTemplate(ReasoningTemplate):
+    r"""Xing4.0 places the thinking-mode marker in the generation prompt."""
+
+    @override
+    def add_thought(self, content: str = "") -> str:
+        if not self.enable_thinking:
+            return self.thought_words[1] + content
+
+        return self.thought_words[0] + "\n" + self.thought_words[1] + content
+
+    def _move_thought_prefix(
+        self,
+        tokenizer: "PreTrainedTokenizer",
+        prompt_ids: list[int],
+        response_ids: list[int],
+    ) -> tuple[list[int], list[int]]:
+        if not self.enable_thinking:
+            return prompt_ids, response_ids
+
+        thought_prefix_ids = tokenizer.encode(self.thought_words[0], add_special_tokens=False)
+        if response_ids[: len(thought_prefix_ids)] == thought_prefix_ids:
+            prompt_ids += thought_prefix_ids
+            response_ids = response_ids[len(thought_prefix_ids) :]
+
+        return prompt_ids, response_ids
+
+    @override
+    def encode_oneturn(
+        self,
+        tokenizer: "PreTrainedTokenizer",
+        messages: list[dict[str, str]],
+        system: Optional[str] = None,
+        tools: Optional[str] = None,
+    ) -> tuple[list[int], list[int]]:
+        prompt_ids, response_ids = super().encode_oneturn(tokenizer, messages, system, tools)
+        return self._move_thought_prefix(tokenizer, prompt_ids, response_ids)
+
+    @override
+    def encode_multiturn(
+        self,
+        tokenizer: "PreTrainedTokenizer",
+        messages: list[dict[str, str]],
+        system: Optional[str] = None,
+        tools: Optional[str] = None,
+        discarding_history_cot: bool = False,
+    ) -> list[tuple[list[int], list[int]]]:
+        encoded_pairs = super().encode_multiturn(
+            tokenizer, messages, system, tools, discarding_history_cot=discarding_history_cot
+        )
+        return [
+            self._move_thought_prefix(tokenizer, prompt_ids, response_ids)
+            for prompt_ids, response_ids in encoded_pairs
+        ]
+
+
 TEMPLATES: dict[str, "Template"] = {}
 
 
@@ -2558,6 +2614,25 @@ register_template(
     default_system=(
         "你是中国电信星辰语义大模型，英文名是TeleChat，你是由中电信人工智能科技有限公司和中国电信人工智能研究院（TeleAI）研发的人工智能助手。"
     ),
+)
+
+
+register_template(
+    name="xing4_0",
+    format_user=StringFormatter(slots=["<_user>{{content}}<_bot>"]),
+    format_assistant=StringFormatter(slots=["{{content}}", {"eos_token"}, "\n"]),
+    format_function=FunctionFormatter(
+        slots=["{{content}}", {"eos_token"}, "\n"], tool_format="xing4"
+    ),
+    format_system=StringFormatter(slots=["{{content}}"]),
+    format_observation=StringFormatter(
+        slots=["<_observation><tool_response>{{content}}</tool_response><_bot>"]
+    ),
+    format_prefix=EmptyFormatter(slots=["<_system>"]),
+    format_tools=ToolFormatter(tool_format="xing4"),
+    thought_words=("<think>\n", "</think>"),
+    tool_call_words=("<tool_call>", "</tool_call>"),
+    template_class=Xing4ReasoningTemplate,
 )
 
 

@@ -31,13 +31,14 @@ Init workflow:
 
 import torch
 from accelerate import init_empty_weights
-from transformers import AutoConfig, AutoProcessor
+from transformers import AutoConfig, AutoProcessor, AutoTokenizer
 
 from ..accelerator.helper import DeviceType
 from ..accelerator.interface import DistributedInterface
 from ..config.model_args import ModelArguments, ModelClass
 from ..utils import logging
 from ..utils.helper import get_tokenizer, is_tokenizer
+from ..utils.packages import check_version
 from ..utils.types import HFConfig, HFModel, Processor
 from .rendering import Renderer
 
@@ -97,10 +98,17 @@ class ModelEngine:
         NOTE: Transformers v5 always use fast tokenizer.
         https://github.com/huggingface/transformers/blob/v5.0.0rc1/src/transformers/models/auto/tokenization_auto.py#L642
         """
-        return AutoProcessor.from_pretrained(
-            self.args.model,
-            trust_remote_code=self.args.trust_remote_code,
-        )
+        try:
+            return AutoProcessor.from_pretrained(
+                self.args.model,
+                trust_remote_code=self.args.trust_remote_code,
+            )
+        except Exception:
+            logger.info_rank0("Failed to load processor, falling back to tokenizer.")
+            return AutoTokenizer.from_pretrained(
+                self.args.model,
+                trust_remote_code=self.args.trust_remote_code,
+            )
 
     def _sync_chat_template(self) -> None:
         """Sync chat_template and inject custom_chat_template."""
@@ -116,10 +124,14 @@ class ModelEngine:
 
     def _init_model_config(self) -> HFConfig:
         """Init model config."""
-        return AutoConfig.from_pretrained(
+        config = AutoConfig.from_pretrained(
             self.args.model,
             trust_remote_code=self.args.trust_remote_code,
         )
+        if getattr(config, "model_type", None) == "xing4_0":
+            check_version("transformers>=5.4.0", mandatory=True)
+
+        return config
 
     def _init_model(self) -> HFModel:
         """Init model.

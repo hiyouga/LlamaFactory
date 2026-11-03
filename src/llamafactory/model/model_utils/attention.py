@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 
 from ...extras import logging
 from ...extras.constants import AttentionFunction
+from ...extras.misc import is_torch_supa_available
 from ...extras.packages import is_torch_version_greater_than
 
 
@@ -63,7 +64,12 @@ def configure_attn_implementation(config: "PretrainedConfig", model_args: "Model
             model_args.flash_attn = AttentionFunction.DISABLED
 
     if model_args.flash_attn == AttentionFunction.AUTO:
-        return
+        if is_torch_supa_available():
+            # supa has no FlashAttention build, and AUTO would otherwise be resolved against the
+            # cuda-masqueraded device (which may pick FA2); pin SDPA, the fastest supported backend.
+            requested_attn_implementation = "sdpa"
+        else:
+            return
 
     elif model_args.flash_attn == AttentionFunction.DISABLED:
         requested_attn_implementation = "eager"

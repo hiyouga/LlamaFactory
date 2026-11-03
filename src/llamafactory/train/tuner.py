@@ -291,6 +291,7 @@ class Worker:
         RAY_NOSET_VISIBLE_DEVICES_LIST = [
             "RAY_EXPERIMENTAL_NOSET_CUDA_VISIBLE_DEVICES",
             "RAY_EXPERIMENTAL_NOSET_ASCEND_RT_VISIBLE_DEVICES",
+            "RAY_EXPERIMENTAL_NOSET_SUPA_VISIBLE_DEVICES",
         ]
         is_ray_noset_visible_devices = any(os.environ.get(env_var, None) for env_var in RAY_NOSET_VISIBLE_DEVICES_LIST)
         if is_ray_noset_visible_devices:
