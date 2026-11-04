@@ -39,6 +39,7 @@ try:
         moe_gather,
         moe_scatter,
     )
+    from .triton_moe_activation import moe_activation, moe_activation_backward
 except ImportError as exc:
     _TRITON_IMPORT_ERROR = exc
 else:
@@ -57,7 +58,8 @@ class TritonFusedMoeFunction(torch.autograd.Function):
     """Fused MoE expert computation using Triton grouped GEMMs.
 
     Forward: scatter → fc1 (group GEMM) → SiLU·gate → weight → fc2 (group GEMM) → gather
-    Backward: all gradients computed via grouped GEMMs in single kernel launches.
+    Backward: grouped GEMMs with fused pointwise gradients. Retain only the gate/up
+    activations; recompute weighted activations and scattered inputs when needed for dW.
     """
 
     @staticmethod
@@ -103,16 +105,13 @@ class TritonFusedMoeFunction(torch.autograd.Function):
             transpose_b=True,
         )
 
-        # SiLU gate activation
-        fc1_1_output, fc1_2_output = fc1_output.chunk(2, dim=-1)
-        fc1_1_activation = torch.nn.functional.silu(fc1_1_output)
-        fc1_activation = fc1_1_activation * fc1_2_output
+        del scatter_output
 
-        # Apply routing weights before fc2 (mathematically equivalent to after)
+        # Fuse the pointwise work; only fc1_output is retained for backward.
         reshaped_gate_weight = gate_weights.reshape(-1, 1)
         scattered_gate_weight = torch.empty_like(reshaped_gate_weight)
         scattered_gate_weight[scatter_index.flatten().long()] = reshaped_gate_weight
-        fc1_weighted_output = fc1_activation * scattered_gate_weight
+        fc1_weighted_output = moe_activation(fc1_output, scattered_gate_weight)
 
         # FC2: grouped GEMM (fc1_weighted @ fc2_weight.T)
         fc2_output = group_gemm_same_nk(
@@ -123,23 +122,21 @@ class TritonFusedMoeFunction(torch.autograd.Function):
             transpose_b=True,
         )
 
+        del fc1_weighted_output
+
         # Gather back to original token positions (sum over topk)
         expert_output = moe_gather(fc2_output, scatter_index)
 
-        ctx.num_experts = num_experts
+        ctx.max_M = max_M
         ctx.save_for_backward(
             gate_weights,
             fc1_weight,
             fc2_weight,
             hidden_states,
             scatter_index,
-            scatter_output,
             cumsum_t,
-            fc1_1_output,
-            fc1_2_output,
-            fc1_activation,
+            fc1_output,
             scattered_gate_weight,
-            fc1_weighted_output,
         )
 
         return expert_output
@@ -152,23 +149,13 @@ class TritonFusedMoeFunction(torch.autograd.Function):
             fc2_weight,
             hidden_states,
             scatter_index,
-            scatter_output,
             cumsum_t,
-            fc1_1_output,
-            fc1_2_output,
-            fc1_activation,
+            fc1_output,
             scattered_gate_weight,
-            fc1_weighted_output,
         ) = ctx.saved_tensors
-        num_experts = ctx.num_experts
+        max_M = ctx.max_M
         hidden_dim = grad_output.shape[-1]
         grad_output = grad_output.reshape(-1, hidden_dim).contiguous()
-
-        # Recompute max_M from cumsum
-        splits = torch.zeros(num_experts, dtype=cumsum_t.dtype, device=cumsum_t.device)
-        splits[0] = cumsum_t[0]
-        splits[1:] = cumsum_t[1:] - cumsum_t[:-1]
-        max_M = int(splits.max().item())
 
         # Step 1: Scatter grad_output to expert buffer
         grad_fc2_output = moe_scatter(grad_output, scatter_index)
@@ -186,6 +173,7 @@ class TritonFusedMoeFunction(torch.autograd.Function):
         # dW for fc2: grad_fc2_output.T @ fc1_weighted_output
         grad_fc2_weight = None
         if fc2_weight.requires_grad:
+            fc1_weighted_output = moe_activation(fc1_output, scattered_gate_weight)
             grad_fc2_weight = torch.empty_like(fc2_weight)
             group_gemm_same_mn(
                 a=grad_fc2_output,
@@ -194,24 +182,15 @@ class TritonFusedMoeFunction(torch.autograd.Function):
                 cumsum_K=cumsum_t,
             )
 
-        # Step 3: Routing weight backward
-        grad_fc1_activation = grad_fc1_weighted_output * scattered_gate_weight
-        grad_scattered_gate_weight = torch.sum(fc1_activation * grad_fc1_weighted_output, dim=-1)
-        grad_gate_weight = grad_scattered_gate_weight[scatter_index.flatten().long()]
-        grad_gate_weight = grad_gate_weight.reshape(gate_weights.shape)
+            del fc1_weighted_output
+        del grad_fc2_output
 
-        # Recompute silu activation for backward
-        fc1_1_activation = torch.nn.functional.silu(fc1_1_output)
-
-        # Step 4: SiLU gate backward
-        grad_fc1_1_activation = grad_fc1_activation * fc1_2_output
-        grad_fc1_2_output = fc1_1_activation * grad_fc1_activation
-
-        # SiLU backward: d/dx[x * sigmoid(x)] = sigmoid(x) + x * sigmoid(x) * (1 - sigmoid(x))
-        grad_fc1_1_output = torch.ops.aten.silu_backward(grad_fc1_1_activation, fc1_1_output)
-
-        # Merge fc1 gradients back to (total_M, 2*inter)
-        grad_fc1_output = torch.cat([grad_fc1_1_output, grad_fc1_2_output], dim=-1)
+        # Fuse routing and SiLU backward without materializing intermediate gradients.
+        grad_fc1_output, grad_scattered_gate_weight = moe_activation_backward(
+            fc1_output, scattered_gate_weight, grad_fc1_weighted_output
+        )
+        del grad_fc1_weighted_output
+        grad_gate_weight = grad_scattered_gate_weight[scatter_index.flatten().long()].reshape(gate_weights.shape)
 
         # Step 5: FC1 backward
         # dX for fc1: grad_fc1_output @ fc1_weight (transpose_b=False)
@@ -226,6 +205,7 @@ class TritonFusedMoeFunction(torch.autograd.Function):
         # dW for fc1: grad_fc1_output.T @ scatter_output
         grad_fc1_weight = None
         if fc1_weight.requires_grad:
+            scatter_output = moe_scatter(hidden_states, scatter_index)
             grad_fc1_weight = torch.empty_like(fc1_weight)
             group_gemm_same_mn(
                 a=grad_fc1_output,
