@@ -49,6 +49,32 @@ llamafactory-cli train examples/train_lora/qwen3_lora_pretrain.yaml
 llamafactory-cli train examples/train_lora/qwen3_lora_sft.yaml
 ```
 
+#### Nanbeige4.2（Looped Transformer）
+
+Base 与 Instruct 均为 `model_type=nanbeige`（必须 `trust_remote_code: true`，`use_fast_tokenizer: false`）。
+
+| 目标 | 配置 |
+| ---- | ---- |
+| Instruct 对话 SFT（推荐） | `examples/train_lora/nanbeige42_lora_sft.yaml` |
+| Instruct QLoRA（小显存） | `examples/train_qlora/nanbeige42_lora_sft_otfq.yaml` |
+| Instruct 全参 SFT（多卡） | `examples/train_full/nanbeige42_full_sft.yaml` |
+| Base 增量预训练 | `examples/train_lora/nanbeige42_base_lora_pretrain.yaml` |
+| Base → 对话 SFT（需添加 ChatML 特殊符号） | `examples/train_lora/nanbeige42_base_lora_sft.yaml` |
+| Base → 对话全参 SFT | `examples/train_full/nanbeige42_base_full_sft.yaml` |
+
+说明：
+
+- 做对话 SFT 优先用 **Instruct**（`Nanbeige/Nanbeige4.2-3B`），分词器已含 `<|im_start|>` / `<think>` 等。
+- **不要**在未添加特殊符号的 Base 上直接设 `template: nanbeige`，否则控制符会变成 UNK。
+- 模板：`nanbeige`（思考）/ `nanbeige_nothink`（空思考块）。
+- `num_loops=2` 前向算力约等于普通 22 层模型的 2 倍。
+
+```bash
+llamafactory-cli train examples/train_lora/nanbeige42_lora_sft.yaml
+llamafactory-cli train examples/train_lora/nanbeige42_base_lora_pretrain.yaml
+llamafactory-cli train examples/train_lora/nanbeige42_base_lora_sft.yaml
+```
+
 #### 多模态指令监督微调
 
 ```bash
