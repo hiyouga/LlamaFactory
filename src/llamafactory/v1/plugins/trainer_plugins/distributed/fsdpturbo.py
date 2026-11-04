@@ -237,7 +237,7 @@ class FSDPTurboEPModelSpec:
 @FSDPTurboEPModelSpec.register(
     "qwen3_moe",
     ep_modules=["model.layers.{*}.mlp.experts"],
-    ep_fsdp_modules=["model.layers.{*}.mlp"],
+    ep_fsdp_modules=["model.layers.{*}.mlp.experts"],
 )
 def _prepare_qwen3_moe_for_ep(model: HFModel) -> HFModel:
     prepared = 0
@@ -260,7 +260,7 @@ def _prepare_qwen3_moe_for_ep(model: HFModel) -> HFModel:
 @FSDPTurboEPModelSpec.register(
     "qwen3_5_moe",
     ep_modules=["model.language_model.layers.{*}.mlp.experts"],
-    ep_fsdp_modules=["model.language_model.layers.{*}.mlp"],
+    ep_fsdp_modules=["model.language_model.layers.{*}.mlp.experts"],
 )
 def _prepare_qwen3_5_moe_for_ep(model: HFModel) -> HFModel:
     return model
@@ -291,13 +291,9 @@ class FSDPTurboFSDP2Engine(FSDP2Engine):
         if spec.ep_fsdp_modules is not None:
             return spec.ep_fsdp_modules
 
-        ep_fsdp_modules = []
-        for module in spec.ep_modules:
-            if module.endswith(".experts"):
-                ep_fsdp_modules.append(module.removesuffix(".experts"))
-            else:
-                ep_fsdp_modules.append(module)
-        return ep_fsdp_modules
+        # EFSDP shards the routed experts; their parent may also own a router
+        # and shared experts whose gradients must be reduced by outer FSDP.
+        return list(spec.ep_modules)
 
     def shard_model(self, model: HFModel) -> HFModel:
         """Set storage dtype before FSDP materialization without leaking backend config into ModelEngine."""

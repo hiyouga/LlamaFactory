@@ -40,6 +40,8 @@ The model spec determines the EFSDP targets. Non-expert parameters such as atten
 
 Model-specific module paths and preparation logic are managed exclusively by the `FSDPTurboEPModelSpec` registry. Built-in specs currently cover `qwen3_moe` and `qwen3_5_moe`; unregistered models fail with an explicit error. `ep_modules` and `ep_fsdp_modules` are not YAML options, and strict parameter parsing rejects them to prevent configuration from drifting away from the actual model structure.
 
+EFSDP targets only routed-expert modules (`mlp.experts`). The router, shared expert, and shared-expert gate remain owned by the outer FSDP on the full DP mesh. When a model spec omits `ep_fsdp_modules`, the EP module paths are used unchanged; the parent MLP is never inferred by removing `.experts`.
+
 ## 2. Mesh Initialization
 
 LlamaFactory's `DistributedInterface` initializes only its existing model and data meshes. It is unaware of EP and EFSDP and does not expose an extra mesh registration interface for distributed plugins. The FSDPTurbo expert topology is independently created and owned by `FSDPTurboParallelState` in the plugin module:
