@@ -220,7 +220,12 @@ class DefaultToolUtils(ToolUtils):
     @override
     @staticmethod
     def tool_extractor(content: str) -> Union[str, list["FunctionCall"]]:
-        regex = re.compile(r"Action:\s*([a-zA-Z0-9_]+)\s*Action Input:\s*(.+?)(?=\s*Action:|\s*$)", re.DOTALL)
+        # the tool name may contain any non-space character, e.g. `get-weather` or `browser.search`
+        # the next action is only split when it is followed by its arguments, so that an `Action:`
+        # inside the argument values does not truncate the current arguments
+        regex = re.compile(
+            r"Action:\s*(\S+)\s*Action Input:\s*(.+?)(?=\s*Action:\s*\S+\s*Action Input:|\s*$)", re.DOTALL
+        )
         action_match: list[tuple[str, str]] = re.findall(regex, content)
         if not action_match:
             return content
