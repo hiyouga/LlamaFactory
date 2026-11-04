@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any, Union
 
 from ..extras import logging
 from .data_utils import Role
+from .erased_prompt import ERASED_PROMPT_COLUMN
 
 
 if TYPE_CHECKING:
@@ -408,6 +409,17 @@ def align_dataset(
     _audios: []
     """
     column_names = list(next(iter(dataset)).keys())
+    erased_column = dataset_attr.erased_prompt
+    if erased_column is not None:
+        if data_args.streaming:
+            raise ValueError(
+                f"The column {erased_column} cannot be carried through a streaming dataset, "
+                "use `cig_erased_prompt` to set the same prompt for the whole dataset instead."
+            )
+
+        if erased_column not in column_names:
+            raise ValueError(f"The dataset has no column named {erased_column}.")
+
     kwargs = {}
     if not data_args.streaming:
         kwargs = dict(
@@ -417,9 +429,13 @@ def align_dataset(
         )
 
     dataset_converter = get_dataset_converter(dataset_attr.formatting, dataset_attr, data_args)
-    return dataset.map(
+    dataset = dataset.map(
         dataset_converter,
         batched=False,
-        remove_columns=column_names,
+        remove_columns=[name for name in column_names if name != erased_column],
         **kwargs,
     )
+    if erased_column is not None:
+        dataset = dataset.rename_column(erased_column, ERASED_PROMPT_COLUMN)
+
+    return dataset

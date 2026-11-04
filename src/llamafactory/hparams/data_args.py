@@ -55,6 +55,17 @@ class DataArguments:
         default=False,
         metadata={"help": "Whether or not to mask the history and train on the last turn only."},
     )
+    cig_erased_prompt: str | None = field(
+        default=None,
+        metadata={
+            "help": (
+                "The erased prompt used by CIG-SFT. It replaces the whole user message while the response is kept, "
+                "so a frozen reference model can score the same response with and without the instance content. "
+                "Preset names such as `math`, `code`, `medical` and `default` are resolved to placeholders; any "
+                "other value is used as a literal prompt. A dataset column can override this value per example."
+            )
+        },
+    )
     streaming: bool = field(
         default=False,
         metadata={"help": "Enable dataset streaming."},
@@ -190,6 +201,12 @@ class DataArguments:
 
         if self.mask_history and self.train_on_prompt:
             raise ValueError("`mask_history` is incompatible with `train_on_prompt`.")
+
+        if self.cig_erased_prompt is not None and self.train_on_prompt:
+            raise ValueError("`cig_erased_prompt` is incompatible with `train_on_prompt`.")
+
+        if self.cig_erased_prompt is not None and self.mask_history:
+            raise ValueError("`cig_erased_prompt` is incompatible with `mask_history`.")
 
         if self.reasoning_effort not in {"xhigh", "medium", "low"}:
             raise ValueError("`reasoning_effort` must be one of xhigh, medium, or low.")
