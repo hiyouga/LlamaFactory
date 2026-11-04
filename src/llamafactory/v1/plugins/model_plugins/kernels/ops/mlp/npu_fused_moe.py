@@ -60,7 +60,11 @@ class GmmFunction(torch.autograd.Function):
         Returns:
             Tensor: The result of the grouped matrix multiplication.
         """
-        ctx.save_for_backward(x, weight)
+        # Input gradients need weights; weight gradients need inputs.
+        ctx.save_for_backward(
+            x if ctx.needs_input_grad[1] else None,
+            weight if ctx.needs_input_grad[0] else None,
+        )
         ctx.group_list = group_list
 
         fwd_output = torch_npu.npu_grouped_matmul(
@@ -82,19 +86,28 @@ class GmmFunction(torch.autograd.Function):
         input_tensor, weight = ctx.saved_tensors
         group_list = ctx.group_list
 
-        weight = torch.transpose(weight, 1, 2)
-        grad_input = torch_npu.npu_grouped_matmul(
-            [grad_output], [weight], bias=None, group_list=group_list, split_item=2, group_type=0, group_list_type=1
-        )[0]
-        grad_weight = torch_npu.npu_grouped_matmul(
-            [input_tensor.T],
-            [grad_output],
-            bias=None,
-            group_list=group_list,
-            split_item=3,
-            group_type=2,
-            group_list_type=1,
-        )[0]
+        grad_input = grad_weight = None
+        # Frozen experts still propagate input gradients to upstream LoRA layers.
+        if ctx.needs_input_grad[0]:
+            grad_input = torch_npu.npu_grouped_matmul(
+                [grad_output],
+                [weight.transpose(1, 2)],
+                bias=None,
+                group_list=group_list,
+                split_item=2,
+                group_type=0,
+                group_list_type=1,
+            )[0]
+        if ctx.needs_input_grad[1]:
+            grad_weight = torch_npu.npu_grouped_matmul(
+                [input_tensor.T],
+                [grad_output],
+                bias=None,
+                group_list=group_list,
+                split_item=3,
+                group_type=2,
+                group_list_type=1,
+            )[0]
         return grad_input, grad_weight, None
 
 
@@ -120,7 +133,10 @@ class HybridGmmFunction(torch.autograd.Function):
         ctx.split_sizes = split_sizes
         ctx.num_experts = num_experts
 
-        ctx.save_for_backward(*args)
+        ctx.save_for_backward(
+            *(x if ctx.needs_input_grad[1 + num_experts + i] else None for i, x in enumerate(x_list)),
+            *(w if ctx.needs_input_grad[1 + i] else None for i, w in enumerate(weight_list)),
+        )
 
         outputs = torch_npu.npu_grouped_matmul(
             x_list, weight_list, bias=None, group_list=None, split_item=0, group_type=-1
@@ -147,35 +163,42 @@ class HybridGmmFunction(torch.autograd.Function):
 
         grad_outputs_contiguous = [g.contiguous() for g in grad_outputs]
 
-        w_t_list = [w.t() for w in weight_list]
-        grad_x_list = torch_npu.npu_grouped_matmul(
-            grad_outputs_contiguous,  # List[Tensor], 每个 [M_i, N]
-            w_t_list,  # List[Tensor], 每个 [N, K] (view)
-            bias=None,
-            group_list=None,
-            split_item=0,
-            group_type=-1,
-        )
+        grad_x_list = [None] * num_experts
+        input_indices = [i for i in range(num_experts) if ctx.needs_input_grad[1 + i]]
+        if input_indices:
+            grad_inputs = torch_npu.npu_grouped_matmul(
+                [grad_outputs_contiguous[i] for i in input_indices],
+                [weight_list[i].t() for i in input_indices],
+                bias=None,
+                group_list=None,
+                split_item=0,
+                group_type=-1,
+            )
+            for i, grad in zip(input_indices, grad_inputs, strict=True):
+                grad_x_list[i] = grad
 
-        x_concat = torch.cat(x_list, dim=0)
-        dy_concat = torch.cat(grad_outputs_contiguous, dim=0)  # [Total_M, N]
+        grad_w_list = [None] * num_experts
+        weight_indices = [i for i in range(num_experts) if ctx.needs_input_grad[1 + num_experts + i]]
+        if weight_indices:
+            x_concat = torch.cat([x_list[i] for i in weight_indices], dim=0)
+            dy_concat = torch.cat([grad_outputs_contiguous[i] for i in weight_indices], dim=0)
+            group_list = torch.tensor(
+                [split_sizes[i] for i in weight_indices], device=x_concat.device, dtype=torch.int64
+            )
+            grad_w_stack = torch_npu.npu_grouped_matmul(
+                [x_concat.t()],
+                [dy_concat],
+                bias=None,
+                group_list=group_list,
+                split_item=3,
+                group_type=2,
+                group_list_type=1,
+            )[0]
 
-        group_list = torch.tensor(split_sizes, device=x_concat.device, dtype=torch.int64)
-
-        grad_w_stack = torch_npu.npu_grouped_matmul(
-            [x_concat.t()],
-            [dy_concat],
-            bias=None,
-            group_list=group_list,
-            split_item=3,
-            group_type=2,
-            group_list_type=1,
-        )[0]
-
-        if grad_w_stack.dim() == 3:
-            grad_w_list = list(torch.unbind(grad_w_stack, dim=0))
-        else:
-            raise RuntimeError(f"Unexpected grad_w_stack shape: {grad_w_stack.shape}")
+            if grad_w_stack.dim() != 3:
+                raise RuntimeError(f"Unexpected grad_w_stack shape: {grad_w_stack.shape}")
+            for i, grad in zip(weight_indices, grad_w_stack.unbind(0), strict=True):
+                grad_w_list[i] = grad
 
         return (None, *grad_x_list, *grad_w_list)
 
