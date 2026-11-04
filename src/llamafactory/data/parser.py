@@ -34,6 +34,7 @@ class DatasetAttr:
     ranking: bool = False
     # extra configs
     subset: str | None = None
+    revision: str | None = None
     split: str = "train"
     folder: str | None = None
     num_samples: int | None = None
@@ -73,6 +74,7 @@ class DatasetAttr:
         self.set_attr("formatting", attr, default="alpaca")
         self.set_attr("ranking", attr, default=False)
         self.set_attr("subset", attr)
+        self.set_attr("revision", attr)
         self.set_attr("split", attr, default="train")
         self.set_attr("folder", attr)
         self.set_attr("num_samples", attr)
