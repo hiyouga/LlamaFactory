@@ -25,7 +25,8 @@ from ..data import Role
 from ..extras.constants import PEFT_METHODS
 from ..extras.misc import torch_gc
 from ..extras.packages import is_gradio_available
-from .common import get_save_dir, load_config
+from .common import load_config
+from .control import get_checkpoint_dir
 from .locales import ALERTS
 
 
@@ -144,10 +145,10 @@ class WebChatModel(ChatModel):
         if checkpoint_path:
             if finetuning_type in PEFT_METHODS:  # list
                 args["adapter_name_or_path"] = ",".join(
-                    [get_save_dir(model_name, finetuning_type, adapter) for adapter in checkpoint_path]
+                    [get_checkpoint_dir(model_name, finetuning_type, adapter) for adapter in checkpoint_path]
                 )
             else:  # str
-                args["model_name_or_path"] = get_save_dir(model_name, finetuning_type, checkpoint_path)
+                args["model_name_or_path"] = get_checkpoint_dir(model_name, finetuning_type, checkpoint_path)
 
         # quantization
         if get("top.quantization_bit") != "none":
