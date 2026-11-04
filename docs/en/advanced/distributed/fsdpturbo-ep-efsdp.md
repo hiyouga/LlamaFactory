@@ -118,10 +118,10 @@ The imports occur inside `prepare_model_ep()`, so other distributed backends rem
 
 ## 5. Gradient Norms
 
-Outer and expert parameters can belong to different DTensor meshes and therefore cannot be passed together to a single standard `clip_grad_norm_()` call. The `fsdpturbo` plugin groups parameters by their owning mesh and computes local p-power sums:
+Each CP rank backpropagates the loss for the full sequence, using its local sequence shard. Before clipping and stepping the optimizer, the plugin averages corresponding gradient shards over CP for dense parameters and over expert-CP for routed experts. A missing local contribution counts as zero. If every replica has no contribution, the gradient stays unset.
 
-- Non-expert parameters are reduced over the DP and CP groups.
-- Expert parameters are reduced over the EFSDP, EP, and expert-CP groups retained by `FSDPTurboParallelState`.
+- The dense gradient norm sums the local p-power sums over DP.
+- The expert gradient norm sums them over EFSDP and EP. Each synchronized CP replica already holds the same gradient shard.
 - After the global norm is assembled, the same clipping coefficient is applied to every local gradient.
 
 A zero-gradient warmup runs during startup so that the required collectives are initialized before training begins. This is currently a backend-specific implementation for `fsdpturbo`; other backends retain their existing gradient norm paths until the upstream distributed plugin interface is decoupled.
