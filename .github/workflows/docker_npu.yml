@@ -17,22 +17,22 @@ jobs:
         include:
           - device: "npu-a2"
             os: "ubuntu"
-            base_image: "quay.io/ascend/cann:9.1.0-910b-ubuntu22.04-py3.12"
+            base_image: "quay.io/ascend/cann:9.2.0-910b-ubuntu22.04-py3.12"
           - device: "npu-a3"
             os: "ubuntu"
-            base_image: "quay.io/ascend/cann:9.1.0-a3-ubuntu22.04-py3.12"
+            base_image: "quay.io/ascend/cann:9.2.0-a3-ubuntu22.04-py3.12"
           - device: "npu-a2"
             os: "openeuler"
-            base_image: "quay.io/ascend/cann:9.1.0-910b-openeuler24.03-py3.12"
+            base_image: "quay.io/ascend/cann:9.2.0-910b-openeuler24.03-py3.12"
           - device: "npu-a3"
             os: "openeuler"
-            base_image: "quay.io/ascend/cann:9.1.0-a3-openeuler24.03-py3.12"
+            base_image: "quay.io/ascend/cann:9.2.0-a3-openeuler24.03-py3.12"
           - device: "npu-a5"
             os: "ubuntu"
-            base_image: "quay.io/ascend/cann:9.1.0-950-ubuntu22.04-py3.12"
+            base_image: "quay.io/ascend/cann:9.2.0-950-ubuntu22.04-py3.12"
           - device: "npu-a5"
             os: "openeuler"
-            base_image: "quay.io/ascend/cann:9.1.0-950-openeuler24.03-py3.12"
+            base_image: "quay.io/ascend/cann:9.2.0-950-openeuler24.03-py3.12"
 
     runs-on: ubuntu-latest
 
