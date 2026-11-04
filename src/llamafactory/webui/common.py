@@ -14,6 +14,7 @@
 
 import json
 import os
+import shlex
 import signal
 from collections import defaultdict
 from datetime import datetime
@@ -179,16 +180,21 @@ def _clean_cmd(args: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in args.items() if (k in no_skip_keys) or (v is not None and v is not False and v != "")}
 
 
+def _quote_cmd_arg(arg: Any) -> str:
+    r"""Quote one CLI argument for POSIX shell previews."""
+    return str(arg) if os.name == "nt" else shlex.quote(str(arg))
+
+
 def gen_cmd(args: dict[str, Any]) -> str:
     r"""Generate CLI commands for previewing."""
     cmd_lines = ["llamafactory-cli train "]
     for k, v in _clean_cmd(args).items():
         if isinstance(v, dict):
-            cmd_lines.append(f"    --{k} {json.dumps(v, ensure_ascii=False)} ")
+            cmd_lines.append(f"    --{k} {_quote_cmd_arg(json.dumps(v, ensure_ascii=False))} ")
         elif isinstance(v, list):
-            cmd_lines.append(f"    --{k} {' '.join(map(str, v))} ")
+            cmd_lines.append(f"    --{k} {' '.join(_quote_cmd_arg(item) for item in v)} ")
         else:
-            cmd_lines.append(f"    --{k} {str(v)} ")
+            cmd_lines.append(f"    --{k} {_quote_cmd_arg(v)} ")
 
     if os.name == "nt":
         cmd_text = "`\n".join(cmd_lines)
