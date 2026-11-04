@@ -71,6 +71,7 @@ def create_muon_optimizer(model: HFModel, optim_config: PluginConfig):
         momentum=optim_config.get("momentum", 0.95),
         nesterov=optim_config.get("nesterov", True),
         ns_steps=optim_config.get("ns_steps", 5),
+        ns_batch_size=optim_config.get("ns_batch_size", 1),
         adamw_params=adamw_params,
         adamw_betas=tuple(optim_config.get("adamw_betas", [0.9, 0.95])),
         adamw_eps=optim_config.get("adamw_eps", 1e-8),
