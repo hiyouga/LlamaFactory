@@ -56,7 +56,6 @@ _SUPPORTED_RMSNORM_CLASSES = frozenset(
 )
 
 
-
 @lru_cache
 def _is_sudnn_rms_norm_available() -> bool:
     """Return whether the fused SUPA RMSNorm operator is registered."""
