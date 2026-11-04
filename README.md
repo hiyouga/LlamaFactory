@@ -286,6 +286,7 @@ Read technical notes:
 
 | Model                                                             | Model size                       | Template             |
 | ----------------------------------------------------------------- | -------------------------------- | -------------------- |
+| [Audio-Flamingo-3](https://huggingface.co/nvidia/audio-flamingo-3-hf) | 8B                               | audio_flamingo_3     |
 | [BLOOM/BLOOMZ](https://huggingface.co/bigscience)                 | 560M/1.1B/1.7B/3B/7.1B/176B      | -                    |
 | [DeepSeek (LLM/Code/MoE)](https://huggingface.co/deepseek-ai)     | 7B/16B/67B/236B                  | deepseek             |
 | [DeepSeek 3-3.2](https://huggingface.co/deepseek-ai)              | 236B/671B                        | deepseek3            |
