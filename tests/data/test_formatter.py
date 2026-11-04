@@ -91,6 +91,35 @@ def test_default_tool_formatter():
 
 
 @pytest.mark.runs_on(["cpu", "mps", "xpu"])
+@pytest.mark.parametrize("wrapped", [False, True])
+@pytest.mark.parametrize(
+    ("enum_values", "expected_enum"),
+    [
+        pytest.param(["small", "large"], "small, large", id="strings"),
+        pytest.param([1, 2, 3], "1, 2, 3", id="integers"),
+        pytest.param([0.5, 1.5], "0.5, 1.5", id="numbers"),
+        pytest.param([True, False], "true, false", id="booleans"),
+        pytest.param(["默认", None, 42], "默认, null, 42", id="mixed"),
+    ],
+)
+def test_default_tool_formatter_enum_values(wrapped, enum_values, expected_enum):
+    formatter = ToolFormatter(tool_format="default")
+    function = {
+        "name": "select_value",
+        "parameters": {
+            "type": "object",
+            "properties": {"value": {"enum": enum_values}},
+            "required": ["value"],
+        },
+    }
+    tool = {"type": "function", "function": function} if wrapped else function
+    result = formatter.apply(content=json.dumps([tool]))
+    assert len(result) == 1
+    assert "> Tool Name: select_value\n" in result[0]
+    assert f"should be one of [{expected_enum}]" in result[0]
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
 def test_default_tool_extractor():
     formatter = ToolFormatter(tool_format="default")
     result = """Action: test_tool\nAction Input: {"foo": "bar", "size": 10}"""
