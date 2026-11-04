@@ -148,6 +148,28 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
         return super()._get_train_sampler(*args, **kwargs)
 
     @override
+    def evaluate(self, *args, **kwargs) -> dict[str, float]:
+        padding_side = self.processing_class.padding_side
+        if self.args.predict_with_generate:
+            self.processing_class.padding_side = "left"
+
+        try:
+            return super().evaluate(*args, **kwargs)
+        finally:
+            self.processing_class.padding_side = padding_side
+
+    @override
+    def predict(self, *args, **kwargs) -> "PredictionOutput":
+        padding_side = self.processing_class.padding_side
+        if self.args.predict_with_generate:
+            self.processing_class.padding_side = "left"
+
+        try:
+            return super().predict(*args, **kwargs)
+        finally:
+            self.processing_class.padding_side = padding_side
+
+    @override
     def compute_loss(self, model, inputs, *args, **kwargs):
         if self.finetuning_args.use_asft_loss:
             with torch.no_grad():
