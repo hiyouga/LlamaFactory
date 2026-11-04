@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any
 from transformers.utils import is_torch_npu_available
 
 from ..extras.constants import LLAMABOARD_CONFIG, MULTIMODAL_SUPPORTED_MODELS, PEFT_METHODS, TRAINING_STAGES
-from ..extras.misc import is_accelerator_available, torch_gc
+from ..extras.misc import is_accelerator_available, is_env_enabled, torch_gc
 from ..extras.packages import is_gradio_available
 from .common import (
     DEFAULT_CACHE_DIR,
@@ -180,7 +180,7 @@ class Runner:
             bf16=(get("train.compute_type") == "bf16"),
             pure_bf16=(get("train.compute_type") == "pure_bf16"),
             plot_loss=True,
-            trust_remote_code=True,
+            trust_remote_code=is_env_enabled("LLAMAFACTORY_WEBUI_TRUST_REMOTE_CODE"),
             ddp_timeout=180000000,
             include_num_input_tokens_seen=True,
         )
@@ -326,7 +326,7 @@ class Runner:
             temperature=get("eval.temperature"),
             seed=_parse_seed(get("eval.eval_seed")),
             output_dir=get_save_dir(model_name, finetuning_type, get("eval.output_dir")),
-            trust_remote_code=True,
+            trust_remote_code=is_env_enabled("LLAMAFACTORY_WEBUI_TRUST_REMOTE_CODE"),
             ddp_timeout=180000000,
         )
 
