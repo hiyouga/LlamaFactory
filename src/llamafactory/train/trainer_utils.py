@@ -38,6 +38,7 @@ from ..extras.misc import get_device_name
 from ..extras.packages import is_apollo_available, is_galore_available, is_ray_available
 from ..hparams import FinetuningArguments, ModelArguments
 from ..model import find_all_linear_modules, load_model, load_tokenizer, load_valuehead_params
+from ..model.model_utils.visual import is_target_module
 
 
 if is_galore_available():
@@ -202,14 +203,15 @@ def _create_galore_optimizer(
     training_args: "TrainingArguments",
     finetuning_args: "FinetuningArguments",
 ) -> "torch.optim.Optimizer":
-    if len(finetuning_args.galore_target) == 1 and finetuning_args.galore_target[0] == "all":
+    use_all_modules = len(finetuning_args.galore_target) == 1 and finetuning_args.galore_target[0] == "all"
+    if use_all_modules:
         galore_targets = find_all_linear_modules(model, finetuning_args.freeze_vision_tower)
     else:
         galore_targets = finetuning_args.galore_target
 
     galore_params: list[torch.nn.Parameter] = []
     for name, module in model.named_modules():
-        if isinstance(module, torch.nn.Linear) and any(target in name for target in galore_targets):
+        if isinstance(module, torch.nn.Linear) and is_target_module(name, galore_targets, use_all_modules):
             for param in module.parameters():
                 if param.requires_grad and len(param.shape) > 1:
                     galore_params.append(param)
@@ -290,14 +292,15 @@ def _create_apollo_optimizer(
     training_args: "TrainingArguments",
     finetuning_args: "FinetuningArguments",
 ) -> "torch.optim.Optimizer":
-    if len(finetuning_args.apollo_target) == 1 and finetuning_args.apollo_target[0] == "all":
+    use_all_modules = len(finetuning_args.apollo_target) == 1 and finetuning_args.apollo_target[0] == "all"
+    if use_all_modules:
         apollo_targets = find_all_linear_modules(model, finetuning_args.freeze_vision_tower)
     else:
         apollo_targets = finetuning_args.apollo_target
 
     apollo_params: list[torch.nn.Parameter] = []
     for name, module in model.named_modules():
-        if isinstance(module, torch.nn.Linear) and any(target in name for target in apollo_targets):
+        if isinstance(module, torch.nn.Linear) and is_target_module(name, apollo_targets, use_all_modules):
             for param in module.parameters():
                 if param.requires_grad and len(param.shape) > 1:
                     apollo_params.append(param)
