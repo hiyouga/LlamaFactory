@@ -91,42 +91,44 @@ def launch():
                 rdzv_nnodes = f"{min_nnodes}:{max_nnodes}"
 
             process = subprocess.run(
-                (
-                    "torchrun --nnodes {rdzv_nnodes} --nproc-per-node {nproc_per_node} "
-                    "--rdzv-id {rdzv_id} --rdzv-backend c10d --rdzv-endpoint {master_addr}:{master_port} "
-                    "--max-restarts {max_restarts} {file_name} {args}"
-                )
-                .format(
-                    rdzv_nnodes=rdzv_nnodes,
-                    nproc_per_node=nproc_per_node,
-                    rdzv_id=rdzv_id,
-                    master_addr=master_addr,
-                    master_port=master_port,
-                    max_restarts=max_restarts,
-                    file_name=__file__,
-                    args=" ".join(sys.argv[1:]),
-                )
-                .split(),
+                [
+                    "torchrun",
+                    "--nnodes",
+                    rdzv_nnodes,
+                    "--nproc-per-node",
+                    nproc_per_node,
+                    "--rdzv-id",
+                    rdzv_id,
+                    "--rdzv-backend",
+                    "c10d",
+                    "--rdzv-endpoint",
+                    f"{master_addr}:{master_port}",
+                    "--max-restarts",
+                    max_restarts,
+                    __file__,
+                    *sys.argv[1:],
+                ],
                 env=env,
                 check=True,
             )
         else:
             # NOTE: DO NOT USE shell=True to avoid security risk
             process = subprocess.run(
-                (
-                    "torchrun --nnodes {nnodes} --node_rank {node_rank} --nproc_per_node {nproc_per_node} "
-                    "--master_addr {master_addr} --master_port {master_port} {file_name} {args}"
-                )
-                .format(
-                    nnodes=nnodes,
-                    node_rank=node_rank,
-                    nproc_per_node=nproc_per_node,
-                    master_addr=master_addr,
-                    master_port=master_port,
-                    file_name=__file__,
-                    args=" ".join(sys.argv[1:]),
-                )
-                .split(),
+                [
+                    "torchrun",
+                    "--nnodes",
+                    nnodes,
+                    "--node_rank",
+                    node_rank,
+                    "--nproc_per_node",
+                    nproc_per_node,
+                    "--master_addr",
+                    master_addr,
+                    "--master_port",
+                    master_port,
+                    __file__,
+                    *sys.argv[1:],
+                ],
                 env=env,
                 check=True,
             )
