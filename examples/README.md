@@ -114,6 +114,12 @@ USE_RAY=1 llamafactory-cli train examples/train_lora/qwen3_lora_sft_ray.yaml
 llamafactory-cli train examples/train_qlora/qwen3_lora_sft_otfq.yaml
 ```
 
+#### Supervised Fine-Tuning with 4-bit NF4 Quantization (Qwen2.5-VL)
+
+```bash
+llamafactory-cli train examples/train_qlora/qwen25vl_3b_lora_sft_nf4.yaml
+```
+
 #### Supervised Fine-Tuning with 4-bit Bitsandbytes Quantization on Ascend NPU
 
 ```bash

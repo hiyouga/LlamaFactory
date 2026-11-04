@@ -122,6 +122,12 @@ USE_RAY=1 llamafactory-cli train examples/train_lora/qwen3_lora_sft_ray.yaml
 llamafactory-cli train examples/train_qlora/qwen3_lora_sft_otfq.yaml
 ```
 
+#### 基于 4 比特 NF4 量化进行指令监督微调
+
+```bash
+llamafactory-cli train examples/train_qlora/qwen25vl_3b_lora_sft_nf4.yaml
+```
+
 #### 在 NPU 上基于 4 比特 Bitsandbytes 量化进行指令监督微调
 
 ```bash
