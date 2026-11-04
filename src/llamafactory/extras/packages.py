@@ -43,6 +43,15 @@ def is_pyav_available():
     return _is_package_available("av")
 
 
+def is_torchaudio_available():
+    try:
+        spec = importlib.util.find_spec("torchaudio")
+    except (ImportError, AttributeError, TypeError, ValueError):
+        return False
+
+    return spec is not None and spec.origin is not None
+
+
 def is_librosa_available():
     return _is_package_available("librosa")
 
