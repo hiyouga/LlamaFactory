@@ -166,7 +166,8 @@ def _load_aligned_datasets(
         stage,
         return_dict=data_args.eval_on_each_dataset,
     )
-    train_dict, eval_dict = split_dataset(dataset, eval_dataset, data_args, seed=training_args.seed)
+    data_seed = training_args.data_seed if training_args.data_seed is not None else training_args.seed
+    train_dict, eval_dict = split_dataset(dataset, eval_dataset, data_args, seed=data_seed)
     return train_dict.get("train"), eval_dict
 
 
