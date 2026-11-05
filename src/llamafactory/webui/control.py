@@ -194,13 +194,20 @@ def list_config_paths(current_time: str) -> "gr.Dropdown":
     return gr.Dropdown(choices=config_files)
 
 
-def list_datasets(dataset_dir: str = None, training_stage: str = list(TRAINING_STAGES.keys())[0]) -> "gr.Dropdown":
+def list_datasets(
+    lang: str = "en", dataset_dir: str = None, training_stage: str = list(TRAINING_STAGES.keys())[0]
+) -> "gr.Dropdown":
     r"""List all available datasets in the dataset dir for the training stage.
 
-    Inputs: *.dataset_dir, *.training_stage
+    Inputs: top.lang, *.dataset_dir, *.training_stage
     Outputs: *.dataset
     """
-    dataset_info = load_dataset_info(dataset_dir if dataset_dir is not None else DEFAULT_DATA_DIR)
+    try:
+        dataset_info = load_dataset_info(dataset_dir if dataset_dir is not None else DEFAULT_DATA_DIR)
+    except ValueError:
+        gr.Warning(ALERTS["err_dataset_info"][lang])
+        return gr.Dropdown(choices=[])
+
     ranking = TRAINING_STAGES[training_stage] in STAGES_USE_PAIR_DATA
     datasets = [k for k, v in dataset_info.items() if v.get("ranking", False) == ranking]
     return gr.Dropdown(choices=datasets)
