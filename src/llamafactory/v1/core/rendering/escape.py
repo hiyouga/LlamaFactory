@@ -20,6 +20,7 @@ into the rendered stream. A no-op for normal data.
 """
 
 import json
+from typing import Any
 
 from ...utils.types import Message
 
@@ -59,12 +60,35 @@ def _escape_special(text: str, specials: list[str], special_ids: set[int], token
     return out
 
 
+def _escape_json_strings(value: Any, specials: list[str], special_ids: set[int], tokenizer) -> Any:
+    """Escape every string anywhere inside a decoded JSON value, object keys included.
+
+    A tool call is rendered whole by the chat template, so the function name, an argument
+    nested in a list or an object, and an argument's key all reach the prompt exactly the way
+    a top-level argument string does. Only strings are touched; other JSON types are returned
+    as they are.
+    """
+    if isinstance(value, str):
+        return _escape_special(value, specials, special_ids, tokenizer)
+    if isinstance(value, dict):
+        return {
+            (_escape_special(key, specials, special_ids, tokenizer) if isinstance(key, str) else key): (
+                _escape_json_strings(item, specials, special_ids, tokenizer)
+            )
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_escape_json_strings(item, specials, special_ids, tokenizer) for item in value]
+    return value
+
+
 def _escape_special_in_messages(
     messages: list[Message], specials: list[str], special_ids: set[int], tokenizer
 ) -> list[Message]:
     """Return messages with special-token strings neutralized in user-controlled literal text.
 
-    Covers ``text``/``reasoning`` block values and string values inside ``tool_call`` arguments.
+    Covers ``text``/``reasoning`` block values and every string inside a ``tool_call`` object,
+    its function name and nested argument containers included.
     """
     if not specials:
         return messages
@@ -82,16 +106,13 @@ def _escape_special_in_messages(
                 except (json.JSONDecodeError, TypeError):
                     new_content.append(content)
                     continue
-                # A tool_call value that is valid JSON but not an object (list/str/int) carries no
-                # escapable argument strings -- pass it through untouched rather than crash on .get().
+                # A tool_call value that is valid JSON but not an object (list/str/int) is rejected
+                # later by `_to_hf_messages` with a clearer message -- pass it through untouched
+                # rather than reformat something that never reaches a template.
                 if isinstance(tc, dict):
-                    args = tc.get("arguments")
-                    if isinstance(args, dict):
-                        tc["arguments"] = {
-                            k: (_escape_special(v, specials, special_ids, tokenizer) if isinstance(v, str) else v)
-                            for k, v in args.items()
-                        }
-                    new_content.append({**content, "value": json.dumps(tc)})
+                    new_content.append(
+                        {**content, "value": json.dumps(_escape_json_strings(tc, specials, special_ids, tokenizer))}
+                    )
                 else:
                     new_content.append(content)
             else:
