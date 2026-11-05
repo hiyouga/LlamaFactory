@@ -470,6 +470,47 @@ def test_qwen3_vl_plugin():
     ]
 
 
+@pytest.mark.parametrize(
+    ("temporal_patch_size", "expected_grid_t"),
+    [(1, 5), (2, 3), (3, 2)],
+)
+def test_qwen3_vl_plugin_video_grid_metadata(monkeypatch, temporal_patch_size: int, expected_grid_t: int):
+    qwen3_vl_plugin = get_mm_plugin(name="qwen3_vl", video_token="<|video_pad|>")
+    processor = SimpleNamespace(
+        image_processor=SimpleNamespace(),
+        video_processor=SimpleNamespace(
+            patch_size=16,
+            temporal_patch_size=temporal_patch_size,
+            merge_size=2,
+            size={"shortest_edge": 16 * 16, "longest_edge": 256 * 256},
+        ),
+        video_fps=2.0,
+        video_maxlen=128,
+    )
+    metadata = {
+        "width": 64,
+        "height": 32,
+        "average_fps": 2.0,
+        "sample_indices": list(range(5)),
+    }
+    resize_num_frames = []
+
+    monkeypatch.setattr(qwen3_vl_plugin, "_get_qwen_video_stream_metadata", lambda *args: metadata)
+    monkeypatch.setattr(qwen3_vl_plugin, "_get_qwen_video_size_after_regularization", lambda *args: (64, 32))
+
+    def mock_video_resize(num_frames: int, *args) -> tuple[int, int]:
+        resize_num_frames.append(num_frames)
+        return 32, 64
+
+    monkeypatch.setattr(qwen3_vl_plugin, "_get_qwen_video_resize", mock_video_resize)
+
+    video_metadata = qwen3_vl_plugin._get_qwen_video_grid_metadata(["video.mp4"], processor)
+
+    assert video_metadata is not None
+    assert resize_num_frames == [5]
+    assert video_metadata["video_grid_thw"].tolist() == [[expected_grid_t, 2, 4]]
+
+
 @pytest.mark.runs_on(["cpu", "mps", "xpu"])
 @pytest.mark.skipif(not is_transformers_version_greater_than("4.57.0"), reason="Requires transformers>=4.57.0")
 @pytest.mark.skipif(not is_pyav_available(), reason="Requires pyav")
@@ -498,7 +539,7 @@ def test_qwen3_vl_plugin_video_path():
     )
     result = qwen3_vl_plugin.process_messages(VIDEO_MESSAGES, [], videos, [], processor)
     # This demo video duration is 9.72s, with video_fps=2, we extract 19 frames
-    # 19 + 1 => temperoal compress => 10 video_sequence
+    # ceil(19 / temporal_patch_size) => 10 video sequences
     assert result[0]["content"].count("<|vision_start|>") == 10, (
         f"Expected 10 video tokens, got {result[0]['content'].count('<|vision_start|>')}"
     )
