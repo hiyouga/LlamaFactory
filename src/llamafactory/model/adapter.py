@@ -197,6 +197,20 @@ def _setup_lora_tuning(
         for adapter in adapter_to_merge:
             model: LoraModel = PeftModel.from_pretrained(model, adapter, **init_kwargs)
             model = model.merge_and_unload()
+            text_config = model.config.get_text_config()
+            if getattr(text_config, "tie_word_embeddings", False):
+                input_embeddings = model.get_input_embeddings()
+                output_embeddings = model.get_output_embeddings()
+                if (
+                    input_embeddings is not None
+                    and output_embeddings is not None
+                    and input_embeddings.weight is not output_embeddings.weight
+                    and not torch.equal(input_embeddings.weight, output_embeddings.weight)
+                ):
+                    # modules_to_save can untie embeddings; do not tie them again when reloading the export.
+                    text_config.tie_word_embeddings = False
+                    model.config.tie_word_embeddings = False
+                    logger.info_rank0("Merged adapter has untied embeddings, setting tie_word_embeddings=False.")
 
         if len(adapter_to_merge) > 0:
             logger.info_rank0(f"Merged {len(adapter_to_merge)} adapter(s).")
