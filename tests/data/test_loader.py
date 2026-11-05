@@ -59,3 +59,11 @@ def test_load_eval_data():
     dataset_module = load_dataset_module(eval_dataset=TINY_DATA, **TRAIN_ARGS)
     assert dataset_module.get("train_dataset") is not None
     assert dataset_module.get("eval_dataset") is not None
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
+def test_load_with_multiprocessing():
+    r"""Regression test for #8600: multi-process preprocessing must still load successfully."""
+    dataset_module = load_dataset_module(preprocessing_num_workers=2, **TRAIN_ARGS)
+    assert dataset_module.get("train_dataset") is not None
+    assert dataset_module.get("eval_dataset") is None

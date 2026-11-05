@@ -22,7 +22,13 @@ from ..extras import logging
 from ..extras.constants import FILEEXT2TYPE
 from ..extras.misc import check_version, has_tokenized_data
 from .converter import align_dataset
-from .data_utils import get_dataset_module, merge_dataset, read_cloud_json, split_dataset
+from .data_utils import (
+    configure_preprocessing_thread_limits,
+    get_dataset_module,
+    merge_dataset,
+    read_cloud_json,
+    split_dataset,
+)
 from .parser import get_dataset_list
 from .processor import (
     FeedbackDatasetProcessor,
@@ -172,6 +178,9 @@ def _get_merged_dataset(
     r"""Return the merged datasets in the standard format."""
     if dataset_names is None:
         return None
+
+    # avoid oversubscribing CPU threads when forking `num_proc` preprocessing workers below (#8600)
+    configure_preprocessing_thread_limits(data_args.preprocessing_num_workers)
 
     datasets = {}
     for dataset_name, dataset_attr in zip(dataset_names, get_dataset_list(dataset_names, data_args.dataset_dir)):
