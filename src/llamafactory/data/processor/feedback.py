@@ -83,9 +83,7 @@ class FeedbackDatasetProcessor(DatasetProcessor):
         return input_ids, labels, kl_input_ids, kl_labels, kto_tag
 
     def preprocess_dataset(self, examples: dict[str, list[Any]]) -> dict[str, list[Any]]:
-        # Creates mismatched pairs of prompts and completions for the KL dataset by adding a +1 offset to the order of completions.
-        kl_response = [examples["_response"][-1]] + examples["_response"][:-1]
-        model_inputs = defaultdict(list)
+        valid_indices = []
         for i in range(len(examples["_prompt"])):
             if len(examples["_prompt"][i]) % 2 != 1 or len(examples["_response"][i]) < 2:
                 logger.warning_rank0(
@@ -93,10 +91,16 @@ class FeedbackDatasetProcessor(DatasetProcessor):
                 )
                 continue
 
+            valid_indices.append(i)
+
+        # Rotate only valid examples so dropped responses cannot enter the KL dataset.
+        kl_indices = valid_indices[-1:] + valid_indices[:-1]
+        model_inputs = defaultdict(list)
+        for i, kl_index in zip(valid_indices, kl_indices):
             input_ids, labels, kl_input_ids, kl_labels, kto_tag = self._encode_data_example(
                 prompt=examples["_prompt"][i],
                 response=examples["_response"][i],
-                kl_response=kl_response[i],
+                kl_response=examples["_response"][kl_index],
                 system=examples["_system"][i],
                 tools=examples["_tools"][i],
                 images=examples["_images"][i] or [],
