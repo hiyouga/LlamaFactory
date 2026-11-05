@@ -73,11 +73,21 @@ def _get_config_path() -> os.PathLike:
 
 def load_config() -> dict[str, str | dict[str, Any]]:
     r"""Load user config if exists."""
+    default_config = {"lang": None, "hub_name": None, "last_model": None, "path_dict": {}, "cache_dir": None}
     try:
         with open(_get_config_path(), encoding="utf-8") as f:
-            return safe_load(f)
+            user_config = safe_load(f)
     except Exception:
-        return {"lang": None, "hub_name": None, "last_model": None, "path_dict": {}, "cache_dir": None}
+        return default_config
+
+    if not isinstance(user_config, dict):
+        return default_config
+
+    default_config.update(user_config)
+    if not isinstance(default_config["path_dict"], dict):
+        default_config["path_dict"] = {}
+
+    return default_config
 
 
 def save_config(
