@@ -20,6 +20,7 @@ and non-persistent buffers by comparing it with the standard non-meta path.
 
 from types import SimpleNamespace
 
+import pytest
 import torch
 import torch.distributed as dist
 from torch.distributed.device_mesh import init_device_mesh
@@ -31,6 +32,8 @@ from llamafactory.v1.config.arg_parser import get_args
 from llamafactory.v1.core.model_engine import ModelEngine
 from llamafactory.v1.plugins.trainer_plugins.distributed import fsdp2 as fsdp2_module
 from llamafactory.v1.plugins.trainer_plugins.distributed.fsdp2 import FSDP2Engine
+from llamafactory.v1.utils.env import find_available_port
+from llamafactory.v1.utils.pytest import dist_env
 
 
 TINY_MODEL = "llamafactory/tiny-random-qwen3"
@@ -48,6 +51,7 @@ def collect_non_persistent_buffers(model):
     return result
 
 
+@pytest.mark.skipif(not dist.is_available() or not dist.is_gloo_available(), reason="Requires the CPU Gloo backend.")
 def test_fsdp2_save_pretrained_uses_original_model_class():
     """Save using the original custom model class and restore the FSDP2 wrapper."""
     saved_classes = []
@@ -59,8 +63,9 @@ def test_fsdp2_save_pretrained_uses_original_model_class():
             saved_classes.append(type(self))
 
     model = CustomModel()
-    dist.init_process_group("gloo", store=dist.HashStore(), rank=0, world_size=1)
-    fully_shard(model, mesh=init_device_mesh("cpu", (1,)))
+    with dist_env(master_port=find_available_port()):
+        dist.init_process_group("gloo")
+        fully_shard(model, mesh=init_device_mesh("cpu", (1,)))
     wrapper_cls = type(model)
     assert isinstance(model, FSDPModule)
 
