@@ -68,6 +68,50 @@ ROLE_MAPPING = {
     Role.FUNCTION: DataRole.FUNCTION.value,
     Role.TOOL: DataRole.OBSERVATION.value,
 }
+MAX_REMOTE_MEDIA_SIZE = int(os.getenv("MAX_REMOTE_MEDIA_SIZE", str(100 * 1024 * 1024)))
+REMOTE_MEDIA_CHUNK_SIZE = 64 * 1024
+
+
+def _fetch_remote_media(url: str) -> io.BytesIO:
+    check_ssrf_url(url)
+    response = None
+    try:
+        response = requests.get(url, stream=True, timeout=10, allow_redirects=False)
+        if response.is_redirect:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Media URL redirects are not allowed.")
+
+        response.raise_for_status()
+        content_length = response.headers.get("Content-Length")
+        if content_length is not None:
+            try:
+                if int(content_length) > MAX_REMOTE_MEDIA_SIZE:
+                    raise HTTPException(
+                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        detail="Remote media exceeds the maximum allowed size.",
+                    )
+            except ValueError:
+                pass
+
+        media = io.BytesIO()
+        total_size = 0
+        for chunk in response.iter_content(chunk_size=REMOTE_MEDIA_CHUNK_SIZE):
+            if chunk:
+                total_size += len(chunk)
+                if total_size > MAX_REMOTE_MEDIA_SIZE:
+                    raise HTTPException(
+                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        detail="Remote media exceeds the maximum allowed size.",
+                    )
+
+                media.write(chunk)
+
+        media.seek(0)
+        return media
+    except requests.RequestException as err:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Failed to fetch media URL: {err}")
+    finally:
+        if response is not None:
+            response.close()
 
 
 def _process_request(
@@ -127,8 +171,7 @@ def _process_request(
                         check_lfi_path(image_url)
                         image_stream = open(image_url, "rb")
                     else:  # web uri
-                        check_ssrf_url(image_url)
-                        image_stream = requests.get(image_url, stream=True).raw
+                        image_stream = _fetch_remote_media(image_url)
 
                     images.append(Image.open(image_stream).convert("RGB"))
                 elif input_item.type == "video_url":
@@ -140,8 +183,7 @@ def _process_request(
                         check_lfi_path(video_url)
                         video_stream = video_url
                     else:  # web uri
-                        check_ssrf_url(video_url)
-                        video_stream = requests.get(video_url, stream=True).raw
+                        video_stream = _fetch_remote_media(video_url)
 
                     videos.append(video_stream)
                 elif input_item.type == "audio_url":
@@ -153,8 +195,7 @@ def _process_request(
                         check_lfi_path(audio_url)
                         audio_stream = audio_url
                     else:  # web uri
-                        check_ssrf_url(audio_url)
-                        audio_stream = requests.get(audio_url, stream=True).raw
+                        audio_stream = _fetch_remote_media(audio_url)
 
                     audios.append(audio_stream)
                 else:
