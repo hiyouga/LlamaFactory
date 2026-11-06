@@ -59,3 +59,36 @@ def test_load_eval_data():
     dataset_module = load_dataset_module(eval_dataset=TINY_DATA, **TRAIN_ARGS)
     assert dataset_module.get("train_dataset") is not None
     assert dataset_module.get("eval_dataset") is not None
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
+def test_read_cloud_json_directory_listing_uses_name_not_key(monkeypatch):
+    # fsspec directory listings expose "name", not s3-style "Key".
+    import io
+
+    import llamafactory.data.data_utils as du
+
+    class FakeFS:
+        def exists(self, path):
+            return True
+
+        def isdir(self, path):
+            return path == "gs://bucket"
+
+        def listdir(self, path, detail=False):
+            return [
+                "gs://bucket/a.json",
+                "gs://bucket/b.txt",
+                "gs://bucket/c.jsonl",
+            ]
+
+        def open(self, path, mode="r"):
+            if path.endswith("a.json"):
+                return io.StringIO('[{"k": 1}]')
+            return io.StringIO('{"k": 2}\n{"k": 3}\n')
+
+    monkeypatch.setattr(du, "setup_fs", lambda p, anon=False: FakeFS())
+    assert du.read_cloud_json("gs://bucket") == [{"k": 1}, {"k": 2}, {"k": 3}]
+    assert du.read_cloud_json("gs://bucket/a.json") == [{"k": 1}]
+    with pytest.raises(ValueError, match="No JSON/JSONL files"):
+        du.read_cloud_json("gs://empty")
