@@ -450,6 +450,30 @@ def test_lfm2_tool_round_trip():
 
 
 @pytest.mark.runs_on(["cpu", "mps", "xpu"])
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        {"options": {"enabled": True, "fallback": None}},
+        {"items": [True, False, None]},
+        {"options": [{"active": [True, False, None], "label": "true false null"}]},
+        {"enabled": True, "fallback": None},
+    ],
+)
+def test_lfm2_tool_round_trip_nested_json_literals(arguments):
+    formatter = FunctionFormatter(slots=["{{content}}"], tool_format="lfm2")
+    extractor = ToolFormatter(tool_format="lfm2")
+    rendered = formatter.apply(content=json.dumps({"name": "test_tool", "arguments": arguments}))[0]
+    assert extractor.extract(rendered) == [("test_tool", json.dumps(arguments, ensure_ascii=False))]
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
+@pytest.mark.parametrize("value", ['{"enabled": unknown}', "[1 + 2]"])
+def test_lfm2_tool_extractor_rejects_nonliteral_values(value):
+    content = f"<|tool_call_start|>[test_tool(options={value})]<|tool_call_end|>"
+    assert ToolFormatter(tool_format="lfm2").extract(content) == content
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
 def test_minicpm5_function_formatter():
     formatter = FunctionFormatter(slots=["{{content}}<|im_end|>\n"], tool_format="minicpm5")
     tool_calls = json.dumps(FUNCTION)
