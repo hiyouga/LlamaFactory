@@ -33,7 +33,7 @@ from transformers.trainer_pt_utils import get_parameter_names
 from typing_extensions import override
 
 from ..extras import logging
-from ..extras.constants import IGNORE_INDEX, SWANLAB_CONFIG
+from ..extras.constants import DEFAULT_RAY_NUM_CPUS_PER_WORKER, IGNORE_INDEX, SWANLAB_CONFIG
 from ..extras.misc import get_device_name
 from ..extras.packages import is_apollo_available, is_galore_available, is_ray_available
 from ..hparams import FinetuningArguments, ModelArguments
@@ -891,9 +891,18 @@ def get_swanlab_callback(finetuning_args: "FinetuningArguments") -> "TrainerCall
     return swanlab_callback
 
 
-def get_placement_group(num_workers: int) -> tuple["PlacementGroup", dict[str, int]]:
-    r"""Get the Ray placement group for distributed training."""
-    bundle = {"CPU": 10}
+def get_placement_group(
+    num_workers: int, num_cpus_per_worker: int = DEFAULT_RAY_NUM_CPUS_PER_WORKER
+) -> tuple["PlacementGroup", dict[str, int]]:
+    r"""Get the Ray placement group for distributed training.
+
+    Args:
+        num_workers: the number of training workers, i.e. the number of bundles to reserve.
+        num_cpus_per_worker: the number of CPUs reserved per bundle. Each worker runs its own
+            dataloader and dataset preprocessing inside the bundle, so lowering this value lets
+            Ray pack more workers onto a node than the node can actually feed.
+    """
+    bundle = {"CPU": num_cpus_per_worker}
     device_name = get_device_name().upper()
     if device_name != "CPU":
         bundle[device_name] = 1
@@ -911,8 +920,12 @@ def get_ray_remote_config_for_worker(
     master_addr: str,
     master_port: str,
     env: dict[str, str] = None,
+    num_cpus: int = DEFAULT_RAY_NUM_CPUS_PER_WORKER,
 ) -> dict[str, Any]:
-    r"""Get the remote config for a Ray worker."""
+    r"""Get the remote config for a Ray worker.
+
+    `num_cpus` should match the CPUs reserved in the corresponding bundle.
+    """
     env_vars = {
         "RANK": str(rank),
         "WORLD_SIZE": str(world_size),
@@ -928,7 +941,7 @@ def get_ray_remote_config_for_worker(
             placement_group_bundle_index=bundle_idx,
         ),
         "runtime_env": {"env_vars": env},
-        "num_cpus": 10,
+        "num_cpus": num_cpus,
     }
 
     device_name = get_device_name()
@@ -946,33 +959,64 @@ def get_ray_head_node_ip() -> str:
     return head_ip
 
 
-def sort_placement_group_by_node_ip(placement_group: "PlacementGroup", master_addr: str = None) -> list[int]:
-    r"""Sort the placement group bundles by their node IP addresses."""
-
+if is_ray_available():
+    # defined at module level so that Ray registers it once instead of on every call
     @ray.remote
-    def _get_node_ip():
+    def _get_node_ip() -> str:
+        r"""Get the IP address of the node that this task is scheduled on."""
         return ray.util.get_node_ip_address().strip("[]")
 
-    tasks = []
-    for bundle_idx in range(placement_group.bundle_count):
-        task = _get_node_ip.options(
+
+def get_placement_group_node_ips(placement_group: "PlacementGroup") -> list[str]:
+    r"""Get the node IP address of each bundle, indexed by bundle index."""
+    tasks = [
+        _get_node_ip.options(
             scheduling_strategy=PlacementGroupSchedulingStrategy(
                 placement_group=placement_group,
                 placement_group_bundle_index=bundle_idx,
             ),
         ).remote()
-        tasks.append(task)
+        for bundle_idx in range(placement_group.bundle_count)
+    ]
+    return ray.get(tasks)
 
-    bundle_ips = ray.get(tasks)
-    bundle_node_ip_list = list(enumerate(bundle_ips))
 
-    sorted_bundle_node_ip_list = sorted(bundle_node_ip_list, key=lambda x: x[1])
-    sorted_bundle_indices = [item[0] for item in sorted_bundle_node_ip_list]
+def resolve_master_addr(master_addr: str, bundle_node_ips: list[str], sorted_bundle_indices: list[int]) -> str:
+    r"""Resolve the address that rank 0 will actually bind the TCPStore to.
+
+    No bundle may be placed on `master_addr` at all, e.g. a head node without devices. rank 0 would
+    then start the TCPStore on another node while the other ranks connect to `master_addr` and hang,
+    so the node ip of rank 0 wins over the requested `master_addr`.
+    """
+    rank0_node_ip = bundle_node_ips[sorted_bundle_indices[0]]
+    if rank0_node_ip != master_addr:
+        logger.warning_rank0(
+            f"No bundle was placed on `master_addr` ({master_addr}), "
+            f"falling back to the node ip of rank 0: {rank0_node_ip}."
+        )
+
+    return rank0_node_ip
+
+
+def sort_placement_group_by_node_ip(
+    placement_group: "PlacementGroup", master_addr: str = None, bundle_node_ips: list[str] = None
+) -> list[int]:
+    r"""Sort the placement group bundles by their node IP addresses.
+
+    Bundles sitting on `master_addr` are moved to the front so that rank 0 runs on the master node.
+    Pass `bundle_node_ips` to reuse an already resolved mapping instead of issuing remote calls again.
+    """
+    if bundle_node_ips is None:
+        bundle_node_ips = get_placement_group_node_ips(placement_group)
+
+    bundle_node_ip_list = list(enumerate(bundle_node_ips))
+    sorted_bundle_indices = [bundle_idx for bundle_idx, _ in sorted(bundle_node_ip_list, key=lambda x: x[1])]
 
     if master_addr is not None:
-        preferred_indices = [idx for idx, ip in bundle_node_ip_list if ip == master_addr]
+        preferred_indices = [bundle_idx for bundle_idx, ip in bundle_node_ip_list if ip == master_addr]
         if preferred_indices:
-            remaining = [i for i in sorted_bundle_indices if i not in preferred_indices]
+            preferred_set = set(preferred_indices)
+            remaining = [bundle_idx for bundle_idx in sorted_bundle_indices if bundle_idx not in preferred_set]
             sorted_bundle_indices = preferred_indices + remaining
 
     return sorted_bundle_indices
