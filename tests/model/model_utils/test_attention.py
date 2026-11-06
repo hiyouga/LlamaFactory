@@ -58,3 +58,30 @@ def test_attention():
         for module in model.modules():
             if "Attention" in module.__class__.__name__:
                 assert module.__class__.__name__ == llama_attention_classes[requested_attention]
+
+
+def test_gpt_oss_attention_kernel():
+    from unittest.mock import patch
+
+    from transformers import PretrainedConfig
+
+    from llamafactory.extras.constants import AttentionFunction
+    from llamafactory.hparams import ModelArguments
+    from llamafactory.model.model_utils.attention import configure_attn_implementation
+
+    if is_transformers_version_greater_than("5.0.0"):
+        kernel_loader = "transformers.integrations.hub_kernels.load_and_register_attn_kernel"
+    elif is_transformers_version_greater_than("4.56.0"):
+        kernel_loader = "transformers.integrations.hub_kernels.load_and_register_kernel"
+    else:
+        pytest.skip("Hub kernels for attention require transformers>=4.56.0.")
+
+    config = PretrainedConfig()
+    config.model_type = "gpt_oss"
+    model_args = ModelArguments(model_name_or_path=TINY_LLAMA3)
+    with patch(kernel_loader) as mock_loader:
+        configure_attn_implementation(config, model_args)
+
+    mock_loader.assert_called_once_with("kernels-community/vllm-flash-attn3")
+    assert config._attn_implementation == "kernels-community/vllm-flash-attn3"
+    assert model_args.flash_attn == AttentionFunction.FA3
