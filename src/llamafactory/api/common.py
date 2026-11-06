@@ -79,14 +79,15 @@ def check_ssrf_url(url: str) -> None:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid URL hostname.")
 
         ip_info = socket.getaddrinfo(hostname, parsed_url.port)
-        ip_address_str = ip_info[0][4][0]
-        ip = ipaddress.ip_address(ip_address_str)
+        for info in ip_info:
+            ip_address_str = info[4][0]
+            ip = ipaddress.ip_address(ip_address_str)
 
-        if not ip.is_global:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access to private or reserved IP addresses is not allowed.",
-            )
+            if not ip.is_global:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Access to private or reserved IP addresses is not allowed.",
+                )
 
     except socket.gaierror:
         raise HTTPException(
