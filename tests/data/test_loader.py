@@ -15,7 +15,10 @@
 import os
 
 import pytest
+from datasets import Dataset, DatasetDict, IterableDataset
 
+from llamafactory.data.loader import get_dataset
+from llamafactory.hparams import DataArguments
 from llamafactory.train.test_utils import load_dataset_module
 
 
@@ -59,3 +62,31 @@ def test_load_eval_data():
     dataset_module = load_dataset_module(eval_dataset=TINY_DATA, **TRAIN_ARGS)
     assert dataset_module.get("train_dataset") is not None
     assert dataset_module.get("eval_dataset") is not None
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize(
+    "splits", [("validation",), ("validation_a", "validation_b"), ("train",), ("train", "validation")]
+)
+def test_load_tokenized_splits(tmp_path, streaming, splits):
+    data = Dataset.from_dict({"input_ids": [[1, 2]], "attention_mask": [[1, 1]], "labels": [[1, 2]]})
+    DatasetDict(dict.fromkeys(splits, data)).save_to_disk(str(tmp_path))
+    data_args = DataArguments(tokenized_path=str(tmp_path), streaming=streaming)
+
+    dataset_module = get_dataset(None, None, data_args, None, "sft", None)
+    if "train" in splits:
+        train_dataset = dataset_module["train_dataset"]
+        assert isinstance(train_dataset, IterableDataset if streaming else Dataset)
+        assert list(train_dataset) == list(data)
+    else:
+        assert "train_dataset" not in dataset_module
+
+    eval_dataset = dataset_module.get("eval_dataset")
+    if "validation" in splits:
+        assert isinstance(eval_dataset, Dataset)
+        assert list(eval_dataset) == list(data)
+    elif "validation_a" in splits:
+        assert set(eval_dataset) == {"a", "b"}
+        assert all(isinstance(dataset, Dataset) and list(dataset) == list(data) for dataset in eval_dataset.values())
+    else:
+        assert eval_dataset is None
