@@ -59,10 +59,14 @@ def check_lfi_path(path: str) -> None:
         real_path = os.path.realpath(path)
         safe_path = os.path.realpath(SAFE_MEDIA_PATH)
 
-        if not real_path.startswith(safe_path):
+        # Use path-segment containment, not string prefix: siblings such as
+        # ``safe_media_backup`` must not pass when the allowlist is ``safe_media``.
+        if os.path.commonpath([real_path, safe_path]) != safe_path:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN, detail="File access is restricted to the safe media directory."
             )
+    except HTTPException:
+        raise
     except Exception:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or inaccessible file path.")
 
@@ -79,18 +83,20 @@ def check_ssrf_url(url: str) -> None:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid URL hostname.")
 
         ip_info = socket.getaddrinfo(hostname, parsed_url.port)
-        ip_address_str = ip_info[0][4][0]
-        ip = ipaddress.ip_address(ip_address_str)
-
-        if not ip.is_global:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access to private or reserved IP addresses is not allowed.",
-            )
+        # Reject if *any* resolved address is non-global (multi-A / dual-stack hosts).
+        for entry in ip_info:
+            ip = ipaddress.ip_address(entry[4][0])
+            if not ip.is_global:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Access to private or reserved IP addresses is not allowed.",
+                )
 
     except socket.gaierror:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=f"Could not resolve hostname: {parsed_url.hostname}"
         )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid URL: {e}")

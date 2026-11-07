@@ -123,12 +123,17 @@ def _process_request(
                     image_url = input_item.image_url.url
                     if re.match(r"^data:image\/(png|jpg|jpeg|gif|bmp);base64,(.+)$", image_url):  # base64 image
                         image_stream = io.BytesIO(base64.b64decode(image_url.split(",", maxsplit=1)[1]))
-                    elif os.path.isfile(image_url):  # local file
-                        check_lfi_path(image_url)
-                        image_stream = open(image_url, "rb")
-                    else:  # web uri
+                    elif image_url.startswith(("http://", "https://")):  # web uri
                         check_ssrf_url(image_url)
-                        image_stream = requests.get(image_url, stream=True).raw
+                        image_stream = requests.get(image_url, stream=True, allow_redirects=False, timeout=(5, 30)).raw
+                    else:  # local file — LFI check before existence probe
+                        check_lfi_path(image_url)
+                        if not os.path.isfile(image_url):
+                            raise HTTPException(
+                                status_code=status.HTTP_400_BAD_REQUEST,
+                                detail="Invalid or inaccessible file path.",
+                            )
+                        image_stream = open(image_url, "rb")
 
                     images.append(Image.open(image_stream).convert("RGB"))
                 elif input_item.type == "video_url":
@@ -136,12 +141,17 @@ def _process_request(
                     video_url = input_item.video_url.url
                     if re.match(r"^data:video\/(mp4|mkv|avi|mov);base64,(.+)$", video_url):  # base64 video
                         video_stream = io.BytesIO(base64.b64decode(video_url.split(",", maxsplit=1)[1]))
-                    elif os.path.isfile(video_url):  # local file
-                        check_lfi_path(video_url)
-                        video_stream = video_url
-                    else:  # web uri
+                    elif video_url.startswith(("http://", "https://")):  # web uri
                         check_ssrf_url(video_url)
-                        video_stream = requests.get(video_url, stream=True).raw
+                        video_stream = requests.get(video_url, stream=True, allow_redirects=False, timeout=(5, 30)).raw
+                    else:  # local file — LFI check before existence probe
+                        check_lfi_path(video_url)
+                        if not os.path.isfile(video_url):
+                            raise HTTPException(
+                                status_code=status.HTTP_400_BAD_REQUEST,
+                                detail="Invalid or inaccessible file path.",
+                            )
+                        video_stream = video_url
 
                     videos.append(video_stream)
                 elif input_item.type == "audio_url":
@@ -149,12 +159,17 @@ def _process_request(
                     audio_url = input_item.audio_url.url
                     if re.match(r"^data:audio\/(mpeg|mp3|wav|ogg);base64,(.+)$", audio_url):  # base64 audio
                         audio_stream = io.BytesIO(base64.b64decode(audio_url.split(",", maxsplit=1)[1]))
-                    elif os.path.isfile(audio_url):  # local file
-                        check_lfi_path(audio_url)
-                        audio_stream = audio_url
-                    else:  # web uri
+                    elif audio_url.startswith(("http://", "https://")):  # web uri
                         check_ssrf_url(audio_url)
-                        audio_stream = requests.get(audio_url, stream=True).raw
+                        audio_stream = requests.get(audio_url, stream=True, allow_redirects=False, timeout=(5, 30)).raw
+                    else:  # local file — LFI check before existence probe
+                        check_lfi_path(audio_url)
+                        if not os.path.isfile(audio_url):
+                            raise HTTPException(
+                                status_code=status.HTTP_400_BAD_REQUEST,
+                                detail="Invalid or inaccessible file path.",
+                            )
+                        audio_stream = audio_url
 
                     audios.append(audio_stream)
                 else:
