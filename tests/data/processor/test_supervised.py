@@ -130,3 +130,15 @@ def test_supervised_mask_history(num_samples: int):
         ref_label_ids = [IGNORE_INDEX] * prompt_len + ref_input_ids[prompt_len:]
         assert train_dataset["input_ids"][index] == ref_input_ids
         assert train_dataset["labels"][index] == ref_label_ids
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
+@pytest.mark.parametrize("neat_packing", [False, True])
+def test_supervised_packing_position_ids(neat_packing: bool):
+    train_dataset = load_dataset_module(
+        dataset_dir="ONLINE", dataset=TINY_DATA, packing=True, neat_packing=neat_packing, **TRAIN_ARGS
+    )["train_dataset"]
+    for attention_mask, position_ids in zip(train_dataset["attention_mask"], train_dataset["position_ids"]):
+        for seq_idx in set(attention_mask) - {0}:  # tokens with the same mask value attend to each other
+            seq_position_ids = [pos for mask, pos in zip(attention_mask, position_ids) if mask == seq_idx]
+            assert all(pos == i for i, pos in enumerate(seq_position_ids)), "position ids restart within a sequence"
