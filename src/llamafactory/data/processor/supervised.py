@@ -58,7 +58,7 @@ class SupervisedDatasetProcessor(DatasetProcessor):
         images: list["ImageInput"],
         videos: list["VideoInput"],
         audios: list["AudioInput"],
-    ) -> tuple[list[int], list[int]]:
+    ) -> Optional[tuple[list[int], list[int]]]:
         messages = self.template.mm_plugin.process_messages(prompt + response, images, videos, audios, self.processor)
         input_ids, labels = self.template.mm_plugin.process_token_ids(
             [], [], images, videos, audios, self.tokenizer, self.processor
@@ -66,6 +66,16 @@ class SupervisedDatasetProcessor(DatasetProcessor):
         discarding_history_cot = self.data_args.mask_history and not self.template.preserve_thinking
         encoded_pairs = self.template.encode_multiturn(self.tokenizer, messages, system, tools, discarding_history_cot)
         total_length = len(input_ids) + (1 if self.template.efficient_eos else 0)
+        if self.data_args.drop_long_samples:
+            full_length = total_length + sum(
+                len(source_ids) + len(target_ids) for source_ids, target_ids in encoded_pairs
+            )
+            if full_length > self.data_args.cutoff_len:
+                logger.warning_rank0(
+                    f"Dropped lengthy example with length {full_length} > {self.data_args.cutoff_len}."
+                )
+                return None
+
         if self.data_args.mask_history:
             encoded_pairs = encoded_pairs[::-1]  # high priority for last turns
 
@@ -108,7 +118,8 @@ class SupervisedDatasetProcessor(DatasetProcessor):
     def preprocess_dataset(self, examples: dict[str, list[Any]]) -> dict[str, list[Any]]:
         # build inputs with format `<bos> X Y <eos>` and labels with format `<ignore> ... <ignore> Y <eos>`
         # for multiturn examples, we only mask the prompt part in each prompt-response pair.
-        model_inputs = defaultdict(list)
+        # An explicit empty column lets Dataset.map skip fully filtered batches.
+        model_inputs = defaultdict(list, input_ids=[])
         for i in range(len(examples["_prompt"])):
             if len(examples["_prompt"][i]) % 2 != 1 or len(examples["_response"][i]) != 1:
                 logger.warning_rank0(
@@ -116,7 +127,7 @@ class SupervisedDatasetProcessor(DatasetProcessor):
                 )
                 continue
 
-            input_ids, labels = self._encode_data_example(
+            encoded_example = self._encode_data_example(
                 prompt=examples["_prompt"][i],
                 response=examples["_response"][i],
                 system=examples["_system"][i],
@@ -125,6 +136,10 @@ class SupervisedDatasetProcessor(DatasetProcessor):
                 videos=examples["_videos"][i] or [],
                 audios=examples["_audios"][i] or [],
             )
+            if encoded_example is None:
+                continue
+
+            input_ids, labels = encoded_example
             model_inputs["input_ids"].append(input_ids)
             model_inputs["attention_mask"].append([1] * len(input_ids))
             model_inputs["labels"].append(labels)
@@ -159,7 +174,7 @@ class PackedSupervisedDatasetProcessor(SupervisedDatasetProcessor):
                 )
                 continue
 
-            input_ids, labels = self._encode_data_example(
+            encoded_example = self._encode_data_example(
                 prompt=examples["_prompt"][i],
                 response=examples["_response"][i],
                 system=examples["_system"][i],
@@ -168,6 +183,10 @@ class PackedSupervisedDatasetProcessor(SupervisedDatasetProcessor):
                 videos=examples["_videos"][i] or [],
                 audios=examples["_audios"][i] or [],
             )
+            if encoded_example is None:
+                continue
+
+            input_ids, labels = encoded_example
             length = len(input_ids)
             if length > self.data_args.cutoff_len:
                 logger.warning_rank0(f"Dropped lengthy example with length {length} > {self.data_args.cutoff_len}.")
@@ -181,7 +200,8 @@ class PackedSupervisedDatasetProcessor(SupervisedDatasetProcessor):
                 batch_audios.append(examples["_audios"][i] or [])
                 valid_num += 1
 
-        model_inputs = defaultdict(list)
+        # An explicit empty column lets Dataset.map skip fully filtered batches.
+        model_inputs = defaultdict(list, input_ids=[])
         requires_packing_params = self.data_args.neat_packing
         knapsacks = greedy_knapsack(lengths, self.data_args.cutoff_len)
         for knapsack in knapsacks:
