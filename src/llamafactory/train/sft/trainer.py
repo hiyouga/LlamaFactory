@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any, Optional, Union
 
 import numpy as np
 import torch
+from datasets import IterableDataset
 from transformers import Seq2SeqTrainer
 from typing_extensions import override
 
@@ -215,11 +216,14 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
             if len(pad_len):  # move pad token to last
                 preds[i] = np.concatenate((preds[i][pad_len[0] :], preds[i][: pad_len[0]]), axis=-1)
 
-        input_ids_column = dataset["input_ids"]
-        try:
-            input_ids_list = input_ids_column.to_pylist()
-        except AttributeError:
-            input_ids_list = list(input_ids_column)
+        if isinstance(dataset, IterableDataset):
+            input_ids_list = [row["input_ids"] for row in dataset.take(len(preds))]
+        else:
+            input_ids_column = dataset["input_ids"]
+            try:
+                input_ids_list = input_ids_column.to_pylist()
+            except AttributeError:
+                input_ids_list = list(input_ids_column)
 
         decoded_inputs = self.processing_class.batch_decode(input_ids_list, skip_special_tokens=False)
         decoded_preds = self.processing_class.batch_decode(preds, skip_special_tokens=skip_special_tokens)
