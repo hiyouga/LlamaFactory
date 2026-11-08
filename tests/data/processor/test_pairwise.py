@@ -14,11 +14,15 @@
 
 import os
 import random
+from copy import deepcopy
+from types import SimpleNamespace
 
 import pytest
 from datasets import load_dataset
 from transformers import AutoTokenizer
 
+from llamafactory.data.processor.pairwise import PairwiseDatasetProcessor
+from llamafactory.data.template import TEMPLATES
 from llamafactory.extras.constants import IGNORE_INDEX
 from llamafactory.extras.packages import is_transformers_version_greater_than
 from llamafactory.train.test_utils import load_dataset_module
@@ -43,6 +47,21 @@ TRAIN_ARGS = {
 }
 
 
+class _CountingTokenizer:
+    bos_token_id = 1
+    eos_token_id = 2
+
+    def __init__(self):
+        self.calls = []
+
+    def encode(self, text: str, add_special_tokens: bool = False) -> list[int]:
+        self.calls.append(text)
+        return [ord(char) for char in text]
+
+    def convert_tokens_to_ids(self, token: str) -> int:
+        return 3
+
+
 def _convert_sharegpt_to_openai(messages: list[dict[str, str]]) -> list[dict[str, str]]:
     role_mapping = {"human": "user", "gpt": "assistant", "system": "system"}
     new_messages = []
@@ -50,6 +69,33 @@ def _convert_sharegpt_to_openai(messages: list[dict[str, str]]) -> list[dict[str
         new_messages.append({"role": role_mapping[message["from"]], "content": message["value"]})
 
     return new_messages
+
+
+def test_pairwise_reuses_prompt_tokenization():
+    template = deepcopy(TEMPLATES["llama3"])
+    prompt = [{"role": "user", "content": "Shared prompt"}]
+    responses = [
+        {"role": "assistant", "content": "Chosen response"},
+        {"role": "assistant", "content": "Rejected response"},
+    ]
+
+    reference_tokenizer = _CountingTokenizer()
+    prompt_ids, chosen_ids = template.encode_oneturn(reference_tokenizer, prompt + [responses[0]])
+    _, rejected_ids = template.encode_oneturn(reference_tokenizer, prompt + [responses[1]])
+    expected = (
+        prompt_ids + chosen_ids,
+        [IGNORE_INDEX] * len(prompt_ids) + chosen_ids,
+        prompt_ids + rejected_ids,
+        [IGNORE_INDEX] * len(prompt_ids) + rejected_ids,
+    )
+
+    tokenizer = _CountingTokenizer()
+    processor = PairwiseDatasetProcessor(template, tokenizer, None, SimpleNamespace(cutoff_len=8192))
+    actual = processor._encode_data_example(prompt, responses, None, None, [], [], [])
+
+    assert actual == expected
+    assert len(reference_tokenizer.calls) == 4
+    assert len(tokenizer.calls) == 3
 
 
 @pytest.mark.runs_on(["cpu", "mps", "xpu"])
