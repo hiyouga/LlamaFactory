@@ -254,13 +254,15 @@ class OpenAIDatasetConverter(DatasetConverter):
         broken_data = False
         for turn_idx, message in enumerate(messages):
             role = message[self.dataset_attr.role_tag]
-            content = message[self.dataset_attr.content_tag]
 
-            if role in [self.dataset_attr.assistant_tag, self.dataset_attr.function_tag]:
-                if tool_calls := message.get("tool_calls"):
-                    tool_calls_list = [tool["function"] for tool in tool_calls]
-                    content = json.dumps(tool_calls_list, ensure_ascii=False)
-                    role = self.dataset_attr.function_tag
+            if role in [self.dataset_attr.assistant_tag, self.dataset_attr.function_tag] and (
+                tool_calls := message.get("tool_calls")
+            ):
+                tool_calls_list = [tool["function"] for tool in tool_calls]
+                content = json.dumps(tool_calls_list, ensure_ascii=False)
+                role = self.dataset_attr.function_tag
+            else:
+                content = message[self.dataset_attr.content_tag]
 
             if role == self.dataset_attr.observation_tag:
                 tool_responses.append(content)
