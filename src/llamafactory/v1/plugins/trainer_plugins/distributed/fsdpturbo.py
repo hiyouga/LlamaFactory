@@ -407,7 +407,12 @@ class FSDPTurboFSDP2Engine(FSDP2Engine):
                 logger.info(f"FSDPTurbo EP device mesh: {ep_mesh}")
                 logger.info(f"FSDPTurbo EP gradient divide factor: {ep_plan.gradient_divide_factor}")
 
+            # Restore requires_grad=False after FSDPTurbo EP recreates frozen parameters.
+            frozen_names = {name for name, param in ep_target_model.named_parameters() if not param.requires_grad}
             ep_target_model = expert_parallelize_modules(ep_target_model, ep_mesh, ep_plan)
+            for name, param in ep_target_model.named_parameters():
+                if name in frozen_names:
+                    param.requires_grad_(False)
 
             if self.ep_fsdp_size > 1:
                 if self.rank == 0:
