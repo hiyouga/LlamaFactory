@@ -40,7 +40,7 @@ jobs:
       cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
     container:
-      image: ascendai/cann:9.1.0-910b-ubuntu22.04-py3.12
+      image: ascendai/cann:9.2.0-910b-ubuntu22.04-py3.12
       env:
         HF_ENDPOINT: https://hf-mirror.com
         HF_TOKEN: ${{ secrets.HF_TOKEN }}

@@ -38,7 +38,7 @@ services:
       <<: *build
       args:
         <<: *build-args
-        BASE_IMAGE: quay.io/ascend/cann:9.1.0-910b-ubuntu22.04-py3.12
+        BASE_IMAGE: quay.io/ascend/cann:9.2.0-910b-ubuntu22.04-py3.12
     container_name: llamafactory-910b-ubuntu
     image: llamafactory:npu-910b-ubuntu
     ports:
@@ -52,7 +52,7 @@ services:
       <<: *build
       args:
         <<: *build-args
-        BASE_IMAGE: quay.io/ascend/cann:9.1.0-a3-ubuntu22.04-py3.12
+        BASE_IMAGE: quay.io/ascend/cann:9.2.0-a3-ubuntu22.04-py3.12
     container_name: llamafactory-a3-ubuntu
     image: llamafactory:npu-a3-ubuntu
     ports:
@@ -66,7 +66,7 @@ services:
       <<: *build
       args:
         <<: *build-args
-        BASE_IMAGE: quay.io/ascend/cann:9.1.0-910b-openeuler24.03-py3.12
+        BASE_IMAGE: quay.io/ascend/cann:9.2.0-910b-openeuler24.03-py3.12
     container_name: llamafactory-910b-openeuler
     image: llamafactory:npu-910b-openeuler
     ports:
@@ -80,7 +80,7 @@ services:
       <<: *build
       args:
         <<: *build-args
-        BASE_IMAGE: quay.io/ascend/cann:9.1.0-a3-openeuler24.03-py3.12
+        BASE_IMAGE: quay.io/ascend/cann:9.2.0-a3-openeuler24.03-py3.12
     container_name: llamafactory-a3-openeuler
     image: llamafactory:npu-a3-openeuler
     ports:
@@ -94,7 +94,7 @@ services:
       <<: *build
       args:
         <<: *build-args
-        BASE_IMAGE: quay.io/ascend/cann:9.1.0-950-ubuntu22.04-py3.12
+        BASE_IMAGE: quay.io/ascend/cann:9.2.0-950-ubuntu22.04-py3.12
     container_name: llamafactory-950-ubuntu
     image: llamafactory:npu-950-ubuntu
     ports:
@@ -108,7 +108,7 @@ services:
       <<: *build
       args:
         <<: *build-args
-        BASE_IMAGE: quay.io/ascend/cann:9.1.0-950-openeuler24.03-py3.12
+        BASE_IMAGE: quay.io/ascend/cann:9.2.0-950-openeuler24.03-py3.12
     container_name: llamafactory-950-openeuler
     image: llamafactory:npu-950-openeuler
     ports:
