@@ -22,7 +22,11 @@ from PIL import Image
 from transformers import AutoConfig, AutoModelForImageTextToText
 
 from llamafactory.data import get_template_and_fix_tokenizer
-from llamafactory.data.collator import MultiModalDataCollatorForSeq2Seq, prepare_4d_attention_mask
+from llamafactory.data.collator import (
+    MultiModalDataCollatorForSeq2Seq,
+    SFTDataCollatorWith4DAttentionMask,
+    prepare_4d_attention_mask,
+)
 from llamafactory.extras.constants import IGNORE_INDEX
 from llamafactory.extras.packages import is_transformers_version_greater_than
 from llamafactory.hparams import get_infer_args
@@ -360,6 +364,40 @@ def test_4d_attention_mask():
     )
     assert list(attention_mask_computed.size()) == [2, 1, 6, 6]
     assert torch.all(attention_mask_computed == attention_mask_expected)
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
+def test_neat_packing_fa2_collator():
+    model_args, data_args, *_ = get_infer_args({"model_name_or_path": TINY_LLAMA3, "template": "default"})
+    tokenizer_module = load_tokenizer(model_args)
+    template = get_template_and_fix_tokenizer(tokenizer_module["tokenizer"], data_args)
+    data_collator = SFTDataCollatorWith4DAttentionMask(
+        template=template,
+        pad_to_multiple_of=8,
+        label_pad_token_id=IGNORE_INDEX,
+        neat_packing=True,
+        attn_implementation="flash_attention_2",
+        **tokenizer_module,
+    )
+    p = tokenizer_module["tokenizer"].pad_token_id
+    q = IGNORE_INDEX
+    features = [  # one packed row of cutoff_len + 1 = 9 tokens, padded to 16 by `pad_to_multiple_of`
+        {
+            "input_ids": [10, 11, 12, 20, 21, 22, 23, p, p],
+            "attention_mask": [1, 1, 1, 2, 2, 2, 2, 0, 0],
+            "position_ids": [0, 1, 2, 0, 1, 2, 3, 0, 0],
+            "labels": [q, 11, 12, q, 21, 22, 23, q, q],
+            "images": None,
+            "videos": None,
+            "audios": None,
+        }
+    ]
+    batch_input = data_collator(features)
+    assert batch_input["attention_mask"] is None
+    assert batch_input["input_ids"].eq(torch.tensor([[10, 11, 12, 20, 21, 22, 23]])).all()
+    assert batch_input["labels"].eq(torch.tensor([[q, 11, 12, q, 21, 22, 23]])).all()
+    assert batch_input["position_ids"].shape == batch_input["input_ids"].shape
+    assert batch_input["position_ids"].eq(torch.tensor([[0, 1, 2, 0, 1, 2, 3]])).all()
 
 
 if __name__ == "__main__":
