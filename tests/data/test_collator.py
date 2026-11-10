@@ -323,16 +323,17 @@ def test_multimodal_collator_with_packing():
 
 
 @pytest.mark.runs_on(["cpu", "xpu"])
-def test_4d_attention_mask():
+@pytest.mark.parametrize("dtype", [torch.float16, torch.bfloat16, torch.float32])
+def test_4d_attention_mask(dtype):
     o = 0.0
-    x = torch.finfo(torch.float16).min
+    x = torch.finfo(dtype).min
     attention_mask_with_indices = torch.tensor(
         [
             [1, 1, 2, 2, 2, 0],
             [1, 2, 2, 3, 3, 3],
         ]
     )
-    attention_mask_computed = prepare_4d_attention_mask(attention_mask_with_indices, torch.float16)
+    attention_mask_computed = prepare_4d_attention_mask(attention_mask_with_indices, dtype)
     attention_mask_expected = torch.tensor(
         [
             [
@@ -356,7 +357,7 @@ def test_4d_attention_mask():
                 ]
             ],
         ],
-        dtype=torch.float16,
+        dtype=dtype,
     )
     assert list(attention_mask_computed.size()) == [2, 1, 6, 6]
     assert torch.all(attention_mask_computed == attention_mask_expected)
