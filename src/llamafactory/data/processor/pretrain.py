@@ -36,6 +36,7 @@ class PretrainDatasetProcessor(DatasetProcessor):
             result = self.tokenizer(
                 text_examples, add_special_tokens=False, truncation=True, max_length=self.data_args.cutoff_len
             )
+            result["length"] = [len(input_ids) for input_ids in result["input_ids"]]  # for `group_by_length`
         else:
             tokenized_examples = self.tokenizer(text_examples, add_special_tokens=False)
             concatenated_examples = {k: list(chain(*tokenized_examples[k])) for k in tokenized_examples.keys()}
