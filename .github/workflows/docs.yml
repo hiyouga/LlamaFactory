@@ -9,6 +9,8 @@ on:
     branches: ["main"]
     paths:
       - "docs/**"
+      - "README.md"
+      - "README_zh.md"
   workflow_dispatch:
 
 permissions:
