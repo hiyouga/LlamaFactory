@@ -146,6 +146,14 @@ def save_model(model: HFModel, output_dir: str, processor: Processor) -> None:
     options = StateDictOptions(full_state_dict=True, cpu_offload=True, ignore_frozen_params=lora_model)
     state_dict = get_model_state_dict(model, options=options)
 
+    # Drop MTP keys that share tensors with the base model (embedding / lm_head) so that
+    # save_pretrained does not raise the "shared tensors not properly defined" RuntimeError.
+    # These are re-shared from the base model by apply_mtp on load.
+    if getattr(model, "mtp", None) is not None:
+        from ....plugins.model_plugins.mtp import strip_shared_mtp_keys
+
+        strip_shared_mtp_keys(state_dict)
+
     if DistributedInterface().get_rank() == 0:
         model_to_save = model.module if hasattr(model, "module") else model
         _save_pretrained(model_to_save, output_dir, state_dict)
@@ -174,6 +182,12 @@ def save_checkpoint(model: HFModel, optimizer: torch.optim.Optimizer, ckpt_dir: 
         lora_model = is_lora_model(model)
         hf_options = StateDictOptions(full_state_dict=True, cpu_offload=True, ignore_frozen_params=lora_model)
         hf_state_dict = get_model_state_dict(model, options=hf_options)
+
+        # Drop shared MTP keys before save_pretrained (same reason as save_model).
+        if getattr(model, "mtp", None) is not None:
+            from ....plugins.model_plugins.mtp import strip_shared_mtp_keys
+
+            strip_shared_mtp_keys(hf_state_dict)
 
         if DistributedInterface().get_rank() == 0:
             model_to_save = model.module if hasattr(model, "module") else model

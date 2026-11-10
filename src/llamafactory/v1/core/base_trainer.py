@@ -218,6 +218,11 @@ class BaseTrainer:
                 self.optimizer, self.num_training_steps, self.args.lr_scheduler_config
             )
 
+    def _has_mtp(self) -> bool:
+        """Whether the (possibly wrapped) model carries an MTP block."""
+        model = self.model.module if hasattr(self.model, "module") else self.model
+        return getattr(model, "mtp", None) is not None
+
     def compute_log_probs(self, model: HFModel, batch: BatchInput) -> Tensor:
         """Compute log probs.
 
@@ -343,6 +348,11 @@ class BaseTrainer:
                         "grad_norm": grad_norm,
                         "learning_rate": current_lr,
                     }
+                    # MTP: log the unscaled per-head-mean MTP loss alongside the main loss so
+                    # MTP convergence is visible during training (total = loss + scale*mtp_loss).
+                    mtp_loss = getattr(self.model, "_last_mtp_loss", None)
+                    if mtp_loss is not None:
+                        logs["mtp_loss"] = mtp_loss
                     # Merge per-step trainer metrics (e.g. DPO rewards/logps/logits)
                     step_metrics = getattr(self, "_step_metrics", None)
                     if step_metrics:
@@ -374,8 +384,15 @@ class BaseTrainer:
             )
         else:
             model_to_save = self.model.module if hasattr(self.model, "module") else self.model
+            state_dict = model_to_save.state_dict()
+            # Drop MTP keys shared with the base model so save_pretrained does not raise the
+            # shared-tensors RuntimeError; they are re-shared by apply_mtp on load.
+            if getattr(model_to_save, "mtp", None) is not None:
+                from ..plugins.model_plugins.mtp import strip_shared_mtp_keys
+
+                strip_shared_mtp_keys(state_dict)
             model_to_save.save_pretrained(
-                self.args.output_dir, state_dict=model_to_save.state_dict(), max_shard_size="4GB"
+                self.args.output_dir, state_dict=state_dict, max_shard_size="4GB"
             )
             self.renderer.processor.save_pretrained(self.args.output_dir, max_shard_size="4GB")
             logger.info_rank0(f"Model saved to {self.args.output_dir}")
