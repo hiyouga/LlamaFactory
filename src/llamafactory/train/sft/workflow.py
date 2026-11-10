@@ -53,7 +53,7 @@ def run_sft(
     model = load_model(tokenizer, model_args, finetuning_args, training_args.do_train)
 
     ref_model = None
-    if finetuning_args.use_asft_loss:
+    if finetuning_args.use_asft_loss or finetuning_args.use_cig_sft_loss:
         ref_model = create_ref_model(model_args, finetuning_args)
 
     if getattr(model, "is_quantized", False) and not training_args.do_train:
@@ -66,6 +66,7 @@ def run_sft(
         label_pad_token_id=IGNORE_INDEX if data_args.ignore_pad_token_for_loss else tokenizer.pad_token_id,
         block_diag_attn=model_args.block_diag_attn,
         neat_packing=data_args.neat_packing,
+        use_cig_sft_loss=finetuning_args.use_cig_sft_loss,
         attn_implementation=getattr(model.config, "_attn_implementation", None),
         compute_dtype=model_args.compute_dtype,
         **tokenizer_module,

@@ -20,6 +20,7 @@ LlamaFactory Docs
    :caption: Training
 
    training/sft
+   training/cig-sft
    training/dpo
 
 .. toctree::

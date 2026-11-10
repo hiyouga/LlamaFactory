@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from ...extras import logging
 from ...extras.constants import IGNORE_INDEX
+from ..erased_prompt import ERASED_PROMPT_COLUMN, resolve_erased_prompt
 from .processor_utils import DatasetProcessor, greedy_knapsack, infer_seqlen
 
 
@@ -105,9 +106,34 @@ class SupervisedDatasetProcessor(DatasetProcessor):
 
         return input_ids, labels
 
+    def _encode_erased_example(
+        self,
+        prompt: list[dict[str, str]],
+        response: list[dict[str, str]],
+        system: Optional[str],
+        tools: Optional[str],
+        erased_prompt: str,
+    ) -> tuple[list[int], list[int]]:
+        """Encode the same response after replacing the single user message."""
+        if len(prompt) != 1:
+            raise ValueError("The CIG-SFT loss expects a single user message to erase.")
+
+        return self._encode_data_example(
+            prompt=[{"role": "user", "content": erased_prompt}],
+            response=response,
+            system=system,
+            tools=tools,
+            images=[],
+            videos=[],
+            audios=[],
+        )
+
     def preprocess_dataset(self, examples: dict[str, list[Any]]) -> dict[str, list[Any]]:
         # build inputs with format `<bos> X Y <eos>` and labels with format `<ignore> ... <ignore> Y <eos>`
         # for multiturn examples, we only mask the prompt part in each prompt-response pair.
+        erased_prompt = resolve_erased_prompt(getattr(self.data_args, "cig_erased_prompt", None))
+        erased_prompts = examples.get(ERASED_PROMPT_COLUMN, None)
+        erased_view_flags = []
         model_inputs = defaultdict(list)
         for i in range(len(examples["_prompt"])):
             if len(examples["_prompt"][i]) % 2 != 1 or len(examples["_response"][i]) != 1:
@@ -132,6 +158,31 @@ class SupervisedDatasetProcessor(DatasetProcessor):
             model_inputs["videos"].append(examples["_videos"][i])
             model_inputs["audios"].append(examples["_audios"][i])
 
+            row_erased_prompt = erased_prompt
+            if erased_prompts is not None:
+                row_erased_prompt = resolve_erased_prompt(erased_prompts[i]) or erased_prompt
+
+            erased_view_flags.append(row_erased_prompt is not None)
+            if row_erased_prompt is not None:
+                if examples["_images"][i] or examples["_videos"][i] or examples["_audios"][i]:
+                    raise ValueError("The CIG-SFT erased view currently supports text-only examples.")
+
+                erased_input_ids, erased_labels = self._encode_erased_example(
+                    prompt=examples["_prompt"][i],
+                    response=examples["_response"][i],
+                    system=examples["_system"][i],
+                    tools=examples["_tools"][i],
+                    erased_prompt=row_erased_prompt,
+                )
+                model_inputs["erased_input_ids"].append(erased_input_ids)
+                model_inputs["erased_labels"].append(erased_labels)
+
+        if len(set(erased_view_flags)) > 1:
+            raise ValueError(
+                "The CIG-SFT erased view must be present for every row in a preprocessing batch; set "
+                "`cig_erased_prompt` or provide a non-empty erased prompt for every row."
+            )
+
         return model_inputs
 
     def print_data_example(self, example: dict[str, list[int]]) -> None:
@@ -144,7 +195,14 @@ class SupervisedDatasetProcessor(DatasetProcessor):
 
 @dataclass
 class PackedSupervisedDatasetProcessor(SupervisedDatasetProcessor):
+    def __post_init__(self) -> None:
+        if getattr(self.data_args, "cig_erased_prompt", None) is not None:
+            raise ValueError("The CIG-SFT loss aligns two views per example and cannot be used with packing.")
+
     def preprocess_dataset(self, examples: dict[str, list[Any]]) -> dict[str, list[Any]]:
+        if ERASED_PROMPT_COLUMN in examples:
+            raise ValueError("The CIG-SFT loss aligns two views per example and cannot be used with packing.")
+
         # TODO: use `position_ids` to achieve packing
         # build inputs with format `<bos> X1 Y1 <eos> <bos> X2 Y2 <eos>`
         # and labels with format `<ignore> ... <ignore> Y1 <eos> <ignore> ... <ignore> Y2 <eos>`
