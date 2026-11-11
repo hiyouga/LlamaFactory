@@ -17,13 +17,14 @@ from enum import StrEnum, unique
 from typing import TYPE_CHECKING, Any, Optional, TypedDict, Union
 
 import fsspec
-from datasets import DatasetDict, concatenate_datasets, interleave_datasets
+from datasets import Dataset, DatasetDict, concatenate_datasets, interleave_datasets
 
 from ..extras import logging
+from ..extras.misc import check_version
 
 
 if TYPE_CHECKING:
-    from datasets import Dataset, IterableDataset
+    from datasets import IterableDataset
 
     from ..hparams import DataArguments
 
@@ -62,6 +63,20 @@ def merge_dataset(
         return concatenate_datasets(all_datasets)
 
     elif data_args.mix_strategy.startswith("interleave"):
+        probabilities = data_args.interleave_probs
+        if data_args.mix_strategy == "interleave_once":
+            if probabilities is not None:
+                if any(prob <= 0 for prob in probabilities):
+                    raise ValueError("`interleave_once` requires a positive sampling probability for each dataset.")
+
+                # Datasets 4.8.5 can duplicate rows when a weighted map-style source is empty.
+                if any(isinstance(dataset, Dataset) and len(dataset) == 0 for dataset in all_datasets):
+                    raise ValueError(
+                        "`interleave_once` with sampling probabilities requires nonempty map-style datasets."
+                    )
+
+            check_version("datasets>=4.8.5", mandatory=True)
+
         if not data_args.streaming:
             logger.warning_rank0_once("We recommend using `mix_strategy=concat` in non-streaming mode.")
 
@@ -73,7 +88,7 @@ def merge_dataset(
 
         return interleave_datasets(
             datasets=all_datasets,
-            probabilities=data_args.interleave_probs,
+            probabilities=probabilities,
             seed=seed,
             stopping_strategy=strategy_map,  # type: ignore
         )

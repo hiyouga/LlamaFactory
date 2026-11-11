@@ -66,7 +66,10 @@ class DataArguments:
     mix_strategy: Literal["concat", "interleave_under", "interleave_over", "interleave_once"] = field(
         default="concat",
         metadata={
-            "help": "Strategy to use in dataset mixing (concat/interleave) (undersampling/oversampling/sampling w.o. replacement)."
+            "help": (
+                "Strategy to use in dataset mixing (concat/interleave) (undersampling/oversampling/sampling w.o. replacement). "
+                "`interleave_once` requires datasets>=4.8.5."
+            )
         },
     )
     interleave_probs: str | None = field(
