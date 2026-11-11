@@ -244,10 +244,10 @@ async def create_chat_completion_response(
     return ChatCompletionResponse(id=completion_id, model=request.model, choices=choices, usage=usage)
 
 
-async def create_stream_chat_completion_response(
+def create_stream_chat_completion_response(
     request: "ChatCompletionRequest", chat_model: "ChatModel"
 ) -> AsyncGenerator[str, None]:
-    completion_id = f"chatcmpl-{uuid.uuid4().hex}"
+    r"""Validate the request before the stream starts, so that errors are sent as HTTP error responses."""
     input_messages, system, tools, images, videos, audios = _process_request(request)
     if tools:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot stream function calls.")
@@ -255,6 +255,20 @@ async def create_stream_chat_completion_response(
     if request.n > 1:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot stream multiple responses.")
 
+    return _stream_chat_completion(request, chat_model, input_messages, system, tools, images, videos, audios)
+
+
+async def _stream_chat_completion(
+    request: "ChatCompletionRequest",
+    chat_model: "ChatModel",
+    input_messages: list[dict[str, str]],
+    system: Optional[str],
+    tools: Optional[str],
+    images: Optional[list["ImageInput"]],
+    videos: Optional[list["VideoInput"]],
+    audios: Optional[list["AudioInput"]],
+) -> AsyncGenerator[str, None]:
+    completion_id = f"chatcmpl-{uuid.uuid4().hex}"
     yield _create_stream_chat_completion_chunk(
         completion_id=completion_id, model=request.model, delta=ChatCompletionMessage(role=Role.ASSISTANT, content="")
     )
