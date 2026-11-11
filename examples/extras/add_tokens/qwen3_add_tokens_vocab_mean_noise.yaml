@@ -1,0 +1,50 @@
+### model
+model_name_or_path: Qwen/Qwen3-4B-Instruct-2507
+trust_remote_code: true
+
+### tokens
+# Resize the embedding layer to fit the newly added tokens (required when adding tokens).
+resize_vocab: true
+# Load the new special tokens together with their descriptions from a YAML config.
+new_special_tokens_config: examples/extras/add_tokens/tokens_cfg.yaml
+# Initialize the new token embeddings from their descriptions, plus a small Gaussian noise.
+init_special_tokens: vocab_mean_noise
+# Freeze the original embedding rows and train only the newly added token embeddings.
+# This works under full finetuning where the embedding matrix is trained directly.
+freeze_original_embeddings: false
+
+### method
+stage: sft
+do_train: true
+finetuning_type: full
+deepspeed: examples/deepspeed/ds_z3_config.json  # choices: [ds_z0_config.json, ds_z2_config.json, ds_z3_config.json]
+
+### dataset
+# This demo set's responses actually contain the new SVG tokens declared in tokens_cfg.yaml,
+# so the newly added embeddings receive gradients and the feature is exercised end to end.
+dataset: add_tokens_demo
+template: qwen3_nothink
+cutoff_len: 2048
+max_samples: 1000
+preprocessing_num_workers: 16
+dataloader_num_workers: 4
+
+### output
+output_dir: saves/qwen3-4b/full/sft_add_tokens
+logging_steps: 10
+save_steps: 500
+plot_loss: true
+overwrite_output_dir: true
+save_only_model: false
+report_to: none  # choices: [none, wandb, tensorboard, swanlab, mlflow]
+
+### train
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 2
+learning_rate: 1.0e-5
+num_train_epochs: 3.0
+lr_scheduler_type: cosine
+warmup_ratio: 0.1
+bf16: true
+ddp_timeout: 180000000
+resume_from_checkpoint: null
