@@ -25,26 +25,31 @@ ParallelPlanProvider = Callable[[], ParallelPlan]
 def _get_qwen3_moe_parallel_plan() -> ParallelPlan:
     return [
         {
-            "match": "*.self_attn",
+            "match": "*.self_attn.forward",
             "when": "cp",
-            "inner_target": "self",
             "region_dispatch": False,
-            "inner_wrapper": {
-                "_target_": (
-                    "hyper_parallel.models.qwen3_moe.adapter.distributed.context_parallel_async."
-                    "qwen3_moe_async_ulysses_cp_wrapper"
-                )
+            "replace": {
+                "kind": "method",
+                "implementation": {
+                    "_target_": (
+                        "hyper_parallel.models.qwen3_moe.adapter.distributed.context_parallel_async."
+                        "qwen3_moe_async_ulysses_cp_wrapper"
+                    )
+                },
             },
         },
         {
-            "match": "*.mlp",
+            "match": "*.mlp.forward",
             "when": "ep",
             "region_dispatch": False,
-            "local_compute_fn": {
-                "_target_": (
-                    "hyper_parallel.models.qwen3_moe.adapter.distributed.expert_parallel.qwen3moe_ep_compute_fn"
-                ),
-                "use_grouped_gemm": True,
+            "replace": {
+                "kind": "method",
+                "implementation": {
+                    "_target_": (
+                        "hyper_parallel.models.qwen3_moe.adapter.distributed.expert_parallel.qwen3moe_ep_compute_fn"
+                    ),
+                    "use_grouped_gemm": True,
+                },
             },
         },
     ]
@@ -58,12 +63,14 @@ def _get_qwen3_vl_moe_parallel_plan() -> ParallelPlan:
     return [
         *[
             {
-                "match": match,
+                "match": f"{match}.forward",
                 "when": "cp",
                 "params": {},
-                "inner_target": "self",
                 "region_dispatch": False,
-                "inner_wrapper": {"_target_": replicated_vision_wrapper},
+                "replace": {
+                    "kind": "method",
+                    "implementation": {"_target_": replicated_vision_wrapper},
+                },
             }
             for match in (
                 "model.visual.blocks.*.attn",
@@ -72,39 +79,47 @@ def _get_qwen3_vl_moe_parallel_plan() -> ParallelPlan:
             )
         ],
         {
-            "match": "model.language_model",
+            "match": "model.language_model.forward",
             "when": "cp",
             "params": {},
-            "inner_target": "self",
             "region_dispatch": False,
-            "inner_wrapper": {
-                "_target_": (
-                    "hyper_parallel.models.qwen3_vl_moe.adapter.distributed.context_parallel."
-                    "qwen3_vl_moe_text_input_cp_wrapper"
-                )
+            "replace": {
+                "kind": "method",
+                "implementation": {
+                    "_target_": (
+                        "hyper_parallel.models.qwen3_vl_moe.adapter.distributed.context_parallel."
+                        "qwen3_vl_moe_text_input_cp_wrapper"
+                    )
+                },
             },
         },
         {
-            "match": "model.language_model.layers.*.self_attn",
+            "match": "model.language_model.layers.*.self_attn.forward",
             "when": "cp",
-            "inner_target": "self",
             "region_dispatch": False,
-            "inner_wrapper": {
-                "_target_": (
-                    "hyper_parallel.models.qwen3_vl_moe.adapter.distributed.context_parallel."
-                    "qwen3_vl_moe_async_ulysses_cp_wrapper"
-                )
+            "replace": {
+                "kind": "method",
+                "implementation": {
+                    "_target_": (
+                        "hyper_parallel.models.qwen3_vl_moe.adapter.distributed.context_parallel."
+                        "qwen3_vl_moe_async_ulysses_cp_wrapper"
+                    )
+                },
             },
         },
         {
-            "match": "model.language_model.layers.*.mlp",
+            "match": "model.language_model.layers.*.mlp.forward",
             "when": "ep",
             "region_dispatch": False,
-            "local_compute_fn": {
-                "_target_": (
-                    "hyper_parallel.models.qwen3_vl_moe.adapter.distributed.expert_parallel.qwen3_vl_moe_ep_compute_fn"
-                ),
-                "use_grouped_gemm": True,
+            "replace": {
+                "kind": "method",
+                "implementation": {
+                    "_target_": (
+                        "hyper_parallel.models.qwen3_vl_moe.adapter.distributed.expert_parallel."
+                        "qwen3_vl_moe_ep_compute_fn"
+                    ),
+                    "use_grouped_gemm": True,
+                },
             },
         },
     ]
