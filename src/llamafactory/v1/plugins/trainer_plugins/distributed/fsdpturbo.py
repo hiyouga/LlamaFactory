@@ -300,10 +300,6 @@ class FSDPTurboFSDP2Engine(FSDP2Engine):
         return ep_fsdp_modules
 
     def shard_model(self, model: HFModel) -> HFModel:
-        """Set storage dtype before FSDP materialization without leaking backend config into ModelEngine."""
-        param_dtype = torch.bfloat16 if self.mixed_precision == "bf16" else torch.float32
-        model = model.to(param_dtype)
-        logger.info_rank0(f"Using {param_dtype} for FSDPTurbo full tuning.")
         return super().shard_model(model)
 
     def _copy_weights(self, param, loaded_tensor):
