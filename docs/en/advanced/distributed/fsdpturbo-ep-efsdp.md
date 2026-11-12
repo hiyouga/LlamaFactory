@@ -42,6 +42,8 @@ Model-specific module paths and preparation logic are managed exclusively by the
 
 EFSDP targets only routed-expert modules (`mlp.experts`). The router, shared expert, and shared-expert gate remain owned by the outer FSDP on the full DP mesh. When a model spec omits `ep_fsdp_modules`, the EP module paths are used unchanged; the parent MLP is never inferred by removing `.experts`.
 
+The plugin passes the engine's compute and reduction dtypes to the EFSDP plan, so current FSDPTurbo versions use the same precision policy for routed experts and outer FSDP. The public `ep_dispatcher: eager` and `fused` choices map to `all2all` with fusion disabled or enabled on backend versions that expose `use_fused_ops`; older dispatcher names remain compatible. Older backends that hard-code BF16 for EFSDP must be upgraded for full FP32 expert computation.
+
 ## 2. Mesh Initialization
 
 LlamaFactory's `DistributedInterface` initializes only its existing model and data meshes. It is unaware of EP and EFSDP and does not expose an extra mesh registration interface for distributed plugins. The FSDPTurbo expert topology is independently created and owned by `FSDPTurboParallelState` in the plugin module:

@@ -82,7 +82,9 @@ def test_fsdpturbo_uses_class_plugin_and_strict_backend_params():
             plugin.parse_params({"name": "fsdpturbo", key: ["model.layers.*.mlp"]}, FSDPTurboParams)
 
 
-def test_fsdpturbo_sets_public_efsdp_gradient_divide_factor(monkeypatch):
+@pytest.mark.parametrize("precision", ["bf16", "fp32"])
+@pytest.mark.parametrize("dispatcher", ["eager", "fused"])
+def test_fsdpturbo_sets_public_efsdp_plan(monkeypatch, precision, dispatcher):
     expert_parallel_module = pytest.importorskip("fsdp_turbo.distributed.expert_parallel.expert_parallel")
     expert_fully_shard_module = pytest.importorskip(
         "fsdp_turbo.distributed.expert_parallel.expert_fully_shard_parallel"
@@ -92,12 +94,15 @@ def test_fsdpturbo_sets_public_efsdp_gradient_divide_factor(monkeypatch):
 
     def _expert_fully_shard_modules(model, mesh, ep_plan, fsdp_plan):
         captured["gradient_divide_factor"] = ep_plan.gradient_divide_factor
+        captured["ep_plan"] = ep_plan
+        captured["fsdp_plan"] = fsdp_plan
         return model
 
     monkeypatch.setattr(expert_fully_shard_module, "expert_fully_shard_modules", _expert_fully_shard_modules)
 
     engine = object.__new__(FSDPTurboFSDP2Engine)
-    engine.dist_config = {"ep_dispatcher": "eager"}
+    engine.dist_config = {"ep_dispatcher": dispatcher}
+    engine.mixed_precision = precision
     engine.ep_size = 4
     engine.ep_fsdp_size = 2
     engine.parallel_state = SimpleNamespace(efsdp_size=2, ep_mesh=object(), efsdp_mesh=object())
@@ -106,6 +111,19 @@ def test_fsdpturbo_sets_public_efsdp_gradient_divide_factor(monkeypatch):
     engine.prepare_model_ep(_Model("qwen3_5_moe"))
 
     assert captured["gradient_divide_factor"] == 8.0
+    ep_plan = captured["ep_plan"]
+    if hasattr(ep_plan, "use_fused_ops"):
+        assert ep_plan.dispatcher == "all2all"
+        assert ep_plan.use_fused_ops == (dispatcher == "fused")
+        assert callable(expert_parallel_module.get_experts_forward_fn(None, ep_plan, ep_plan.dispatcher))
+    else:
+        assert ep_plan.dispatcher == dispatcher
+    from fsdp_turbo.distributed.fully_shard_parallel.fully_shard_parallel import get_mixprecision_policy
+
+    policy = get_mixprecision_policy(captured["fsdp_plan"])
+    assert policy.param_dtype == (torch.bfloat16 if precision == "bf16" else torch.float32)
+    assert policy.reduce_dtype == torch.float32
+    assert policy.cast_forward_inputs
 
 
 def test_fsdpturbo_owns_expert_mesh_topology(monkeypatch):

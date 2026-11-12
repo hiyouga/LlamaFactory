@@ -412,18 +412,27 @@ class FSDPTurboFSDP2Engine(FSDP2Engine):
 
             ep_modules = spec.ep_modules
             ep_target_model = spec.prepare(ep_target_model)
+            dispatcher = self.dist_config.get("ep_dispatcher", "eager")
+            dispatcher_kwargs = {}
+            if hasattr(EPPlanConfig, "use_fused_ops") and dispatcher in ("eager", "fused"):
+                dispatcher_kwargs["use_fused_ops"] = dispatcher == "fused"
+                dispatcher = "all2all"
             ep_plan = EPPlanConfig(
                 apply_modules=ep_modules,
-                dispatcher=self.dist_config.get("ep_dispatcher", "eager"),
+                dispatcher=dispatcher,
                 apply_efsdp_modules=self._get_ep_fsdp_modules(spec),
+                **dispatcher_kwargs,
             )
             ep_plan.gradient_divide_factor = float(self.ep_size * self.parallel_state.efsdp_size)
+            mp_policy = self.get_mp_policy()
             fsdp_plan = FSDPPlanConfig(
-                # FSDPTurbo uses this plan only to place EFSDP hooks and select its
-                # implementation. EFSDP targets come from ep_plan.apply_efsdp_modules.
+                # EFSDP targets come from ep_plan.apply_efsdp_modules.
                 apply_modules={},
                 hook_modules=self.dist_config.get("hook_modules", []),
                 fsdp_implementation=self.dist_config.get("fsdp_implementation", "native"),
+                param_dtype=str(mp_policy.param_dtype).removeprefix("torch."),
+                reduce_dtype=str(mp_policy.reduce_dtype).removeprefix("torch."),
+                cast_forward_inputs=mp_policy.cast_forward_inputs,
             )
             ep_mesh = self.parallel_state.ep_mesh
             efsdp_mesh = self.parallel_state.efsdp_mesh
