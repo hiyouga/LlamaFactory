@@ -101,7 +101,7 @@ class PairwiseTrainer(Trainer):
         chosen_rewards, rejected_rewards = torch.split(values, batch_size, dim=0)
         chosen_scores = chosen_rewards.gather(dim=-1, index=(chosen_masks.sum(dim=-1, keepdim=True) - 1))
         rejected_scores = rejected_rewards.gather(dim=-1, index=(rejected_masks.sum(dim=-1, keepdim=True) - 1))
-        chosen_scores, rejected_scores = chosen_scores.squeeze(), rejected_scores.squeeze()
+        chosen_scores, rejected_scores = chosen_scores.squeeze(-1), rejected_scores.squeeze(-1)
 
         loss = -torch.nn.functional.logsigmoid(chosen_scores.float() - rejected_scores.float()).mean()
         if return_outputs:
