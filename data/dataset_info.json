@@ -184,7 +184,7 @@
     }
   },
   "wikiqa": {
-    "hf_hub_url": "wiki_qa",
+    "hf_hub_url": "microsoft/wiki_qa",
     "columns": {
       "prompt": "question",
       "response": "answer"
