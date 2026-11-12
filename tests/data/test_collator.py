@@ -236,6 +236,10 @@ def _get_expected_position_ids(
     get_rope_func,
     input_ids,
     attention_mask,
+    image_pad_id: int,
+    video_pad_id: int | None = None,
+) -> torch.Tensor:
+def _get_expected_position_ids(packing_params, get_rope_func, input_ids, attention_mask) -> torch.Tensor:
     image_token_id: int | None = None,
     video_token_id: int | None = None,
 ) -> torch.Tensor:
@@ -245,12 +249,27 @@ def _get_expected_position_ids(
     img_counts_by_subseq = Counter(packing_params["image_subseq_ids"])
     needs_mm_token_type_ids = "mm_token_type_ids" in inspect.signature(get_rope_func).parameters
     all_position_ids = []
+
     for i, input_ids_slice in enumerate(input_ids_slices):
         img_cnt = img_counts_by_subseq[i]
         if sum(attention_mask_slices[i]) == 0:
             continue
 
         input_ids_tensor = torch.tensor(input_ids_slice).unsqueeze(0)
+        attention_mask_tensor = torch.tensor(attention_mask_slices[i]).unsqueeze(0)
+
+        rope_func_kwargs = {
+            "input_ids": input_ids_tensor,
+            "attention_mask": attention_mask_tensor,
+            "image_grid_thw": [torch.tensor([1, 4, 4])] * img_cnt,
+        }
+
+        mm_token_type_ids = torch.zeros_like(input_ids_tensor)
+        mm_token_type_ids[input_ids_tensor == image_pad_id] = 1
+        if video_pad_id is not None:
+            mm_token_type_ids[input_ids_tensor == video_pad_id] = 2
+
+        rope_func_kwargs["mm_token_type_ids"] = mm_token_type_ids
         rope_func_kwargs = {
             "input_ids": input_ids_tensor,
             "attention_mask": torch.tensor(attention_mask_slices[i]).unsqueeze(0),
@@ -314,6 +333,8 @@ def test_multimodal_collator_with_packing():
         data_collator.get_rope_func,
         features[0]["input_ids"],
         features[0]["attention_mask"],
+        image_pad_id=tokenizer.convert_tokens_to_ids("<|image_pad|>"),
+        video_pad_id=tokenizer.convert_tokens_to_ids("<|video_pad|>"),
         image_token_id=getattr(model.config, "image_token_id", None),
         video_token_id=getattr(model.config, "video_token_id", None),
     )
