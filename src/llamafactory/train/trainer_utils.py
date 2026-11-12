@@ -664,7 +664,7 @@ def _dft_cross_entropy(
     per_token_loss = torch.nn.functional.cross_entropy(source, target, ignore_index=ignore_index, reduction="none")
     valid_mask = target != ignore_index
     if not valid_mask.any():
-        return torch.tensor(0.0, device=source.device, dtype=source.dtype)
+        return per_token_loss.sum()
 
     valid_losses = per_token_loss[valid_mask]
 
@@ -797,7 +797,7 @@ def _eaft_cross_entropy(
     per_token_loss = torch.nn.functional.cross_entropy(source, target, ignore_index=ignore_index, reduction="none")
     valid_mask = target != ignore_index
     if not valid_mask.any():
-        return torch.tensor(0.0, device=source.device, dtype=source.dtype)
+        return per_token_loss.sum()
 
     valid_losses = per_token_loss[valid_mask]
 
