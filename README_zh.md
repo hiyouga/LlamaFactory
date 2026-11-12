@@ -474,11 +474,10 @@ https://github.com/user-attachments/assets/43b700c6-a178-41db-b1f8-8190a5d3fcfc
 
 </details>
 
-部分数据集的使用需要确认，我们推荐使用下述命令登录您的 Hugging Face 账户。
+部分数据集的使用需要确认。安装 LlamaFactory 后，我们推荐使用下述命令登录您的 Hugging Face 账户。
 
 ```bash
-pip install --upgrade huggingface_hub
-huggingface-cli login
+hf auth login
 ```
 
 ## 软硬件依赖

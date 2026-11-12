@@ -473,11 +473,10 @@ You also can add a custom chat template to [template.py](src/llamafactory/data/t
 
 </details>
 
-Some datasets require confirmation before using them, so we recommend logging in with your Hugging Face account using these commands.
+Some datasets require confirmation before using them. After installing LlamaFactory, we recommend logging in with your Hugging Face account using this command.
 
 ```bash
-pip install "huggingface_hub<1.0.0"
-huggingface-cli login
+hf auth login
 ```
 
 ## Requirement
