@@ -150,7 +150,7 @@ class CustomDPOTrainer(DPOTrainer):
     def odds_ratio_loss(self, chosen_logps: "torch.Tensor", rejected_logps: "torch.Tensor") -> "torch.Tensor":
         r"""Compute ORPO's odds ratio (OR) loss for batched log probabilities of the policy model."""
         log_odds = (chosen_logps - rejected_logps) - (
-            torch.log1p(-torch.exp(chosen_logps)) - torch.log1p(-torch.exp(rejected_logps))
+            torch.log(-torch.expm1(chosen_logps)) - torch.log(-torch.expm1(rejected_logps))
         )
         sft_loss = -chosen_logps
         odds_ratio_loss = -F.logsigmoid(log_odds)
