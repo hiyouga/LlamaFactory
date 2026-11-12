@@ -70,6 +70,7 @@ dependencies = [
     "pyyaml",
     "pydantic",
     # api
+    "httpx",
     "uvicorn",
     "fastapi",
     "sse-starlette",

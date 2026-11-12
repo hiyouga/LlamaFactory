@@ -12,12 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import asyncio
 import atexit
+import contextlib
 import json
 from collections.abc import AsyncGenerator, AsyncIterator, Sequence
 from typing import TYPE_CHECKING, Any, Optional, Union
 
+import httpx
 import requests
 from typing_extensions import override
 
@@ -41,6 +42,22 @@ if TYPE_CHECKING:
 
 
 logger = logging.get_logger(__name__)
+
+
+async def _iter_sse_lines(response: httpx.Response) -> AsyncIterator[str]:
+    """Split on CR/LF before decoding so Unicode separators inside JSON stay intact."""
+    pending = b""
+    async for chunk in response.aiter_bytes():
+        lines = (pending + chunk).splitlines(keepends=True)
+        pending = b""
+        for line in lines:
+            if line.endswith((b"\r", b"\n")):
+                yield line.rstrip(b"\r\n").decode("utf-8")
+            else:
+                pending = line
+
+    if pending:
+        yield pending.decode("utf-8")
 
 
 class SGLangEngine(BaseEngine):
@@ -209,27 +226,27 @@ class SGLangEngine(BaseEngine):
         if seed is not None:
             sampling_params["seed"] = seed
 
-        def stream_request():
-            json_data = {
-                "input_ids": prompt_ids,
-                "sampling_params": sampling_params,
-                "stream": True,
-            }
-            if self.lora_request:
-                json_data["lora_request"] = ["lora0"]
-            response = requests.post(f"{self.base_url}/generate", json=json_data, stream=True)
-            if response.status_code != 200:
-                raise RuntimeError(f"SGLang server error: {response.status_code}, {response.text}")
+        json_data = {
+            "input_ids": prompt_ids,
+            "sampling_params": sampling_params,
+            "stream": True,
+        }
+        if self.lora_request:
+            json_data["lora_request"] = ["lora0"]
 
-            for chunk in response.iter_lines(decode_unicode=False):
-                chunk = str(chunk.decode("utf-8"))
-                if chunk == "data: [DONE]":
-                    break
+        # Generation can pause for longer than HTTPX's default read timeout.
+        async with httpx.AsyncClient(timeout=None, follow_redirects=True) as client:
+            async with client.stream("POST", f"{self.base_url}/generate", json=json_data) as response:
+                if response.status_code != 200:
+                    await response.aread()
+                    raise RuntimeError(f"SGLang server error: {response.status_code}, {response.text}")
 
-                if chunk and chunk.startswith("data:"):
-                    yield json.loads(chunk[5:].strip("\n"))
+                async for chunk in _iter_sse_lines(response):
+                    if chunk == "data: [DONE]":
+                        break
 
-        return await asyncio.to_thread(stream_request)
+                    if chunk and chunk.startswith("data:"):
+                        yield json.loads(chunk[5:].strip("\n"))
 
     @override
     async def chat(
@@ -243,9 +260,10 @@ class SGLangEngine(BaseEngine):
         **input_kwargs,
     ) -> list["Response"]:
         final_output = None
-        generator = await self._generate(messages, system, tools, images, videos, audios, **input_kwargs)
-        for request_output in generator:
-            final_output = request_output
+        generator = self._generate(messages, system, tools, images, videos, audios, **input_kwargs)
+        async with contextlib.aclosing(generator):
+            async for request_output in generator:
+                final_output = request_output
 
         results = [
             Response(
@@ -269,11 +287,12 @@ class SGLangEngine(BaseEngine):
         **input_kwargs,
     ) -> AsyncGenerator[str, None]:
         generated_text = ""
-        generator = await self._generate(messages, system, tools, images, videos, audios, **input_kwargs)
-        for result in generator:
-            delta_text = result["text"][len(generated_text) :]
-            generated_text = result["text"]
-            yield delta_text
+        generator = self._generate(messages, system, tools, images, videos, audios, **input_kwargs)
+        async with contextlib.aclosing(generator):
+            async for result in generator:
+                delta_text = result["text"][len(generated_text) :]
+                generated_text = result["text"]
+                yield delta_text
 
     @override
     async def get_scores(
