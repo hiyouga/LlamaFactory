@@ -934,9 +934,7 @@ class Xing4ToolUtils(ToolUtils):
             if params_content[position:].strip():
                 return content
 
-            results.append(
-                FunctionCall(name_match.group(1), json.dumps(arguments, ensure_ascii=False))
-            )
+            results.append(FunctionCall(name_match.group(1), json.dumps(arguments, ensure_ascii=False)))
 
         return results
 
@@ -1038,19 +1036,16 @@ class LFM2ToolUtils(ToolUtils):
     @staticmethod
     def _ast_to_value(node: ast.AST) -> Any:
         """Convert an AST node to a Python value, handling JSON-style booleans/null."""
-        # Handle JSON-style true/false/null as Name nodes
-        if isinstance(node, ast.Name):
-            if node.id == "true":
-                return True
-            elif node.id == "false":
-                return False
-            elif node.id == "null":
-                return None
-            else:
-                raise ValueError(f"Unknown identifier: {node.id}")
 
-        # Use literal_eval for other cases (strings, numbers, lists, dicts)
-        return ast.literal_eval(node)
+        class JsonLiteralTransformer(ast.NodeTransformer):
+            def visit_Name(self, name: ast.Name) -> ast.AST:
+                literals = {"true": True, "false": False, "null": None}
+                if name.id in literals:
+                    return ast.copy_location(ast.Constant(value=literals[name.id]), name)
+                return name
+
+        # Normalize literals at every depth without evaluating names or expressions.
+        return ast.literal_eval(JsonLiteralTransformer().visit(node))
 
     @override
     @staticmethod

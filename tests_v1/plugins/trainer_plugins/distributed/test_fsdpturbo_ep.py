@@ -82,17 +82,6 @@ def test_fsdpturbo_uses_class_plugin_and_strict_backend_params():
             plugin.parse_params({"name": "fsdpturbo", key: ["model.layers.*.mlp"]}, FSDPTurboParams)
 
 
-def test_fsdpturbo_sets_storage_dtype_inside_backend(monkeypatch):
-    from llamafactory.v1.plugins.trainer_plugins.distributed.fsdp2 import FSDP2Engine
-
-    monkeypatch.setattr(FSDP2Engine, "shard_model", lambda self, model: model)
-    engine = object.__new__(FSDPTurboFSDP2Engine)
-    engine.mixed_precision = "bf16"
-    model = torch.nn.Linear(2, 2, dtype=torch.float32)
-
-    assert engine.shard_model(model).weight.dtype == torch.bfloat16
-
-
 def test_fsdpturbo_sets_public_efsdp_gradient_divide_factor(monkeypatch):
     expert_parallel_module = pytest.importorskip("fsdp_turbo.distributed.expert_parallel.expert_parallel")
     expert_fully_shard_module = pytest.importorskip(

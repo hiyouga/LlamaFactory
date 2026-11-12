@@ -161,10 +161,13 @@ class HybridGmmFunction(torch.autograd.Function):
         x_list = list(saved_tensors[:num_experts])
         weight_list = list(saved_tensors[num_experts:])
 
-        grad_outputs_contiguous = [g.contiguous() for g in grad_outputs]
+        input_indices = [i for i in range(num_experts) if ctx.needs_input_grad[1 + i]]
+        weight_indices = [i for i in range(num_experts) if ctx.needs_input_grad[1 + num_experts + i]]
+        # Share contiguous gradients across active input and weight backward branches.
+        active_indices = sorted(set(input_indices) | set(weight_indices))
+        grad_outputs_contiguous = {i: grad_outputs[i].contiguous() for i in active_indices}
 
         grad_x_list = [None] * num_experts
-        input_indices = [i for i in range(num_experts) if ctx.needs_input_grad[1 + i]]
         if input_indices:
             grad_inputs = torch_npu.npu_grouped_matmul(
                 [grad_outputs_contiguous[i] for i in input_indices],
@@ -178,7 +181,6 @@ class HybridGmmFunction(torch.autograd.Function):
                 grad_x_list[i] = grad
 
         grad_w_list = [None] * num_experts
-        weight_indices = [i for i in range(num_experts) if ctx.needs_input_grad[1 + num_experts + i]]
         if weight_indices:
             x_concat = torch.cat([x_list[i] for i in weight_indices], dim=0)
             dy_concat = torch.cat([grad_outputs_contiguous[i] for i in weight_indices], dim=0)

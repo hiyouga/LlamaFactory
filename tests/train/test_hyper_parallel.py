@@ -363,13 +363,52 @@ def test_qwen3_vl_moe_parallel_plan_only_uses_its_model_adapter():
     assert "hyper_parallel.models.qwen3_vl_moe.adapter" in targets
     assert "hyper_parallel.models.qwen3_moe.adapter" not in targets
     assert {entry["match"] for entry in hp_args.plan_overrides} == {
-        "model.visual.blocks.*.attn",
-        "model.visual.merger",
-        "model.visual.deepstack_merger_list",
-        "model.language_model",
-        "model.language_model.layers.*.self_attn",
-        "model.language_model.layers.*.mlp",
+        "model.visual.blocks.*.attn.forward",
+        "model.visual.merger.forward",
+        "model.visual.deepstack_merger_list.forward",
+        "model.language_model.forward",
+        "model.language_model.layers.*.self_attn.forward",
+        "model.language_model.layers.*.mlp.forward",
     }
     for entry in hp_args.plan_overrides:
-        if entry["match"] in {"model.visual.merger", "model.visual.deepstack_merger_list"}:
+        if entry["match"] in {"model.visual.merger.forward", "model.visual.deepstack_merger_list.forward"}:
             assert entry["params"] == {}
+
+
+@pytest.mark.parametrize("model_type", ["qwen3_moe", "qwen3_vl_moe"])
+@pytest.mark.parametrize("cp_size,ep_size,world_size", [(1, 1, 2), (2, 4, 8)])
+def test_model_parallel_plans_resolve_with_current_hyper_schema(model_type, cp_size, ep_size, world_size):
+    """Validate inactive as well as active CP/EP rules through the real Hyper resolver."""
+    from hyper_parallel.integration.llamafactory import HyperParallelArguments
+
+    hp_args = HyperParallelArguments(cp_size=cp_size, ep_size=ep_size, device_type="npu")
+    apply_model_parallel_plan(hp_args, model_type)
+
+    with (
+        patch("hyper_parallel.integration.llamafactory.utils.dist.get_world_size", return_value=world_size),
+        patch("hyper_parallel.integration.llamafactory.utils.MeshContext.build_meshs"),
+    ):
+        setup = hp_args.build_distributed_setup()
+
+    assert not setup.module_replacements
+    if cp_size == ep_size == 1:
+        assert not setup.plan_overrides
+        return
+
+    prefix = "*" if model_type == "qwen3_moe" else "model.language_model.layers.*"
+    cp_spec = setup.plan_overrides[f"{prefix}.self_attn"]
+    ep_spec = setup.plan_overrides[f"{prefix}.mlp"]
+    assert cp_spec.inner_target == "self"
+    assert cp_spec.inner_wrapper.callable.__name__ == f"{model_type}_async_ulysses_cp_wrapper"
+    expected_ep = "qwen3moe_ep_compute_fn" if model_type == "qwen3_moe" else "qwen3_vl_moe_ep_compute_fn"
+    assert ep_spec.local_compute_fn.callable.__name__ == expected_ep
+    assert ep_spec.local_compute_fn.use_grouped_gemm is True
+    assert ep_spec.region_dispatch is False
+    if model_type == "qwen3_vl_moe":
+        for match in ("model.visual.blocks.*.attn", "model.visual.merger", "model.visual.deepstack_merger_list"):
+            spec = setup.plan_overrides[match]
+            assert spec.params == {}
+            assert spec.inner_wrapper.callable.__name__ == "qwen3_vl_moe_replicated_vision_cp_wrapper"
+        language_spec = setup.plan_overrides["model.language_model"]
+        assert language_spec.params == {}
+        assert language_spec.inner_wrapper.callable.__name__ == "qwen3_vl_moe_text_input_cp_wrapper"

@@ -334,10 +334,6 @@ class FSDPTurboFSDP2Engine(FSDP2Engine):
         return list(spec.ep_modules)
 
     def shard_model(self, model: HFModel) -> HFModel:
-        """Set storage dtype before FSDP materialization without leaking backend config into ModelEngine."""
-        param_dtype = torch.bfloat16 if self.mixed_precision == "bf16" else torch.float32
-        model = model.to(param_dtype)
-        logger.info_rank0(f"Using {param_dtype} for FSDPTurbo full tuning.")
         return super().shard_model(model)
 
     def _copy_weights(self, param, loaded_tensor):
@@ -441,7 +437,12 @@ class FSDPTurboFSDP2Engine(FSDP2Engine):
                 logger.info(f"FSDPTurbo EP device mesh: {ep_mesh}")
                 logger.info(f"FSDPTurbo EP gradient divide factor: {ep_plan.gradient_divide_factor}")
 
+            # Restore requires_grad=False after FSDPTurbo EP recreates frozen parameters.
+            frozen_names = {name for name, param in ep_target_model.named_parameters() if not param.requires_grad}
             ep_target_model = expert_parallelize_modules(ep_target_model, ep_mesh, ep_plan)
+            for name, param in ep_target_model.named_parameters():
+                if name in frozen_names:
+                    param.requires_grad_(False)
 
             if self.ep_fsdp_size > 1:
                 if self.rank == 0:
