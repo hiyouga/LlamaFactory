@@ -213,10 +213,15 @@ def _load_standard_training_states(
                 state_dict.update(torch.load(f, map_location="cpu", weights_only=True))
         if state_dict:
             incompatible_keys = model_to_load.load_state_dict(state_dict, strict=False)
-            if incompatible_keys.missing_keys:
-                raise RuntimeError(
-                    f"Unexpected missing keys when loading checkpoint model weights: {incompatible_keys.missing_keys}."
-                )
+            parameters = dict(model_to_load.named_parameters(remove_duplicate=False))
+            loaded_parameters = {id(parameters[key]) for key in state_dict if key in parameters}
+            missing_keys = [
+                key
+                for key in incompatible_keys.missing_keys
+                if key not in parameters or id(parameters[key]) not in loaded_parameters
+            ]
+            if missing_keys:
+                raise RuntimeError(f"Unexpected missing keys when loading checkpoint model weights: {missing_keys}.")
         else:
             logger.warning_rank0(f"No model weights found in {model_dir}, skipping model state restore.")
 
@@ -341,3 +346,4 @@ class TrainingCheckpointCoordinator:
             load_rng_state(ckpt_dir, rank)
 
         logger.info_rank0(f"Resumed from checkpoint: step={self._t.global_step}, epoch={self._t._resume_epoch}")
+
