@@ -62,10 +62,11 @@ def _oracle(policy_logits, labels, ref_logits, alpha, denominator=None):
     targets = labels[:, 1:]
     valid = targets != -100
     log_p = policy_logits.float()[:, :-1].log_softmax(-1)
+    ref_probabilities = ref_logits[:, :-1].softmax(-1)
     log_q = ref_logits[:, :-1].log_softmax(-1)
     log_target_p = log_p.gather(-1, targets.clamp_min(0).unsqueeze(-1)).squeeze(-1)
     dft = -log_target_p * log_target_p.exp().detach()
-    kl = (log_q.exp() * (log_q - log_p)).sum(-1)
+    kl = (ref_probabilities * (log_q - log_p)).sum(-1)
     count = valid.sum() if denominator is None else denominator
     return ((dft + alpha * kl) * valid).sum() / count
 
