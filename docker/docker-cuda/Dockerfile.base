@@ -32,9 +32,9 @@ RUN apt-get update && \
     apt-get install -y git vim && \
     apt-get clean
 
-# Install gcc and g++
+# Install gcc, g++ and the ibverbs runtime (NCCL dlopens libibverbs.so.1 for RDMA)
 RUN apt-get update && \
-    apt-get install -y gcc g++ && \
+    apt-get install -y gcc g++ libibverbs1 ibverbs-providers && \
     apt-get clean
 
 # Change pip source
