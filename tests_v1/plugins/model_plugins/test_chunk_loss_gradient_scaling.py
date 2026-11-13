@@ -62,7 +62,7 @@ def test_head_gradient_is_scaled_before_fp16_cast(num_tokens, bias, outer_scale)
 class _LinearCausalLM(nn.Module):
     def __init__(self, dtype, bias):
         super().__init__()
-        self.embed_tokens = nn.Embedding(8, 4, dtype=dtype)
+        self.embed_tokens = nn.Embedding(131073, 4, dtype=dtype)
         self.lm_head = nn.Linear(4, 8, bias=bias, dtype=dtype)
         nn.init.ones_(self.embed_tokens.weight)
         nn.init.zeros_(self.lm_head.weight)
@@ -84,8 +84,8 @@ def test_chunk_plugin_long_sequence_optimizer_matches_eager(dtype, bias):
     chunk_loss = ChunkLoss(actual, chunk_size=4096)
     reference_optimizer = torch.optim.SGD(reference.parameters(), lr=0.05, momentum=0.9)
     actual_optimizer = torch.optim.SGD(actual.parameters(), lr=0.05, momentum=0.9)
-    input_ids = torch.ones(1, 131073, dtype=torch.long)
-    labels = input_ids.clone()
+    input_ids = torch.arange(131073).unsqueeze(0)
+    labels = torch.ones_like(input_ids)
     weights = torch.ones_like(input_ids, dtype=torch.float32)
     batch = {
         "input_ids": input_ids,
@@ -107,9 +107,7 @@ def test_chunk_plugin_long_sequence_optimizer_matches_eager(dtype, bias):
         for actual_parameter, reference_parameter in zip(actual.parameters(), reference.parameters(), strict=True):
             assert torch.isfinite(actual_parameter.grad).all()
             assert actual_parameter.grad.dtype == actual_parameter.dtype
-            torch.testing.assert_close(
-                actual_parameter.grad, reference_parameter.grad, rtol=tolerance, atol=tolerance
-            )
+            torch.testing.assert_close(actual_parameter.grad, reference_parameter.grad, rtol=tolerance, atol=tolerance)
         actual_optimizer.step()
         reference_optimizer.step()
         for actual_parameter, reference_parameter in zip(actual.parameters(), reference.parameters(), strict=True):
