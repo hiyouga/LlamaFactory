@@ -8,6 +8,16 @@ This document describes the current implementation of the `fsdpturbo` distribute
 - LlamaFactory owns process initialization, the base DeviceMesh, outer FSDP2, CP, model initialization, and weight loading.
 - The LlamaFactory integration layer combines the two parameter layouts and handles gradient norms across meshes.
 
+Install LlamaFactory and the appropriate device runtime first, then install the pinned backend without replacing LlamaFactory's dependencies:
+
+```bash
+python -m pip install --no-deps -r requirements/fsdpturbo.txt
+```
+
+The pin is `394560ec0a73ad6eb5fc6e6f0c2825f8f3f64e49`. FSDPTurbo's full model/trainer stack declares `transformers>=5.16.0`, which conflicts with LlamaFactory's `<=5.8.0` constraint. This integration uses the low-level distributed APIs with LlamaFactory's dependency versions; device and optional kernel dependencies must be provisioned separately. The distributed interface checks use PyTorch 2.10.0 and Transformers 5.8.0. This installation path does not claim compatibility with the backend's entire model/trainer stack.
+
+The newer FLA/GDN entry points are not yet integrated into the current `flash-linear-attention` plugin. That migration is separate from this EP/EFSDP update; examples enabling `auto, flash-linear-attention` still require the separate FLA adaptation.
+
 ## 1. Configuration Boundaries
 
 Common parallel topology belongs to `TrainingArguments`, while FSDPTurbo-only settings remain in `dist_config`:

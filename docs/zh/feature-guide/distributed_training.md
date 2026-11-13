@@ -23,11 +23,15 @@ dist_config:
 
 ## FSDPTurbo
 
-FSDPTurbo 在 FSDP2 基础上提供 MoE 专家并行和专家参数分片。先安装 FSDPTurbo 依赖：
+FSDPTurbo 在 FSDP2 基础上提供 MoE 专家并行和专家参数分片。先安装 LlamaFactory 及适合设备的运行环境，再安装固定版本的 FSDPTurbo，并保留 LlamaFactory 的依赖版本：
 
 ```bash
-python -m pip install -r requirements/fsdpturbo.txt
+python -m pip install --no-deps -r requirements/fsdpturbo.txt
 ```
+
+当前 pin 为 `394560ec0a73ad6eb5fc6e6f0c2825f8f3f64e49`。FSDPTurbo 的完整模型/训练栈声明需要 `transformers>=5.16.0`，与 LlamaFactory 的 `<=5.8.0` 约束冲突，因此这里使用 `--no-deps`，仅接入本页的分布式 API。本集成的接口验证使用 PyTorch 2.10.0、Transformers 5.8.0；设备和可选算子依赖需按所用路径另外准备，这不表示其完整训练栈兼容 LlamaFactory 的依赖环境。
+
+新版 FSDPTurbo 的 FLA/GDN 入口迁移尚未接入当前 `flash-linear-attention` 插件。此 pin 的适配范围为 EP/EFSDP 分布式路径；包含 `auto, flash-linear-attention` 的示例仍需等待独立的 FLA 适配。
 
 FSDPTurbo 的配置入口为 `dist_config.name: fsdpturbo`：
 
