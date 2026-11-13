@@ -1,2 +1,3 @@
-# Pin the FSDPTurbo API to a reproducible upstream main revision.
-fsdp-turbo @ git+https://gitcode.com/Ascend/FSDPTurbo.git@d878dffdb1e0312dc098599f2b56810d6b592ee2
+# Install with: python -m pip install --no-deps -r requirements/fsdpturbo.txt
+# Preserve LlamaFactory dependencies; the full backend declares a newer Transformers requirement.
+fsdp-turbo @ git+https://gitcode.com/Ascend/FSDPTurbo.git@394560ec0a73ad6eb5fc6e6f0c2825f8f3f64e49
