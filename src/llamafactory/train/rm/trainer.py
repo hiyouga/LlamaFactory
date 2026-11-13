@@ -49,6 +49,26 @@ class PairwiseTrainer(Trainer):
         if is_transformers_version_greater_than("4.46"):
             kwargs["processing_class"] = kwargs.pop("tokenizer")
 
+        # Register a forward hook on the final norm layer to capture the last
+        # hidden state. This lets compute_loss call the pretrained model with
+        # output_hidden_states=False, avoiding storage of all intermediate
+        # layer outputs (~4 GiB savings for 36-layer models at batch_size=4).
+        model = kwargs["model"]
+        self._last_hidden_state = None
+
+        _pretrained = model.pretrained_model
+        _causal_lm = _pretrained
+        if hasattr(_pretrained, "base_model") and hasattr(_pretrained.base_model, "model"):
+            _causal_lm = _pretrained.base_model.model
+
+        self._hidden_state_hook = _causal_lm.model.norm.register_forward_hook(
+            lambda mod, inp, out: setattr(self, "_last_hidden_state", out)
+        )
+
+        # Cast v_head to match model dtype for FSDP compatibility
+        model_dtype = next(model.pretrained_model.parameters()).dtype
+        model.v_head = model.v_head.to(dtype=model_dtype)
+
         super().__init__(**kwargs)
         self.model_accepts_loss_kwargs = False  # overwrite trainer's default behavior
         self.finetuning_args = finetuning_args
@@ -95,7 +115,14 @@ class PairwiseTrainer(Trainer):
         Note that the first element will be removed from the output tuple.
         See: https://github.com/huggingface/transformers/blob/v4.40.0/src/transformers/trainer.py#L3842
         """
-        _, _, values = model(**inputs, output_hidden_states=True, return_dict=True, use_cache=False)
+        # Call pretrained_model directly with output_hidden_states=False to avoid
+        # storing all intermediate hidden states. The last hidden state is captured
+        # by the forward hook registered on the final norm layer.
+        fwd_kwargs = {k: v for k, v in inputs.items()}
+        fwd_kwargs.pop("labels", None)
+        model.pretrained_model(**fwd_kwargs, output_hidden_states=False, use_cache=False)
+        values = model.v_head(self._last_hidden_state).squeeze(-1)
+
         batch_size = inputs["input_ids"].size(0) // 2
         chosen_masks, rejected_masks = torch.split(inputs["attention_mask"], batch_size, dim=0)
         chosen_rewards, rejected_rewards = torch.split(values, batch_size, dim=0)
