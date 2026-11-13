@@ -60,7 +60,7 @@ if is_ray_available():
 
 
 if TYPE_CHECKING:
-    from transformers import TrainerCallback
+    from transformers import PretrainedConfig, TrainerCallback
 
 
 logger = logging.get_logger(__name__)
@@ -173,6 +173,18 @@ def run_exp(args: Optional[dict[str, Any]] = None, callbacks: Optional[list["Tra
         _training_function(config={"args": args, "callbacks": callbacks})
 
 
+def _sync_sub_config_dtype(config: "PretrainedConfig", dtype: "torch.dtype") -> None:
+    r"""Propagate the export dtype to the sub-configs of a composite (multimodal) config.
+
+    `save_pretrained` only refreshes the top-level dtype, so the sub-configs would otherwise keep the
+    dtype of the source checkpoint and contradict the exported weights.
+    """
+    for sub_config_key in getattr(config, "sub_configs", {}):
+        sub_config = getattr(config, sub_config_key, None)
+        if sub_config is not None:
+            setattr(sub_config, "torch_dtype", dtype)
+
+
 def export_model(args: Optional[dict[str, Any]] = None) -> None:
     model_args, data_args, finetuning_args, _ = get_infer_args(args)
 
@@ -196,6 +208,7 @@ def export_model(args: Optional[dict[str, Any]] = None) -> None:
 
     if getattr(model, "quantization_method", None) is not None:  # quantized model adopts float16 type
         setattr(model.config, "torch_dtype", torch.float16)
+        _sync_sub_config_dtype(model.config, torch.float16)
     else:
         if model_args.infer_dtype == "auto":
             output_dtype = getattr(model.config, "torch_dtype", torch.float32)
@@ -205,6 +218,7 @@ def export_model(args: Optional[dict[str, Any]] = None) -> None:
             output_dtype = getattr(torch, model_args.infer_dtype)
 
         setattr(model.config, "torch_dtype", output_dtype)
+        _sync_sub_config_dtype(model.config, output_dtype)
         model = model.to(output_dtype)
         logger.info_rank0(f"Convert model dtype to: {output_dtype}.")
 
