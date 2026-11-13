@@ -243,7 +243,10 @@ class PackedSupervisedDatasetProcessor(SupervisedDatasetProcessor):
                 model_inputs["packing_params"].append(asdict(packing_params))
 
             model_inputs["attention_mask"].append(packed_attention_masks)
-            model_inputs["position_ids"].append(packed_position_ids)
+            if self.data_args.neat_packing:
+                model_inputs["position_ids"].append(packed_position_ids)
+            else:  # plain packing attends across sequences, so its position ids must not restart
+                model_inputs["position_ids"].append(list(range(len(packed_input_ids))))
             model_inputs["labels"].append(packed_labels)
             model_inputs["images"].append(packed_images or None)
             model_inputs["videos"].append(packed_videos or None)
