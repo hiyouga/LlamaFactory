@@ -630,6 +630,12 @@ class KTODataCollatorWithPadding(MultiModalDataCollatorForSeq2Seq):
         batch["kl_input_ids"] = kl_batch["input_ids"]
         batch["kl_attention_mask"] = kl_batch["attention_mask"]
         batch["kl_labels"] = kl_batch["labels"]
+        # mrope models: parent __call__ computed position_ids/rope_deltas per batch;
+        # the kl sequences differ from the target ones, so carry the kl pair too
+        # (the KTO trainer forwards them per prefix).
+        for key in ("position_ids", "rope_deltas"):
+            if key in kl_batch:
+                batch[f"kl_{key}"] = kl_batch[key]
         if "cross_attention_mask" in kl_batch:  # for mllama inputs
             batch["kl_cross_attention_mask"] = kl_batch["cross_attention_mask"]
 
