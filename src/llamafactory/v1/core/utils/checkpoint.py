@@ -346,4 +346,3 @@ class TrainingCheckpointCoordinator:
             load_rng_state(ckpt_dir, rank)
 
         logger.info_rank0(f"Resumed from checkpoint: step={self._t.global_step}, epoch={self._t._resume_epoch}")
-

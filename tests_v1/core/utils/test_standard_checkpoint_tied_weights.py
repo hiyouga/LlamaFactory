@@ -73,9 +73,7 @@ def _write_checkpoint(directory, model, optimizer, format):
     if format == "safe":
         _save_standard_training_states(str(directory), model, optimizer, _processor(), False)
     else:
-        model.save_pretrained(
-            directory / "model", safe_serialization=format != "bin", max_shard_size="1KB"
-        )
+        model.save_pretrained(directory / "model", safe_serialization=format != "bin", max_shard_size="1KB")
         (directory / "optimizer").mkdir()
         torch.save(optimizer.state_dict(), directory / "optimizer" / "state_dict.pt")
 
@@ -202,4 +200,3 @@ def test_equal_values_in_untied_parameters_do_not_count_as_an_alias(tmp_path, ki
 
     with pytest.raises(RuntimeError, match="lm_head.weight"):
         _load_standard_training_states(str(checkpoint), model, _optimizer(model, "sgd"), torch.device("cpu"))
-
