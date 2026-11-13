@@ -207,10 +207,10 @@ class BaseModelArguments:
         if self.model_name_or_path is None:
             raise ValueError("Please provide `model_name_or_path`.")
 
-        if self.adapter_name_or_path is not None:  # support merging multiple lora weights
+        if isinstance(self.adapter_name_or_path, str):  # support merging multiple lora weights
             self.adapter_name_or_path = [path.strip() for path in self.adapter_name_or_path.split(",")]
 
-        if self.add_tokens is not None:  # support multiple tokens
+        if isinstance(self.add_tokens, str):  # support multiple tokens
             self.add_tokens = [token.strip() for token in self.add_tokens.split(",")]
 
         # Process special tokens with priority: new_special_tokens_config > add_special_tokens
@@ -253,7 +253,7 @@ class BaseModelArguments:
                 )
                 raise
 
-        elif self.add_special_tokens is not None:
+        elif isinstance(self.add_special_tokens, str):
             # Priority 2: Use simple comma-separated string (no descriptions)
             self.add_special_tokens = [token.strip() for token in self.add_special_tokens.split(",")]
             self._special_token_descriptions = None
