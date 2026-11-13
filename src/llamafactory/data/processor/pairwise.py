@@ -21,10 +21,32 @@ from .processor_utils import DatasetProcessor, infer_seqlen
 
 
 if TYPE_CHECKING:
+    from transformers import PreTrainedTokenizer
+
     from ..mm_plugin import AudioInput, ImageInput, VideoInput
 
 
 logger = logging.get_logger(__name__)
+
+
+class _EncodeCachingTokenizer:
+    def __init__(self, tokenizer: "PreTrainedTokenizer") -> None:
+        self._tokenizer = tokenizer
+        self._cache: dict[tuple[Any, ...], list[int]] = {}
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._tokenizer, name)
+
+    def encode(self, text: str, *args: Any, **kwargs: Any) -> list[int]:
+        key = (text, args, tuple(kwargs.items()))
+        try:
+            return self._cache[key].copy()
+        except KeyError:
+            token_ids = self._tokenizer.encode(text, *args, **kwargs)
+            self._cache[key] = token_ids.copy()
+            return token_ids
+        except TypeError:
+            return self._tokenizer.encode(text, *args, **kwargs)
 
 
 class PairwiseDatasetProcessor(DatasetProcessor):
@@ -44,8 +66,9 @@ class PairwiseDatasetProcessor(DatasetProcessor):
         rejected_messages = self.template.mm_plugin.process_messages(
             prompt + [response[1]], images, videos, audios, self.processor
         )
-        prompt_ids, chosen_ids = self.template.encode_oneturn(self.tokenizer, chosen_messages, system, tools)
-        _, rejected_ids = self.template.encode_oneturn(self.tokenizer, rejected_messages, system, tools)
+        tokenizer = _EncodeCachingTokenizer(self.tokenizer)
+        prompt_ids, chosen_ids = self.template.encode_oneturn(tokenizer, chosen_messages, system, tools)
+        _, rejected_ids = self.template.encode_oneturn(tokenizer, rejected_messages, system, tools)
 
         if self.template.efficient_eos:
             chosen_ids += [self.tokenizer.eos_token_id]
