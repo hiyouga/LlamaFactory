@@ -624,9 +624,9 @@ class MiniCPM5ToolUtils(ToolUtils):
         regex = re.compile(r'<function name="(.*?)">((?:<!\[CDATA\[.*?\]\]>|.)*?)</function>', re.DOTALL)
         for func_name, params_block in re.findall(regex, content):
             args_dict = {}
-            param_pattern = re.compile(r'<param name="(.*?)">(<!\[CDATA\[.*?\]\]>|.*?)</param>', re.DOTALL)
+            param_pattern = re.compile(r'<param name="(.*?)">(\s*<!\[CDATA\[.*?\]\]>\s*|.*?)</param>', re.DOTALL)
             for key, raw_value in re.findall(param_pattern, params_block):
-                cdata = re.fullmatch(r"<!\[CDATA\[(.*?)\]\]>", raw_value, re.DOTALL)
+                cdata = re.fullmatch(r"\s*<!\[CDATA\[(.*?)\]\]>\s*", raw_value, re.DOTALL)
                 if cdata:
                     args_dict[key] = cdata.group(1)
                     continue

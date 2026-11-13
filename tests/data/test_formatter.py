@@ -523,6 +523,30 @@ def test_minicpm5_tool_extractor_cdata():
     result = '<function name="test_tool"><param name="foo"><![CDATA[a < b\nsecond line]]></param></function>'
     assert formatter.extract(result) == [("test_tool", json.dumps({"foo": "a < b\nsecond line"}))]
 
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
+def test_minicpm5_tool_extractor_cdata_with_newlines():
+    formatter = ToolFormatter(tool_format="minicpm5")
+    result = (
+        '<function name="test_tool">\n'
+        '<param name="code">\n'
+        '<![CDATA[print("hello world")]]>\n'
+        '</param>\n'
+        '</function>'
+    )
+    assert formatter.extract(result) == [("test_tool", json.dumps({"code": 'print("hello world")'}))]
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
+def test_minicpm5_tool_extractor_cdata_with_nested_param_and_newlines():
+    formatter = ToolFormatter(tool_format="minicpm5")
+    result = (
+        '<function name="test_tool">\n'
+        '<param name="code">\n'
+        '<![CDATA[x </param> y]]>\n'
+        '</param>\n'
+        '</function>'
+    )
+    assert formatter.extract(result) == [("test_tool", json.dumps({"code": "x </param> y"}))]
 
 @pytest.mark.runs_on(["cpu", "mps", "xpu"])
 def test_minicpm5_tool_extractor_malformed_value():
