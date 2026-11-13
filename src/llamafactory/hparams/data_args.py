@@ -99,7 +99,12 @@ class DataArguments:
     )
     val_size: float = field(
         default=0.0,
-        metadata={"help": "Size of the validation set, should be an integer or a float in range `[0,1)`."},
+        metadata={
+            "help": (
+                "Size of the validation set, either a sample count or a fraction in `[0,1)`. "
+                "Streaming requires a sample count and holds out that many examples before training shuffles the rest."
+            )
+        },
     )
     eval_on_each_dataset: bool = field(
         default=False,
