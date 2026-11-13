@@ -108,7 +108,7 @@ def _trainer(tmp_path, alpha, model=None, ref_model=None, micro_batch=1, accumul
 def _optimizer(model, name):
     if name == "sgd":
         return torch.optim.SGD(model.parameters(), lr=0.03, momentum=0.6)
-    return torch.optim.AdamW(model.parameters(), lr=0.003, weight_decay=0.02)
+    return torch.optim.AdamW(model.parameters(), lr=0.003, eps=1e-6, weight_decay=0.02)
 
 
 @pytest.mark.parametrize("alpha", [0.0, 0.1, 0.7])
