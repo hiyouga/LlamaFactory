@@ -13,6 +13,7 @@
 # limitations under the License.
 
 
+import math
 import random
 
 import numpy as np
@@ -23,7 +24,7 @@ from transformers import set_seed as hf_set_seed
 from ..accelerator.helper import is_torch_npu_available
 from ..accelerator.interface import DistributedInterface
 from .constants import IGNORE_INDEX
-from .types import BatchInput, Processor
+from .types import BatchInput, Processor, Tensor
 
 
 def enable_full_determinism(seed: int) -> None:
@@ -106,3 +107,24 @@ def model_uses_mrope(config) -> bool:
     text_config = getattr(config, "text_config", config)
     rope = getattr(text_config, "rope_scaling", None) or getattr(text_config, "rope_parameters", None)
     return isinstance(rope, dict) and "mrope_section" in rope
+
+
+_LOG2 = math.log(2)  # branch point of log1mexp, i.e. log(1 - P) == log(0.5)
+
+
+def log1mexp(x: Tensor) -> Tensor:
+    r"""Compute log(1 - exp(x)) accurately for x <= 0.
+
+    Kept in sync with `llamafactory.train.trainer_utils.log1mexp`, since the v1 tree does not
+    import from the legacy one. `log1p(-exp(x))` returns -inf once `exp(x)` rounds to 1.0,
+    while `log(-expm1(x))` returns 0 once `1 - exp(x)` rounds to 1.0; following Mächler (2012)
+    we switch at x = -log(2), where both equivalent forms stay within a few ulps.
+
+    Both branches are evaluated on their own safe domain because `torch.where` computes both
+    of them: the unselected `log1p(-1.0)` would give -inf and its backward (0 * inf) would
+    turn the gradients into NaN.
+
+    """
+    hi = torch.log(-torch.expm1(x.clamp(min=-_LOG2)))
+    lo = torch.log1p(-torch.exp(x.clamp(max=-_LOG2)))
+    return torch.where(x > -_LOG2, hi, lo)

@@ -18,6 +18,7 @@
 # limitations under the License.
 
 import json
+import math
 import os
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, Optional, Union
@@ -634,6 +635,29 @@ def get_batch_logps(
         logps = (per_token_logps * loss_mask).sum(-1)
 
     return logps, valid_length
+
+
+_LOG2 = math.log(2)  # branch point of log1mexp, i.e. log(1 - P) == log(0.5)
+
+
+def log1mexp(x: "torch.Tensor") -> "torch.Tensor":
+    r"""Compute log(1 - exp(x)) accurately for x <= 0.
+
+    The naive `torch.log1p(-torch.exp(x))` returns -inf once `exp(x)` rounds to 1.0 (the
+    catastrophic cancellation of `1 - exp(x)`), while `torch.log(-torch.expm1(x))` returns 0
+    once `exp(x)` is small enough that `1 - exp(x)` rounds to 1.0 (the absorption of a tiny
+    value by a number close to one). Following Mächler (2012), we switch between the two
+    equivalent forms at x = -log(2), where both of them stay within a few ulps of the exact
+    value.
+
+    Both branches are evaluated on their own safe domain on purpose: `torch.where` computes
+    both sides, and the unselected `log1p(-1.0)` would give -inf, whose backward (0 * inf)
+    would turn the gradient into NaN.
+
+    """
+    hi = torch.log(-torch.expm1(x.clamp(min=-_LOG2)))
+    lo = torch.log1p(-torch.exp(x.clamp(max=-_LOG2)))
+    return torch.where(x > -_LOG2, hi, lo)
 
 
 def dft_loss_func(

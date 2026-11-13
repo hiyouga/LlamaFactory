@@ -26,6 +26,7 @@ from ..core.data_engine import DataEngine
 from ..core.model_engine import ModelEngine
 from ..utils import logging
 from ..utils.constants import IGNORE_INDEX
+from ..utils.helper import log1mexp
 from ..utils.types import BatchInput, HFModel, Tensor
 
 
@@ -335,7 +336,7 @@ class DPOTrainer(BaseTrainer):
 
     def _odds_ratio_loss(self, chosen_logps_avg: Tensor, rejected_logps_avg: Tensor) -> Tensor:
         log_odds = (chosen_logps_avg - rejected_logps_avg) - (
-            torch.log1p(-torch.exp(chosen_logps_avg)) - torch.log1p(-torch.exp(rejected_logps_avg))
+            log1mexp(chosen_logps_avg) - log1mexp(rejected_logps_avg)
         )
         sft_loss = -chosen_logps_avg
         odds_ratio_loss = -F.logsigmoid(log_odds)

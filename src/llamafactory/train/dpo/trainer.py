@@ -32,7 +32,7 @@ from typing_extensions import override
 from ...extras.constants import IGNORE_INDEX
 from ...extras.packages import is_transformers_version_greater_than
 from ..callbacks import SaveProcessorCallback
-from ..trainer_utils import create_custom_optimizer, create_custom_scheduler, get_batch_logps, nested_detach
+from ..trainer_utils import create_custom_optimizer, create_custom_scheduler, get_batch_logps, log1mexp, nested_detach
 
 
 if TYPE_CHECKING:
@@ -149,9 +149,7 @@ class CustomDPOTrainer(DPOTrainer):
 
     def odds_ratio_loss(self, chosen_logps: "torch.Tensor", rejected_logps: "torch.Tensor") -> "torch.Tensor":
         r"""Compute ORPO's odds ratio (OR) loss for batched log probabilities of the policy model."""
-        log_odds = (chosen_logps - rejected_logps) - (
-            torch.log1p(-torch.exp(chosen_logps)) - torch.log1p(-torch.exp(rejected_logps))
-        )
+        log_odds = (chosen_logps - rejected_logps) - (log1mexp(chosen_logps) - log1mexp(rejected_logps))
         sft_loss = -chosen_logps
         odds_ratio_loss = -F.logsigmoid(log_odds)
         orpo_loss = sft_loss + self.beta * odds_ratio_loss
