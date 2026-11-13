@@ -41,7 +41,6 @@ def test_qwen35_ep_model_spec():
     assert spec is not None
     assert spec.ep_modules == ["model.language_model.layers.{*}.mlp.experts"]
     assert spec.ep_fsdp_modules == ["model.language_model.layers.{*}.mlp.experts"]
-    assert spec.moe_modules == ["model.language_model.layers.{*}.mlp"]
 
 
 @pytest.mark.parametrize(
@@ -55,7 +54,6 @@ def test_fsdpturbo_efsdp_targets_only_routed_experts(model_type, experts_path):
     spec = FSDPTurboEPModelSpec.get(_Model(model_type))
     assert spec is not None
     assert FSDPTurboFSDP2Engine._get_ep_fsdp_modules(spec) == [experts_path]
-    assert spec.moe_modules == [experts_path.removesuffix(".experts")]
 
 
 def test_fsdpturbo_default_efsdp_preserves_ep_module_paths():
@@ -75,13 +73,11 @@ def test_fsdpturbo_uses_class_plugin_and_strict_backend_params():
     params = plugin.parse_params({"name": "fsdpturbo", "ep_size": 4}, FSDPTurboParams)
 
     assert params.ep_size == 4
-    assert params.fp32_moe is False
-    assert plugin.parse_params({"name": "fsdpturbo", "fp32_moe": True}, FSDPTurboParams).fp32_moe
     assert callable(plugin.shard_model)
     assert callable(plugin.clip_grad_norm)
     with pytest.raises(ValueError, match="Unknown params"):
         plugin.parse_params({"name": "fsdpturbo", "cp_size": 2}, FSDPTurboParams)
-    for key in ("ep_modules", "ep_fsdp_modules", "moe_modules"):
+    for key in ("ep_modules", "ep_fsdp_modules"):
         with pytest.raises(ValueError, match="Unknown params"):
             plugin.parse_params({"name": "fsdpturbo", key: ["model.layers.*.mlp"]}, FSDPTurboParams)
 
@@ -205,81 +201,3 @@ def test_fsdpturbo_real_efsdp_selection_excludes_dense_moe_parameters(model_type
     if model_type == "qwen3_5_moe":
         assert not set(parameters).intersection(layer.mlp.shared_expert.parameters())
         assert not set(parameters).intersection(layer.mlp.shared_expert_gate.parameters())
-
-
-@pytest.mark.parametrize("enabled", [False, True])
-def test_fp32_moe_preserves_outer_precision_and_expert_ownership(monkeypatch, enabled):
-    backend_config = pytest.importorskip("fsdp_turbo.fsdp_turbo_config")
-
-    from llamafactory.v1.plugins.trainer_plugins.distributed.fsdp2 import FSDP2Engine
-
-    if enabled and not hasattr(backend_config.EPPlanConfig, "use_fused_ops"):
-        pytest.skip("FP32 MoE requires configurable EFSDP precision.")
-    model = _Model("qwen3_moe")
-    model.embed = torch.nn.Embedding(4, 4, dtype=torch.bfloat16)
-    model.model = torch.nn.Module()
-    layer = torch.nn.Module()
-    layer.mlp = torch.nn.Module()
-    layer.mlp.gate = torch.nn.Linear(4, 4, dtype=torch.bfloat16)
-    layer.mlp.experts = torch.nn.Linear(4, 4, dtype=torch.bfloat16)
-    model.model.layers = torch.nn.ModuleList([layer])
-    engine = object.__new__(FSDPTurboFSDP2Engine)
-    engine.dist_config = {"fp32_moe": enabled}
-    engine.mixed_precision = "bf16"
-    engine.ep_fsdp_size = 2
-    engine.fsdp_mesh = object()
-    engine.reshard_after_forward = True
-    engine.offload_params = False
-    ignored = set(layer.mlp.experts.parameters())
-    calls = []
-    monkeypatch.setattr(engine, "prepare_model_ep", lambda model: (model, ignored))
-    monkeypatch.setattr(fsdpturbo_module, "fully_shard", lambda module, **kwargs: calls.append((module, kwargs)))
-    monkeypatch.setattr(FSDP2Engine, "prepare_model", lambda self, model, ignored_params: model)
-
-    assert engine.prepare_model(model) is model
-    assert model.embed.weight.dtype == torch.bfloat16
-    if enabled:
-        assert all(p.dtype == torch.float32 for p in layer.mlp.parameters())
-        assert len(calls) == 1 and calls[0][0] is layer.mlp
-        config = calls[0][1]
-        assert config["mesh"] is engine.fsdp_mesh
-        assert config["ignored_params"] == ignored
-        assert config["mp_policy"].param_dtype == torch.float32
-        assert config["mp_policy"].reduce_dtype == torch.float32
-        assert config["mp_policy"].output_dtype == torch.bfloat16
-    else:
-        assert not calls
-        assert all(p.dtype == torch.bfloat16 for p in layer.mlp.parameters())
-
-
-@pytest.mark.parametrize("model_type", ["unregistered", "qwen3_moe"])
-def test_fp32_moe_rejects_unregistered_or_unmatched_modules(model_type):
-    pytest.importorskip("fsdp_turbo.utils.str_match")
-    with pytest.raises(ValueError, match="fp32_moe"):
-        FSDPTurboFSDP2Engine._get_fp32_moe_modules(_Model(model_type))
-
-
-def test_fp32_moe_rejects_lora_before_wrapping():
-    pytest.importorskip("fsdp_turbo.fsdp_turbo_config")
-    from peft.tuners.lora.layer import Linear
-
-    model = _Model("qwen3_moe")
-    model.adapter = Linear(torch.nn.Linear(4, 4), "default", r=2, lora_alpha=2)
-    engine = object.__new__(FSDPTurboFSDP2Engine)
-    engine.dist_config = {"fp32_moe": True}
-    with pytest.raises(ValueError, match="not LoRA"):
-        engine.prepare_model(model)
-
-
-def test_fp32_moe_rejects_legacy_efsdp_precision_before_casting(monkeypatch):
-    backend_config = pytest.importorskip("fsdp_turbo.fsdp_turbo_config")
-
-    monkeypatch.setattr(backend_config, "EPPlanConfig", type("LegacyEPPlanConfig", (), {}))
-    model = _Model("qwen3_moe")
-    model.weight = torch.nn.Parameter(torch.ones(4, dtype=torch.bfloat16))
-    engine = object.__new__(FSDPTurboFSDP2Engine)
-    engine.dist_config = {"fp32_moe": True}
-    engine.ep_fsdp_size = 2
-    with pytest.raises(ValueError, match="configurable EFSDP precision"):
-        engine.prepare_model(model)
-    assert model.weight.dtype == torch.bfloat16

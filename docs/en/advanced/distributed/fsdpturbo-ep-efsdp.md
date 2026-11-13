@@ -35,7 +35,6 @@ The following advanced fields are optional and are therefore omitted from the mi
 - `fsdp_ignored_modules`: additional modules excluded from the outer LlamaFactory FSDP2 path. Expert parameters selected by the model spec are automatically added to the ignored set by the integration layer, so normal configurations do not need to repeat them here.
 - `hook_modules`: optional module patterns for FSDPTurbo EFSDP hooks. The default is an empty list.
 - `fsdp_implementation`: the FSDPTurbo EFSDP implementation, either `native` or `custom`. The default is `native`.
-- `fp32_moe`: opt into FP32 storage and computation inside registered MoE blocks, including their router, shared branch and routed experts. The default is `false`.
 
 The model spec determines the EFSDP targets. Non-expert parameters such as attention, embeddings, and the LM head do not enter the FSDPTurbo EFSDP plan. They remain managed by the outer LlamaFactory FSDP2 layer.
 
@@ -43,27 +42,7 @@ Model-specific module paths and preparation logic are managed exclusively by the
 
 EFSDP targets only routed-expert modules (`mlp.experts`). The router, shared expert, and shared-expert gate remain owned by the outer FSDP on the full DP mesh. When a model spec omits `ep_fsdp_modules`, the EP module paths are used unchanged; the parent MLP is never inferred by removing `.experts`.
 
-By default, the plugin passes the engine's compute and reduction dtypes to the EFSDP plan, so current FSDPTurbo versions use the same precision policy for routed experts and outer FSDP. The public `ep_dispatcher: eager` and `fused` choices map to `all2all` with fusion disabled or enabled on backend versions that expose `use_fused_ops`; older dispatcher names remain compatible. Older backends that hard-code BF16 for EFSDP must be upgraded for full FP32 expert computation.
-
-With `bf16: true` and `dist_config.fp32_moe: true`, routed experts use an FP32 EFSDP policy, while a nested outer-FSDP unit manages the dense MoE parameters in FP32 on the DP mesh. The MoE input is promoted to FP32 and its output returns to the outer compute dtype. Attention, embeddings and other layers retain their existing precision policy. The registry declares the MoE precision boundaries separately from the experts-only EFSDP targets.
-
-```yaml
-bf16: true
-cp_size: 2
-dist_config:
-  name: fsdpturbo
-  ep_size: 2
-  ep_dispatcher: eager
-  fp32_moe: true
-```
-
-This option reduces local MoE rounding and backward branch-accumulation differences; it changes the numerical trajectory and may increase MoE compute, communication and activation-memory costs. It does not make all BF16 arithmetic outside the MoE invariant to sequence partitioning, or promise bitwise equality to the original BF16 model. Use an identically configured full-DP reference for validation. The policy selects tensor dtypes without overriding process-wide TF32/HF32 or compiler precision settings; disable reduced-precision FP32 modes for strict accuracy checks. The option requires full tuning and a supported model spec (`qwen3_moe` or `qwen3_5_moe`); LoRA is rejected. When EFSDP is active, a FSDPTurbo version with configurable EFSDP precision is required, and older hard-coded-BF16 backends are rejected.
-
-The legacy dependency pin in `requirements/fsdpturbo.txt` does not support FP32 EFSDP. When opting into `fp32_moe`, install a backend revision with configurable EFSDP precision, such as `1aed4b89538a11cfb0b8707ba1e005f0c5b22230`:
-
-```bash
-pip install "fsdp-turbo @ git+https://gitcode.com/Ascend/FSDPTurbo.git@1aed4b89538a11cfb0b8707ba1e005f0c5b22230"
-```
+The plugin passes the engine's compute and reduction dtypes to the EFSDP plan, so current FSDPTurbo versions use the same precision policy for routed experts and outer FSDP. The public `ep_dispatcher: eager` and `fused` choices map to `all2all` with fusion disabled or enabled on backend versions that expose `use_fused_ops`; older dispatcher names remain compatible. Older backends that hard-code BF16 for EFSDP must be upgraded for full FP32 expert computation.
 
 ## 2. Mesh Initialization
 
