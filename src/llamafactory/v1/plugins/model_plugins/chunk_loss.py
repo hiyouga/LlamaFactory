@@ -49,28 +49,40 @@ class _ChunkedLinearCrossEntropy(torch.autograd.Function):
         labels_flat = labels.reshape(-1)
         loss_weights_flat = loss_weights.reshape(-1)
 
+        # Rows without a label or with zero weight add nothing to the loss or to any gradient,
+        # so they skip the output-head projection. Fully supervised batches keep plain slices.
+        rows = ((labels_flat != IGNORE_INDEX) & (loss_weights_flat != 0)).nonzero(as_tuple=True)[0]
+        num_rows = rows.numel()
+        if num_rows == labels_flat.numel():
+            rows = None
+
         loss = torch.zeros((), device=hidden_states.device, dtype=torch.float32)
-        grad_hidden = torch.empty_like(hidden_states_flat) if needs_hidden_grad else None
+        if not needs_hidden_grad:
+            grad_hidden = None
+        elif rows is None:
+            grad_hidden = torch.empty_like(hidden_states_flat)
+        else:
+            grad_hidden = torch.zeros_like(hidden_states_flat)
         # Avoid repeated BF16 rounding when summing head gradients across chunks.
         grad_weight = torch.zeros_like(head_weight, dtype=torch.float32) if needs_weight_grad else None
         grad_bias = (
             torch.zeros_like(head_bias, dtype=torch.float32) if head_bias is not None and needs_bias_grad else None
         )
 
-        for start in range(0, hidden_states_flat.size(0), chunk_size):
-            end = start + chunk_size
+        for start in range(0, num_rows, chunk_size):
+            chunk = slice(start, start + chunk_size) if rows is None else rows[start : start + chunk_size]
             with torch.enable_grad():
-                hidden_arg = hidden_states_flat[start:end].detach().requires_grad_(needs_hidden_grad)
+                hidden_arg = hidden_states_flat[chunk].detach().requires_grad_(needs_hidden_grad)
                 weight_arg = head_weight.detach().requires_grad_(needs_weight_grad)
                 bias_arg = head_bias.detach().requires_grad_(needs_bias_grad) if head_bias is not None else None
                 logits = F.linear(hidden_arg, weight_arg, bias_arg).float()
                 token_loss = F.cross_entropy(
                     logits,
-                    labels_flat[start:end],
+                    labels_flat[chunk],
                     reduction="none",
                     ignore_index=IGNORE_INDEX,
                 )
-                chunk_loss = (token_loss * loss_weights_flat[start:end]).sum()
+                chunk_loss = (token_loss * loss_weights_flat[chunk]).sum()
                 grad_targets = [
                     tensor
                     for tensor, needed in (
@@ -85,7 +97,7 @@ class _ChunkedLinearCrossEntropy(torch.autograd.Function):
             loss.add_(chunk_loss.detach())
             grad_index = 0
             if grad_hidden is not None:
-                grad_hidden[start:end].copy_(chunk_grads[grad_index])
+                grad_hidden[chunk] = chunk_grads[grad_index]
                 grad_index += 1
             if grad_weight is not None:
                 grad_weight.add_(chunk_grads[grad_index])
