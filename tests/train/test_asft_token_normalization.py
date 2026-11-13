@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import os
+import socket
 from copy import deepcopy
 
 import pytest
@@ -156,9 +158,7 @@ class _GradientTrace(TrainerCallback):
 @pytest.mark.parametrize("alpha", [0.0, 0.7])
 @pytest.mark.parametrize("optimizer_name", ["sgd", "adamw"])
 @pytest.mark.parametrize("micro_batch,accumulation", [(1, 3), (3, 1)])
-def test_native_asft_training_matches_full_token_objective(
-    tmp_path, alpha, optimizer_name, micro_batch, accumulation
-):
+def test_native_asft_training_matches_full_token_objective(tmp_path, alpha, optimizer_name, micro_batch, accumulation):
     trainer = _trainer(
         tmp_path, alpha, micro_batch=micro_batch, accumulation=accumulation, optimizer_name=optimizer_name
     )
@@ -199,3 +199,66 @@ def test_native_asft_training_matches_full_token_objective(
         for name, value in state.items():
             torch.testing.assert_close(value, expected_state["state"][parameter_id][name], rtol=3e-5, atol=3e-7)
     assert all(parameter.grad is None for parameter in trainer.ref_model.parameters())
+
+
+def _distributed_training_worker(rank, world_size, port, output_dir, optimizer_name, micro_batch, accumulation):
+    os.environ.update(
+        MASTER_ADDR="127.0.0.1",
+        MASTER_PORT=str(port),
+        RANK=str(rank),
+        LOCAL_RANK=str(rank),
+        WORLD_SIZE=str(world_size),
+        LOCAL_WORLD_SIZE=str(world_size),
+    )
+    trainer = _trainer(
+        output_dir, 0.7, micro_batch=micro_batch, accumulation=accumulation, optimizer_name=optimizer_name
+    )
+    assert trainer.accelerator.num_processes == world_size
+    assert trainer.args.average_tokens_across_devices
+    expected_model = deepcopy(trainer.model)
+    expected_optimizer = _optimizer(expected_model, optimizer_name)
+    torch.optim.lr_scheduler.LambdaLR(expected_optimizer, lambda _: 1.0)
+    trace = _GradientTrace()
+    trainer.add_callback(trace)
+    batch = _batch()
+    expected_gradients = []
+    for _ in range(2):
+        expected_optimizer.zero_grad()
+        with torch.no_grad():
+            ref_logits = trainer.ref_model(**batch).logits
+        _oracle(expected_model(**batch).logits, batch["labels"], ref_logits, 0.7).backward()
+        expected_gradients.append([parameter.grad.detach().clone() for parameter in expected_model.parameters()])
+        expected_optimizer.step()
+
+    result = trainer.train()
+
+    assert result.global_step == 2
+    assert len(trace.gradients) == 2
+    for actual_step, expected_step in zip(trace.gradients, expected_gradients):
+        for actual, expected in zip(actual_step, expected_step):
+            torch.testing.assert_close(actual, expected, rtol=5e-5, atol=5e-7)
+    for actual, expected in zip(trainer.model.parameters(), expected_model.parameters()):
+        torch.testing.assert_close(actual, expected, rtol=5e-5, atol=5e-7)
+    actual_state = trainer.optimizer.state_dict()
+    expected_state = expected_optimizer.state_dict()
+    assert actual_state["param_groups"] == expected_state["param_groups"]
+    assert actual_state["state"].keys() == expected_state["state"].keys()
+    for parameter_id, state in actual_state["state"].items():
+        for name, value in state.items():
+            torch.testing.assert_close(value, expected_state["state"][parameter_id][name], rtol=5e-5, atol=5e-7)
+    assert all(parameter.grad is None for parameter in trainer.ref_model.parameters())
+    torch.distributed.destroy_process_group()
+
+
+@pytest.mark.parametrize("optimizer_name", ["sgd", "adamw"])
+@pytest.mark.parametrize("micro_batch,accumulation", [(1, 3), (3, 1)])
+def test_native_distributed_asft_matches_global_token_objective(tmp_path, optimizer_name, micro_batch, accumulation):
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+    torch.multiprocessing.spawn(
+        _distributed_training_worker,
+        args=(2, port, str(tmp_path), optimizer_name, micro_batch, accumulation),
+        nprocs=2,
+        join=True,
+    )

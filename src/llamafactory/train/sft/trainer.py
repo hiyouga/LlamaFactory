@@ -157,7 +157,11 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
                 )
                 ref_logits = ref_outputs.logits
             outputs = model(**inputs)
-            return self.compute_loss_func(outputs, inputs["labels"], ref_logits)
+            num_items_in_batch = kwargs.get("num_items_in_batch")
+            loss = self.compute_loss_func(outputs, inputs["labels"], ref_logits, num_items_in_batch=num_items_in_batch)
+            if self.args.average_tokens_across_devices and num_items_in_batch is not None:
+                loss *= self.accelerator.num_processes if self.args.n_gpu <= 1 else self.args.n_gpu
+            return loss
         else:
             return super().compute_loss(model, inputs, *args, **kwargs)
 
