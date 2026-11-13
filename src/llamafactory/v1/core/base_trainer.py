@@ -225,7 +225,9 @@ class BaseTrainer:
         """
         batch_size, _ = batch["labels"].shape
         model_inputs = {
-            k: v.to(self.device, non_blocking=True) for k, v in batch.items() if isinstance(v, torch.Tensor)
+            k: v.to(self.device, non_blocking=True)
+            for k, v in batch.items()
+            if isinstance(v, torch.Tensor) and k != "labels"
         }
         # Let mRoPE models build their own multimodal 3D position ids (see _uses_mrope in __init__).
         if self._uses_mrope:
