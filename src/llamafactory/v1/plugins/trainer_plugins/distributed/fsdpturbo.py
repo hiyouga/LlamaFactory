@@ -16,6 +16,7 @@ from collections.abc import Callable
 
 import torch
 from torch.distributed.device_mesh import DeviceMesh, init_device_mesh
+from torch.distributed.fsdp import CPUOffloadPolicy, MixedPrecisionPolicy, fully_shard
 
 from ....accelerator.interface import Dim, DistributedInterface
 from ....utils.logging import get_logger
@@ -237,10 +238,12 @@ class FSDPTurboEPModelSpec:
         ep_modules: list[str],
         ep_fsdp_modules: list[str] | None = None,
         prepare_fn: Callable[[HFModel], HFModel] | None = None,
+        moe_modules: list[str] | None = None,
     ) -> None:
         self.ep_modules = ep_modules
         self.ep_fsdp_modules = ep_fsdp_modules
         self.prepare_fn = prepare_fn
+        self.moe_modules = moe_modules
 
     @classmethod
     def register(
@@ -248,12 +251,14 @@ class FSDPTurboEPModelSpec:
         model_type: str,
         ep_modules: list[str],
         ep_fsdp_modules: list[str] | None = None,
+        moe_modules: list[str] | None = None,
     ):
         def decorator(fn):
             cls._registry[model_type] = cls(
                 ep_modules=ep_modules,
                 ep_fsdp_modules=ep_fsdp_modules,
                 prepare_fn=fn,
+                moe_modules=moe_modules,
             )
             return fn
 
@@ -276,6 +281,7 @@ class FSDPTurboEPModelSpec:
     "qwen3_moe",
     ep_modules=["model.layers.{*}.mlp.experts"],
     ep_fsdp_modules=["model.layers.{*}.mlp.experts"],
+    moe_modules=["model.layers.{*}.mlp"],
 )
 def _prepare_qwen3_moe_for_ep(model: HFModel) -> HFModel:
     prepared = 0
@@ -299,6 +305,7 @@ def _prepare_qwen3_moe_for_ep(model: HFModel) -> HFModel:
     "qwen3_5_moe",
     ep_modules=["model.language_model.layers.{*}.mlp.experts"],
     ep_fsdp_modules=["model.language_model.layers.{*}.mlp.experts"],
+    moe_modules=["model.language_model.layers.{*}.mlp"],
 )
 def _prepare_qwen3_5_moe_for_ep(model: HFModel) -> HFModel:
     return model
@@ -424,7 +431,11 @@ class FSDPTurboFSDP2Engine(FSDP2Engine):
                 **dispatcher_kwargs,
             )
             ep_plan.gradient_divide_factor = float(self.ep_size * self.parallel_state.efsdp_size)
-            mp_policy = self.get_mp_policy()
+            mp_policy = (
+                MixedPrecisionPolicy(param_dtype=torch.float32, reduce_dtype=torch.float32)
+                if self.dist_config.get("fp32_moe", False)
+                else self.get_mp_policy()
+            )
             fsdp_plan = FSDPPlanConfig(
                 # EFSDP targets come from ep_plan.apply_efsdp_modules.
                 apply_modules={},
@@ -479,9 +490,50 @@ class FSDPTurboFSDP2Engine(FSDP2Engine):
 
         return model, ignored_params
 
+    @staticmethod
+    def _get_fp32_moe_modules(model: HFModel) -> list[torch.nn.Module]:
+        from fsdp_turbo.utils.str_match import module_name_match
+
+        spec = FSDPTurboEPModelSpec.get(model)
+        if spec is None or not spec.moe_modules:
+            raise ValueError(f"fp32_moe requires registered MoE module paths for {_get_model_type(model)}.")
+        modules = []
+        for pattern in spec.moe_modules:
+            matched = [module for name, module in model.named_modules() if module_name_match(pattern, name)]
+            if not matched:
+                raise ValueError(f"fp32_moe pattern {pattern!r} did not match a module.")
+            modules.extend(matched)
+        return list(dict.fromkeys(modules))
+
     def prepare_model(self, model: HFModel) -> HFModel:
+        fp32_modules = []
+        if self.dist_config.get("fp32_moe", False):
+            from fsdp_turbo.fsdp_turbo_config import EPPlanConfig
+
+            if self.is_lora_module_wrap(model):
+                raise ValueError("fp32_moe currently supports full tuning, not LoRA.")
+            if self.ep_fsdp_size > 1 and not hasattr(EPPlanConfig, "use_fused_ops"):
+                raise ValueError("fp32_moe requires a newer FSDPTurbo with configurable EFSDP precision.")
+            fp32_modules = self._get_fp32_moe_modules(model)
+            for module in fp32_modules:
+                module.float()
+
         # Apply FSDPTurbo EP first, then shard the remaining parameters with LlamaFactory FSDP2.
         model, ignored_params = self.prepare_model_ep(model)
+        if self.fsdp_mesh is not None:
+            for module in fp32_modules:
+                fully_shard(
+                    module,
+                    mesh=self.fsdp_mesh,
+                    reshard_after_forward=self.reshard_after_forward,
+                    mp_policy=MixedPrecisionPolicy(
+                        param_dtype=torch.float32,
+                        reduce_dtype=torch.float32,
+                        output_dtype=self.get_mp_policy().param_dtype,
+                    ),
+                    offload_policy=CPUOffloadPolicy(pin_memory=self.pin_memory) if self.offload_params else None,
+                    ignored_params=ignored_params.intersection(module.parameters()) or None,
+                )
         return super().prepare_model(model, ignored_params=ignored_params)
 
     def _warmup_grad_norm(self, model: HFModel) -> None:
