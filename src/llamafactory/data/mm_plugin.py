@@ -2286,7 +2286,7 @@ class Qwen2VLPlugin(BasePlugin):
                     if not is_valid_image(frame) and not isinstance(frame, dict) and not os.path.exists(frame):
                         raise ValueError("Invalid image found in video frames.")
 
-                frames = video
+                frames = list(video)
                 fps_per_video.append(kwargs.get("video_fps", 2.0))
                 durations.append(len(frames) / kwargs.get("video_fps", 2.0))
                 frames_indices.append(list(range(len(frames))))
