@@ -116,7 +116,6 @@ def prepare_4d_attention_mask(attention_mask_with_indices: "torch.Tensor", dtype
     ```
     where `o` equals to `0.0`, `x` equals to `min_dtype`.
     """
-    _, seq_len = attention_mask_with_indices.size()
     min_dtype = torch.finfo(dtype).min
     zero_tensor = torch.tensor(0, dtype=dtype)
 
@@ -125,9 +124,9 @@ def prepare_4d_attention_mask(attention_mask_with_indices: "torch.Tensor", dtype
     # Create indices for comparison.
     indices = attention_mask_with_indices.unsqueeze(1).unsqueeze(2)  # [bsz, 1, 1, seq_len]
     indices_t = attention_mask_with_indices.unsqueeze(1).unsqueeze(3)  # [bsz, 1, seq_len, 1]
-    # Create a lower triangular mask.
-    tril_mask = torch.tril(torch.ones((seq_len, seq_len), dtype=torch.bool))
-    attention_mask_4d = (indices == indices_t) & non_padding_mask & tril_mask
+    attention_mask_4d = indices == indices_t
+    attention_mask_4d.tril_()
+    attention_mask_4d.logical_and_(non_padding_mask)
     # Invert the attention mask.
     attention_mask_4d = torch.where(attention_mask_4d, zero_tensor, min_dtype)
     return attention_mask_4d
