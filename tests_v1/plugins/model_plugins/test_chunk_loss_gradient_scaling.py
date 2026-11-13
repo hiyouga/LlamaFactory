@@ -73,14 +73,21 @@ class _LinearCausalLM(nn.Module):
         return self.lm_head
 
     def forward(self, input_ids, **kwargs):
-        return CausalLMOutput(logits=self.lm_head(self.embed_tokens(input_ids)))
+        hidden = self.embed_tokens(input_ids)
+        if getattr(self, "wide_head_reference", False):
+            # A single double-precision projection independently aggregates the long
+            # sequence without rounding per-token mean gradients to FP16 first.
+            bias = self.lm_head.bias.double() if self.lm_head.bias is not None else None
+            return CausalLMOutput(logits=F.linear(hidden.double(), self.lm_head.weight.double(), bias).float())
+        return CausalLMOutput(logits=self.lm_head(hidden))
 
 
 @pytest.mark.parametrize("dtype", [torch.float16, torch.float32])
 @pytest.mark.parametrize("bias", [False, True])
-def test_chunk_plugin_long_sequence_optimizer_matches_eager(dtype, bias):
+def test_chunk_plugin_long_sequence_optimizer_matches_high_precision_reference(dtype, bias):
     reference = _LinearCausalLM(dtype, bias)
     actual = deepcopy(reference)
+    reference.wide_head_reference = True
     chunk_loss = ChunkLoss(actual, chunk_size=4096)
     reference_optimizer = torch.optim.SGD(reference.parameters(), lr=0.05, momentum=0.9)
     actual_optimizer = torch.optim.SGD(actual.parameters(), lr=0.05, momentum=0.9)
