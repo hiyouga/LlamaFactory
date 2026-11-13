@@ -315,8 +315,8 @@ class BaseTrainer:
                         logger.warning_rank0(f"Gradient norm is not finite: {grad_norm}")
                     else:
                         self.optimizer.step()
+                        self.lr_scheduler.step()
 
-                    self.lr_scheduler.step()
                     self.optimizer.zero_grad()
 
                 step_loss, grad_norm = DistributedInterface().all_reduce([step_loss, grad_norm])
