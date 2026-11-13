@@ -214,7 +214,8 @@ def _load_standard_training_states(
         if state_dict:
             incompatible_keys = model_to_load.load_state_dict(state_dict, strict=False)
             parameters = dict(model_to_load.named_parameters(remove_duplicate=False))
-            loaded_parameters = {id(parameters[key]) for key in state_dict if key in parameters}
+            loaded_keys = state_dict.keys() - incompatible_keys.missing_keys
+            loaded_parameters = {id(parameters[key]) for key in loaded_keys if key in parameters}
             missing_keys = [
                 key
                 for key in incompatible_keys.missing_keys

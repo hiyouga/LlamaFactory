@@ -200,3 +200,29 @@ def test_equal_values_in_untied_parameters_do_not_count_as_an_alias(tmp_path, ki
 
     with pytest.raises(RuntimeError, match="lm_head.weight"):
         _load_standard_training_states(str(checkpoint), model, _optimizer(model, "sgd"), torch.device("cpu"))
+
+
+@pytest.mark.parametrize("kind", ["gpt2", "qwen3"])
+def test_alias_removed_by_a_load_pre_hook_is_not_counted_as_loaded(tmp_path, kind):
+    model = _model(kind)
+    optimizer = _optimizer(model, "sgd")
+    checkpoint = tmp_path / "checkpoint"
+    _write_checkpoint(checkpoint, model, optimizer, "safe")
+    restored = _model(kind)
+    embedding_name = next(
+        name for name, parameter in restored.named_parameters() if parameter is restored.get_input_embeddings().weight
+    )
+    with torch.no_grad():
+        restored.get_input_embeddings().weight.add_(0.5)
+    previous_embedding = restored.get_input_embeddings().weight.detach().clone()
+
+    def remove_embedding(module, state_dict, prefix, *args):
+        state_dict.pop(prefix + embedding_name)
+
+    handle = restored.register_load_state_dict_pre_hook(remove_embedding)
+    try:
+        with pytest.raises(RuntimeError, match="Unexpected missing keys"):
+            _load_standard_training_states(str(checkpoint), restored, _optimizer(restored, "sgd"), torch.device("cpu"))
+    finally:
+        handle.remove()
+    torch.testing.assert_close(restored.get_input_embeddings().weight, previous_embedding, rtol=0, atol=0)
