@@ -267,6 +267,38 @@ def test_reasoning_encode_multiturn_discarding_history_cot(enable_thinking: bool
 
 
 @pytest.mark.runs_on(["cpu", "mps", "xpu"])
+@pytest.mark.parametrize(
+    "content",
+    [
+        "<think>\nModel thought here\n</think>\n\nI am fine!",
+        "<think>\nModel thought here\n</think>\nI am fine!",
+        "<think>\nModel thought here\n</think>\n\n\nI am fine!",
+        "<think>Model thought here</think>I am fine!",
+        "<think>\n\n</think>\n\nI am fine!",
+    ],
+)
+def test_remove_thought_newline_variants(content: str):
+    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-8B")
+    template = get_template_and_fix_tokenizer(tokenizer, DataArguments(template="qwen3"))
+    assert template.remove_thought(content) == "I am fine!"
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
+def test_reasoning_encode_oneturn_disable_thinking_single_newline():
+    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-8B")
+    data_args = DataArguments(template="qwen3", enable_thinking=False)
+    template = get_template_and_fix_tokenizer(tokenizer, data_args)
+    messages = [
+        {"role": "user", "content": "How are you"},
+        {"role": "assistant", "content": "<think>\nModel thought here\n</think>\nI am fine!"},
+    ]
+    prompt_ids, answer_ids = template.encode_oneturn(tokenizer, messages)
+    prompt_str = "<|im_start|>user\nHow are you<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n"
+    answer_str = "I am fine!<|im_end|>\n"
+    _check_tokenization(tokenizer, (prompt_ids, answer_ids), (prompt_str, answer_str))
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
 def test_qwen38_reasoning_instruction():
     tokenizer = CharTokenizer()
     template = deepcopy(TEMPLATES["qwen3_8"])
