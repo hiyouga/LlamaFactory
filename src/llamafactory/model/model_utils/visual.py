@@ -348,6 +348,14 @@ _register_composite_model(
 
 
 _register_composite_model(
+    model_type="minicpm_ocr",
+    projector_keys=["model.merger"],
+    vision_model_keys=["model.vision_tower"],
+    language_model_keys=["model.language_model", "lm_head"],
+)
+
+
+_register_composite_model(
     model_type="mistral3",
     projector_keys=["model.multi_modal_projector"],
 )
