@@ -73,11 +73,19 @@ class StringFormatter(Formatter):
         elements = []
         for slot in self.slots:
             if isinstance(slot, str):
+                replacements = []
                 for name, value in kwargs.items():
                     if not isinstance(value, str):
                         raise RuntimeError(f"Expected a string, got {value}")
 
-                    slot = slot.replace("{{" + name + "}}", value, 1)
+                    placeholder = "{{" + name + "}}"
+                    start = slot.find(placeholder)
+                    if start != -1:
+                        replacements.append((start, start + len(placeholder), value))
+
+                # Match the original slot so inserted content is never interpreted as a placeholder.
+                for start, end, value in sorted(replacements, reverse=True):
+                    slot = slot[:start] + value + slot[end:]
                 elements.append(slot)
             elif isinstance(slot, (dict, set)):
                 elements.append(slot)
