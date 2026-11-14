@@ -17,13 +17,30 @@
 
 from dataclasses import dataclass
 from itertools import chain
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from .processor_utils import DatasetProcessor
+from datasets import Sequence, Value
+
+from .processor_utils import DatasetProcessor, build_dataset_features
+
+
+if TYPE_CHECKING:
+    from datasets import Dataset, Features
 
 
 @dataclass
 class PretrainDatasetProcessor(DatasetProcessor):
+    def get_dataset_features(self, dataset: "Dataset") -> "Features":
+        r"""Return the schema for the fields emitted by ``preprocess_dataset``."""
+        output_features = {
+            "input_ids": Sequence(Value("int32")),
+            "attention_mask": Sequence(Value("int8")),
+        }
+        if "token_type_ids" in getattr(self.tokenizer, "model_input_names", []):
+            output_features["token_type_ids"] = Sequence(Value("int32"))
+
+        return build_dataset_features(dataset, output_features, include_multimodal=False)
+
     def preprocess_dataset(self, examples: dict[str, list[Any]]) -> dict[str, list[Any]]:
         # build grouped texts with format `X1 X2 X3 ...` if packing is enabled
         eos_token = "<|end_of_text|>" if self.data_args.template == "llama3" else self.tokenizer.eos_token
@@ -38,8 +55,8 @@ class PretrainDatasetProcessor(DatasetProcessor):
             )
         else:
             tokenized_examples = self.tokenizer(text_examples, add_special_tokens=False)
-            concatenated_examples = {k: list(chain(*tokenized_examples[k])) for k in tokenized_examples.keys()}
-            total_length = len(concatenated_examples[list(concatenated_examples.keys())[0]])
+            concatenated_examples = {k: list(chain(*tokenized_examples[k])) for k in tokenized_examples}
+            total_length = len(concatenated_examples[next(iter(concatenated_examples))])
             block_size = self.data_args.cutoff_len
             total_length = (total_length // block_size) * block_size
             result = {
