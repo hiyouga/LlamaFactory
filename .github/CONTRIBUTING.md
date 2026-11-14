@@ -41,7 +41,7 @@ git checkout -b dev_your_branch
 4. Set up a development environment by running the following command in a virtual environment:
 
 ```bash
-pip install -e ".[dev]"
+pip install -e . -r requirements/dev.txt
 ```
 
 If LLaMA Factory was already installed in the virtual environment, remove it with `pip uninstall llamafactory` before reinstalling it in editable mode with the -e flag.
