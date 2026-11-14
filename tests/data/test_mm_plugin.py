@@ -21,7 +21,7 @@ import pytest
 import torch
 from PIL import Image
 
-from llamafactory.data.mm_plugin import get_mm_plugin
+from llamafactory.data.mm_plugin import get_mm_plugin, to_rgb
 from llamafactory.extras.packages import is_pyav_available, is_transformers_version_greater_than
 from llamafactory.hparams import get_infer_args
 from llamafactory.model import load_tokenizer
@@ -529,3 +529,61 @@ def test_lfm2_vl_plugin():
     assert lfm2_vl_plugin.video_token is None
     assert lfm2_vl_plugin.audio_token is None
     assert lfm2_vl_plugin.__class__.__name__ == "LFMVLPlugin"
+
+
+def test_preprocess_transparent_images():
+    plugin = get_mm_plugin(name="base")
+
+    # 1. RGBA with transparent background and black foreground
+    rgba_image = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+    for x in range(20, 44):
+        for y in range(20, 44):
+            rgba_image.putpixel((x, y), (0, 0, 0, 255))
+
+    out_rgba = plugin._preprocess_image(rgba_image, image_max_pixels=768 * 768, image_min_pixels=32 * 32)
+    assert out_rgba.mode == "RGB"
+    assert out_rgba.getpixel((5, 5)) == (255, 255, 255)
+    assert out_rgba.getpixel((30, 30)) == (0, 0, 0)
+
+    # 2. LA (grayscale with alpha)
+    la_image = Image.new("LA", (64, 64), (0, 0))
+    for x in range(20, 44):
+        for y in range(20, 44):
+            la_image.putpixel((x, y), (0, 255))
+
+    out_la = plugin._preprocess_image(la_image, image_max_pixels=768 * 768, image_min_pixels=32 * 32)
+    assert out_la.mode == "RGB"
+    assert out_la.getpixel((5, 5)) == (255, 255, 255)
+    assert out_la.getpixel((30, 30)) == (0, 0, 0)
+
+    # 3. Palette image P with transparency in info
+    pal_image = Image.new("P", (64, 64), 0)
+    pal_image.putpalette([0, 0, 0, 0, 0, 0] + [0] * 762)
+    pal_image.info["transparency"] = 0
+    for x in range(20, 44):
+        for y in range(20, 44):
+            pal_image.putpixel((x, y), 1)
+
+    out_pal = plugin._preprocess_image(pal_image, image_max_pixels=768 * 768, image_min_pixels=32 * 32)
+    assert out_pal.mode == "RGB"
+    assert out_pal.getpixel((5, 5)) == (255, 255, 255)
+    assert out_pal.getpixel((30, 30)) == (0, 0, 0)
+
+    # 4. Standard RGB: remains unchanged
+    rgb_image = Image.new("RGB", (64, 64), (128, 128, 128))
+    out_rgb = plugin._preprocess_image(rgb_image, image_max_pixels=768 * 768, image_min_pixels=32 * 32)
+    assert out_rgb.mode == "RGB"
+    assert out_rgb.getpixel((5, 5)) == (128, 128, 128)
+
+
+def test_to_rgb():
+    # Direct test of to_rgb helper
+    rgba = Image.new("RGBA", (32, 32), (10, 20, 30, 0))
+    rgb = to_rgb(rgba)
+    assert rgb.mode == "RGB"
+    assert rgb.getpixel((0, 0)) == (255, 255, 255)
+
+    opaque = Image.new("RGBA", (32, 32), (10, 20, 30, 255))
+    rgb_opaque = to_rgb(opaque)
+    assert rgb_opaque.mode == "RGB"
+    assert rgb_opaque.getpixel((0, 0)) == (10, 20, 30)

@@ -49,6 +49,8 @@ if is_fastapi_available():
 if is_pillow_available():
     from PIL import Image
 
+    from ..data.mm_plugin import to_rgb
+
 
 if is_requests_available():
     import requests
@@ -130,7 +132,7 @@ def _process_request(
                         check_ssrf_url(image_url)
                         image_stream = requests.get(image_url, stream=True).raw
 
-                    images.append(Image.open(image_stream).convert("RGB"))
+                    images.append(to_rgb(Image.open(image_stream)))
                 elif input_item.type == "video_url":
                     text_content += VIDEO_PLACEHOLDER
                     video_url = input_item.video_url.url
