@@ -90,3 +90,11 @@ def test_auto_skips_validation():
     model_args = _make_model_args(flash_attn=AttentionFunction.AUTO, compute_dtype=torch.float32)
     config = _make_config()
     configure_attn_implementation(config, model_args)
+
+
+def test_gpt_oss_fa3_with_float32_raises():
+    """gpt_oss forces FA3 and should raise ValueError when compute_dtype is float32."""
+    model_args = _make_model_args(flash_attn=AttentionFunction.AUTO, compute_dtype=torch.float32)
+    config = _make_config(model_type="gpt_oss")
+    with pytest.raises(ValueError, match="incompatible with float32"):
+        configure_attn_implementation(config, model_args)
