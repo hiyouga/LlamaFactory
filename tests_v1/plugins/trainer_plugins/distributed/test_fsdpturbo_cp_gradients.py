@@ -18,7 +18,7 @@ Collectives, tensors, norm, gradients and clipping are real PyTorch operations.
 """
 
 import math
-import socket
+from datetime import timedelta
 from types import SimpleNamespace
 
 import torch
@@ -28,8 +28,18 @@ from torch.distributed.device_mesh import init_device_mesh
 from torch.distributed.tensor import DTensor, Shard
 
 
-def worker(rank, port):
-    dist.init_process_group("gloo", init_method=f"tcp://127.0.0.1:{port}", rank=rank, world_size=4)
+def worker(rank, store_path):
+    dist.init_process_group(
+        "gloo", store=dist.FileStore(store_path, 4), rank=rank, world_size=4, timeout=timedelta(seconds=60)
+    )
+    try:
+        check_cp_gradients()
+        dist.barrier()
+    finally:
+        dist.destroy_process_group()
+
+
+def check_cp_gradients():
     mesh = init_device_mesh("cpu", (2, 2), mesh_dim_names=("dp", "cp"))
     expert = init_device_mesh("cpu", (2, 2), mesh_dim_names=("ep", "expert_cp"))
     dp = mesh["dp"].get_local_rank()
@@ -78,11 +88,7 @@ def worker(rank, port):
     for param, reference in zip(model.parameters(), references):
         torch.testing.assert_close(param.grad.to_local(), reference / expected, atol=1e-6, rtol=1e-5)
     assert unused.grad is None
-    dist.destroy_process_group()
 
 
-def test_cp_replica_gradients_are_averaged_before_norm_and_update():
-    with socket.socket() as sock:
-        sock.bind(("127.0.0.1", 0))
-        port = sock.getsockname()[1]
-    mp.spawn(worker, args=(port,), nprocs=4, join=True)
+def test_cp_replica_gradients_are_averaged_before_norm_and_update(tmp_path):
+    mp.spawn(worker, args=(str(tmp_path / "rendezvous"),), nprocs=4, join=True)
