@@ -218,18 +218,39 @@ class SGLangEngine(BaseEngine):
             if self.lora_request:
                 json_data["lora_request"] = ["lora0"]
             response = requests.post(f"{self.base_url}/generate", json=json_data, stream=True)
-            if response.status_code != 200:
-                raise RuntimeError(f"SGLang server error: {response.status_code}, {response.text}")
+            try:
+                if response.status_code != 200:
+                    raise RuntimeError(f"SGLang server error: {response.status_code}, {response.text}")
 
-            for chunk in response.iter_lines(decode_unicode=False):
-                chunk = str(chunk.decode("utf-8"))
-                if chunk == "data: [DONE]":
+                for chunk in response.iter_lines(decode_unicode=False):
+                    chunk = str(chunk.decode("utf-8"))
+                    if chunk == "data: [DONE]":
+                        break
+
+                    if chunk and chunk.startswith("data:"):
+                        yield json.loads(chunk[5:].strip("\n"))
+            finally:
+                response.close()
+
+        def next_chunk(iterator):
+            try:
+                return next(iterator)
+            except StopIteration:
+                return None
+
+        iterator = stream_request()
+        try:
+            while True:
+                chunk = await asyncio.to_thread(next_chunk, iterator)
+                if chunk is None:
                     break
 
-                if chunk and chunk.startswith("data:"):
-                    yield json.loads(chunk[5:].strip("\n"))
-
-        return await asyncio.to_thread(stream_request)
+                yield chunk
+        finally:
+            try:
+                await asyncio.to_thread(iterator.close)
+            except ValueError:  # the worker thread is still consuming the response
+                pass
 
     @override
     async def chat(
@@ -243,8 +264,7 @@ class SGLangEngine(BaseEngine):
         **input_kwargs,
     ) -> list["Response"]:
         final_output = None
-        generator = await self._generate(messages, system, tools, images, videos, audios, **input_kwargs)
-        for request_output in generator:
+        async for request_output in self._generate(messages, system, tools, images, videos, audios, **input_kwargs):
             final_output = request_output
 
         results = [
@@ -269,8 +289,7 @@ class SGLangEngine(BaseEngine):
         **input_kwargs,
     ) -> AsyncGenerator[str, None]:
         generated_text = ""
-        generator = await self._generate(messages, system, tools, images, videos, audios, **input_kwargs)
-        for result in generator:
+        async for result in self._generate(messages, system, tools, images, videos, audios, **input_kwargs):
             delta_text = result["text"][len(generated_text) :]
             generated_text = result["text"]
             yield delta_text
