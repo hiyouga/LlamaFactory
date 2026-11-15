@@ -741,11 +741,11 @@ register_model_group(
         },
         "Gemma-7B": {
             DownloadSource.DEFAULT: "google/gemma-7b",
-            DownloadSource.MODELSCOPE: "AI-ModelScope/gemma-2b-it",
+            DownloadSource.MODELSCOPE: "AI-ModelScope/gemma-7b",
         },
         "Gemma-2B-Instruct": {
             DownloadSource.DEFAULT: "google/gemma-2b-it",
-            DownloadSource.MODELSCOPE: "AI-ModelScope/gemma-7b",
+            DownloadSource.MODELSCOPE: "AI-ModelScope/gemma-2b-it",
         },
         "Gemma-7B-Instruct": {
             DownloadSource.DEFAULT: "google/gemma-7b-it",
