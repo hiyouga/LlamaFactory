@@ -97,7 +97,6 @@ def test_apply_all_kernels():
 
 @pytest.mark.runs_on(["npu"])
 def test_flash_linear_attention_kernels_compose_with_auto(monkeypatch):
-    import fsdp_turbo.ops.fla  # noqa: F401
     from fsdp_turbo.ops import get_op
 
     from llamafactory.v1.plugins.model_plugins.kernels import interface
@@ -115,6 +114,8 @@ def test_flash_linear_attention_kernels_compose_with_auto(monkeypatch):
     )
     # FLA execution is outside this bridge test; its external runtime is not required.
     monkeypatch.setattr(FlashLinearAttentionKernel, "check_deps", staticmethod(lambda: None))
+    chunk_backend_op = get_op("chunk_gated_delta_rule")
+    recurrent_backend_op = get_op("fused_recurrent_gated_delta_rule")
 
     config = {
         "name": "auto, flash-linear-attention",
@@ -123,13 +124,11 @@ def test_flash_linear_attention_kernels_compose_with_auto(monkeypatch):
     }
     assert interface.apply_kernels(model, config) is model
     assert auto_calls == [(model, {"config": config, "require_logits": False})]
-    assert get_op("chunk_gated_delta_rule").__module__ == "fsdp_turbo.ops.fla"
-
     chunk_op = model.linear_attn.chunk_gated_delta_rule
     assert isinstance(chunk_op, partial)
-    assert chunk_op.func.__module__ == "fsdp_turbo.ops.fla"
+    assert chunk_op.func is chunk_backend_op
     assert chunk_op.keywords == {"chunk_size": 32}
-    assert model.linear_attn.recurrent_gated_delta_rule.__module__ == "fsdp_turbo.ops.fla"
+    assert model.linear_attn.recurrent_gated_delta_rule is recurrent_backend_op
 
     with pytest.raises(RuntimeError, match="did not match any model module attributes"):
         FlashLinearAttentionKernel.apply(
