@@ -40,7 +40,32 @@ def test_qwen35_ep_model_spec():
 
     assert spec is not None
     assert spec.ep_modules == ["model.language_model.layers.{*}.mlp.experts"]
-    assert spec.ep_fsdp_modules == ["model.language_model.layers.{*}.mlp"]
+    assert spec.ep_fsdp_modules == ["model.language_model.layers.{*}.mlp.experts"]
+
+
+@pytest.mark.parametrize(
+    ("model_type", "experts_path"),
+    [
+        ("qwen3_moe", "model.layers.{*}.mlp.experts"),
+        ("qwen3_5_moe", "model.language_model.layers.{*}.mlp.experts"),
+    ],
+)
+def test_fsdpturbo_efsdp_targets_only_routed_experts(model_type, experts_path):
+    spec = FSDPTurboEPModelSpec.get(_Model(model_type))
+    assert spec is not None
+    assert FSDPTurboFSDP2Engine._get_ep_fsdp_modules(spec) == [experts_path]
+
+
+def test_fsdpturbo_default_efsdp_preserves_ep_module_paths():
+    paths = ["model.layers.{*}.mlp.experts", "model.layers.{*}.routed_experts"]
+    spec = FSDPTurboEPModelSpec(ep_modules=paths)
+    assert FSDPTurboFSDP2Engine._get_ep_fsdp_modules(spec) == paths
+
+
+@pytest.mark.parametrize("override", [[], ["model.layers.{*}.custom_experts"]])
+def test_fsdpturbo_efsdp_preserves_explicit_override(override):
+    spec = FSDPTurboEPModelSpec(ep_modules=["model.layers.{*}.mlp.experts"], ep_fsdp_modules=override)
+    assert FSDPTurboFSDP2Engine._get_ep_fsdp_modules(spec) == override
 
 
 def test_fsdpturbo_uses_class_plugin_and_strict_backend_params():
@@ -57,7 +82,9 @@ def test_fsdpturbo_uses_class_plugin_and_strict_backend_params():
             plugin.parse_params({"name": "fsdpturbo", key: ["model.layers.*.mlp"]}, FSDPTurboParams)
 
 
-def test_fsdpturbo_sets_public_efsdp_gradient_divide_factor(monkeypatch):
+@pytest.mark.parametrize("precision", ["bf16", "fp32"])
+@pytest.mark.parametrize("dispatcher", ["eager", "fused"])
+def test_fsdpturbo_sets_public_efsdp_plan(monkeypatch, precision, dispatcher):
     expert_parallel_module = pytest.importorskip("fsdp_turbo.distributed.expert_parallel.expert_parallel")
     expert_fully_shard_module = pytest.importorskip(
         "fsdp_turbo.distributed.expert_parallel.expert_fully_shard_parallel"
@@ -67,12 +94,15 @@ def test_fsdpturbo_sets_public_efsdp_gradient_divide_factor(monkeypatch):
 
     def _expert_fully_shard_modules(model, mesh, ep_plan, fsdp_plan):
         captured["gradient_divide_factor"] = ep_plan.gradient_divide_factor
+        captured["ep_plan"] = ep_plan
+        captured["fsdp_plan"] = fsdp_plan
         return model
 
     monkeypatch.setattr(expert_fully_shard_module, "expert_fully_shard_modules", _expert_fully_shard_modules)
 
     engine = object.__new__(FSDPTurboFSDP2Engine)
-    engine.dist_config = {"ep_dispatcher": "eager"}
+    engine.dist_config = {"ep_dispatcher": dispatcher}
+    engine.mixed_precision = precision
     engine.ep_size = 4
     engine.ep_fsdp_size = 2
     engine.parallel_state = SimpleNamespace(efsdp_size=2, ep_mesh=object(), efsdp_mesh=object())
@@ -81,6 +111,19 @@ def test_fsdpturbo_sets_public_efsdp_gradient_divide_factor(monkeypatch):
     engine.prepare_model_ep(_Model("qwen3_5_moe"))
 
     assert captured["gradient_divide_factor"] == 8.0
+    ep_plan = captured["ep_plan"]
+    if hasattr(ep_plan, "use_fused_ops"):
+        assert ep_plan.dispatcher == "all2all"
+        assert ep_plan.use_fused_ops == (dispatcher == "fused")
+        assert callable(expert_parallel_module.get_experts_forward_fn(None, ep_plan, ep_plan.dispatcher))
+    else:
+        assert ep_plan.dispatcher == dispatcher
+    from fsdp_turbo.distributed.fully_shard_parallel.fully_shard_parallel import get_mixprecision_policy
+
+    policy = get_mixprecision_policy(captured["fsdp_plan"])
+    assert policy.param_dtype == (torch.bfloat16 if precision == "bf16" else torch.float32)
+    assert policy.reduce_dtype == torch.float32
+    assert policy.cast_forward_inputs
 
 
 def test_fsdpturbo_owns_expert_mesh_topology(monkeypatch):
@@ -121,3 +164,40 @@ def test_fsdpturbo_owns_expert_mesh_topology(monkeypatch):
     assert state.ep_mesh.name == "ep"
     assert state.efsdp_mesh.name == "efsdp"
     assert state.expert_cp_mesh.name == "expert_cp"
+
+
+@pytest.mark.parametrize("model_type", ["qwen3_moe", "qwen3_5_moe"])
+def test_fsdpturbo_real_efsdp_selection_excludes_dense_moe_parameters(model_type):
+    from torch.distributed.fsdp._fully_shard._fsdp_init import _get_managed_modules, _get_managed_states
+
+    backend = pytest.importorskip("fsdp_turbo.distributed.expert_parallel.expert_fully_shard_parallel")
+    from fsdp_turbo.fsdp_turbo_config import EPPlanConfig
+
+    if model_type == "qwen3_5_moe":
+        from transformers.models.qwen3_5_moe.configuration_qwen3_5_moe import Qwen3_5MoeTextConfig as Config
+        from transformers.models.qwen3_5_moe.modeling_qwen3_5_moe import Qwen3_5MoeSparseMoeBlock as Block
+    else:
+        from transformers.models.qwen3_moe.configuration_qwen3_moe import Qwen3MoeConfig as Config
+        from transformers.models.qwen3_moe.modeling_qwen3_moe import Qwen3MoeSparseMoeBlock as Block
+
+    config = Config(hidden_size=8, moe_intermediate_size=4, shared_expert_intermediate_size=4, num_experts=4)
+    model = _Model(model_type)
+    model.model = torch.nn.Module()
+    parent = model.model
+    if model_type == "qwen3_5_moe":
+        parent.language_model = torch.nn.Module()
+        parent = parent.language_model
+    layer = torch.nn.Module()
+    layer.mlp = Block(config)
+    parent.layers = torch.nn.ModuleList([layer])
+    spec = FSDPTurboEPModelSpec.get(model)
+    plan = EPPlanConfig(
+        apply_modules=spec.ep_modules, apply_efsdp_modules=FSDPTurboFSDP2Engine._get_ep_fsdp_modules(spec)
+    )
+    targets = backend.get_efsdp_modules(model, plan)
+    parameters, _ = _get_managed_states(_get_managed_modules(tuple(targets)))
+    assert set(parameters) == set(layer.mlp.experts.parameters())
+    assert not set(parameters).intersection(layer.mlp.gate.parameters())
+    if model_type == "qwen3_5_moe":
+        assert not set(parameters).intersection(layer.mlp.shared_expert.parameters())
+        assert not set(parameters).intersection(layer.mlp.shared_expert_gate.parameters())

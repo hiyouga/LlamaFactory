@@ -8,6 +8,16 @@ This document describes the current implementation of the `fsdpturbo` distribute
 - LlamaFactory owns process initialization, the base DeviceMesh, outer FSDP2, CP, model initialization, and weight loading.
 - The LlamaFactory integration layer combines the two parameter layouts and handles gradient norms across meshes.
 
+Install LlamaFactory and the appropriate device runtime first, then install the pinned backend without replacing LlamaFactory's dependencies:
+
+```bash
+python -m pip install --no-deps -r requirements/fsdpturbo.txt
+```
+
+The pin is `394560ec0a73ad6eb5fc6e6f0c2825f8f3f64e49`. FSDPTurbo's full model/trainer stack declares `transformers>=5.16.0`, which conflicts with LlamaFactory's `<=5.8.0` constraint. This integration uses the low-level distributed APIs with LlamaFactory's dependency versions; device and optional kernel dependencies must be provisioned separately. The distributed interface checks use PyTorch 2.10.0 and Transformers 5.8.0. This installation path does not claim compatibility with the backend's entire model/trainer stack.
+
+The newer FLA/GDN entry points are not yet integrated into the current `flash-linear-attention` plugin. That migration is separate from this EP/EFSDP update; examples enabling `auto, flash-linear-attention` still require the separate FLA adaptation.
+
 ## 1. Configuration Boundaries
 
 Common parallel topology belongs to `TrainingArguments`, while FSDPTurbo-only settings remain in `dist_config`:
@@ -28,7 +38,7 @@ The fields used by the minimal example have the following responsibilities:
 
 `dp_size`, `cp_size`, `cp_mode`, `mp_replicate_size`, `mp_shard_size`, and `dist_timeout` are common topology fields and therefore remain at the top level. `dist_config` is parsed strictly as `FSDPTurboParams`; putting a common topology field inside it is rejected instead of being silently ignored.
 
-The top-level training option `bf16` controls FSDPTurbo parameter storage and compute dtype. The backend casts the model before FSDP materialization, so `ModelEngine` does not need to read distributed-backend configuration.
+The top-level training option `bf16` controls the FSDP compute dtype. Full tuning uses FP32 master parameters from `ModelEngine`; the plugin does not force them into BF16 storage.
 
 The following advanced fields are optional and are therefore omitted from the minimal YAML example above:
 
@@ -39,6 +49,10 @@ The following advanced fields are optional and are therefore omitted from the mi
 The model spec determines the EFSDP targets. Non-expert parameters such as attention, embeddings, and the LM head do not enter the FSDPTurbo EFSDP plan. They remain managed by the outer LlamaFactory FSDP2 layer.
 
 Model-specific module paths and preparation logic are managed exclusively by the `FSDPTurboEPModelSpec` registry. Built-in specs currently cover `qwen3_moe` and `qwen3_5_moe`; unregistered models fail with an explicit error. `ep_modules` and `ep_fsdp_modules` are not YAML options, and strict parameter parsing rejects them to prevent configuration from drifting away from the actual model structure.
+
+EFSDP targets only routed-expert modules (`mlp.experts`). The router, shared expert, and shared-expert gate remain owned by the outer FSDP on the full DP mesh. When a model spec omits `ep_fsdp_modules`, the EP module paths are used unchanged; the parent MLP is never inferred by removing `.experts`.
+
+The plugin passes the engine's compute and reduction dtypes to the EFSDP plan, so current FSDPTurbo versions use the same precision policy for routed experts and outer FSDP. The public `ep_dispatcher: eager` and `fused` choices map to `all2all` with fusion disabled or enabled on backend versions that expose `use_fused_ops`; older dispatcher names remain compatible. Older backends that hard-code BF16 for EFSDP must be upgraded for full FP32 expert computation.
 
 ## 2. Mesh Initialization
 
@@ -116,10 +130,10 @@ The imports occur inside `prepare_model_ep()`, so other distributed backends rem
 
 ## 5. Gradient Norms
 
-Outer and expert parameters can belong to different DTensor meshes and therefore cannot be passed together to a single standard `clip_grad_norm_()` call. The `fsdpturbo` plugin groups parameters by their owning mesh and computes local p-power sums:
+Each CP rank backpropagates the loss for the full sequence, using its local sequence shard. Before clipping and stepping the optimizer, the plugin averages corresponding gradient shards over CP for dense parameters and over expert-CP for routed experts. A missing local contribution counts as zero. If every replica has no contribution, the gradient stays unset.
 
-- Non-expert parameters are reduced over the DP and CP groups.
-- Expert parameters are reduced over the EFSDP, EP, and expert-CP groups retained by `FSDPTurboParallelState`.
+- The dense gradient norm sums the local p-power sums over DP.
+- The expert gradient norm sums them over EFSDP and EP. Each synchronized CP replica already holds the same gradient shard.
 - After the global norm is assembled, the same clipping coefficient is applied to every local gradient.
 
 A zero-gradient warmup runs during startup so that the required collectives are initialized before training begins. This is currently a backend-specific implementation for `fsdpturbo`; other backends retain their existing gradient norm paths until the upstream distributed plugin interface is decoupled.
