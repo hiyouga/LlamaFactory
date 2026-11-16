@@ -21,6 +21,7 @@ conversion used by ``rendering.py``.
 
 import json
 
+from ....extras.packages import is_torchaudio_available
 from ...utils.helper import get_tokenizer
 from ...utils.types import Message, Processor
 
@@ -129,13 +130,21 @@ def _count_media_in_messages(messages: list[Message]) -> tuple[int, int, int]:
 def _load_audios(values: list, sampling_rate: int) -> list:
     """Load audio inputs into mono waveforms resampled to ``sampling_rate``."""
     import numpy as np
-    import torchaudio
 
+    torchaudio = None
     results = []
     for value in values:
         if isinstance(value, np.ndarray):
             results.append(value)
             continue
+
+        if torchaudio is None:
+            if not is_torchaudio_available():
+                raise ImportError(
+                    "torchaudio is required to process audio data. Please install it with `pip install torchaudio`."
+                )
+
+            import torchaudio
 
         waveform, sr = torchaudio.load(value)
         if waveform.shape[0] > 1:  # downmix to mono
