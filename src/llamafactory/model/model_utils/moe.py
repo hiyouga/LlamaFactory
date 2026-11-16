@@ -71,6 +71,11 @@ def add_z3_leaf_module(model: "PreTrainedModel") -> None:
 
         _set_z3_leaf_modules(model, [Ernie4_5_MoeSparseMoeBlock])
 
+    if model_type == "ernie5_5_moe":
+        from transformers.models.ernie5_5_moe.modeling_ernie5_5_moe import Ernie5_5_MoeSparseMoeBlock
+
+        _set_z3_leaf_modules(model, [Ernie5_5_MoeSparseMoeBlock])
+
     if model_type == "granitemoe":
         from transformers.models.granitemoe.modeling_granitemoe import GraniteMoeMoE
 

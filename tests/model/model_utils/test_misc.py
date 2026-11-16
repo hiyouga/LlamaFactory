@@ -12,13 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import importlib.util
 import os
 
 import pytest
 import torch
 from transformers import AutoConfig, AutoModelForCausalLM
 
-from llamafactory.model.model_utils.misc import find_expanded_modules
+from llamafactory.model.model_utils.misc import find_all_linear_modules, find_expanded_modules
 
 
 HF_TOKEN = os.getenv("HF_TOKEN")
@@ -41,3 +42,18 @@ def test_expanded_modules():
         "model.layers.31.self_attn.q_proj",
         "model.layers.31.self_attn.v_proj",
     ]
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
+@pytest.mark.skipif(
+    importlib.util.find_spec("transformers.models.ernie5_5_moe") is None,
+    reason="Requires transformers with ERNIE 5.5.",
+)
+def test_ernie5_5_linear_modules():
+    config = AutoConfig.from_pretrained("baidu/ERNIE-5.5-Flash-Base-BF16")
+    with torch.device("meta"):
+        model = AutoModelForCausalLM.from_config(config)
+
+    linear_modules = set(find_all_linear_modules(model, freeze_vision_tower=True))
+    assert {"q_a_proj", "linear_q_down_proj", "fc1_latent_proj", "fc2_latent_proj", "down_proj"} <= linear_modules
+    assert not linear_modules & {"wq_b", "wk", "weights_proj", "lm_head"}  # the DSA indexer gets no gradient

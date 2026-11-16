@@ -238,6 +238,53 @@ class DefaultToolUtils(ToolUtils):
         return results
 
 
+class Ernie55ToolUtils(ToolUtils):
+    r"""ERNIE 5.5 tool using template: the tool list in the system turn and XML tool calls."""
+
+    @override
+    @staticmethod
+    def tool_formatter(tools: list[dict[str, Any]]) -> str:
+        # the tools are listed in the OpenAI format, as a serving stack passes them to the chat template
+        tools = [tool if tool.get("type") == "function" else {"type": "function", "function": tool} for tool in tools]
+        return "\n<ernie:tool_list>\n" + json.dumps(tools, ensure_ascii=False) + "\n</ernie:tool_list>"
+
+    @override
+    @staticmethod
+    def function_formatter(functions: list["FunctionCall"]) -> str:
+        function_text = ""
+        for name, arguments in functions:
+            function_text += f'<invoke name="{name}">'
+            for key, value in json.loads(arguments).items():
+                if not isinstance(value, str):
+                    value = json.dumps(value, ensure_ascii=False)
+
+                function_text += f'<parameter name="{key}">{value}</parameter>'
+
+            function_text += "</invoke>\n"
+
+        return "<ernie:tool_call>\n" + function_text + "</ernie:tool_call>"
+
+    @override
+    @staticmethod
+    def tool_extractor(content: str) -> Union[str, list["FunctionCall"]]:
+        tool_match = re.search(r"<ernie:tool_call>(.*?)</ernie:tool_call>", content, re.DOTALL)
+        if not tool_match:
+            return content
+
+        results = []
+        for name, params in re.findall(r'<invoke name="(.*?)">(.*?)</invoke>', tool_match.group(1), re.DOTALL):
+            arguments = {}
+            for key, value in re.findall(r'<parameter name="(.*?)">(.*?)</parameter>', params, re.DOTALL):
+                try:
+                    arguments[key] = json.loads(value)
+                except json.JSONDecodeError:
+                    arguments[key] = value
+
+            results.append(FunctionCall(name, json.dumps(arguments, ensure_ascii=False)))
+
+        return results if results else content
+
+
 class Gemma4ToolUtils(ToolUtils):
     r"""Gemma-4 tool using template."""
 
@@ -1106,6 +1153,7 @@ class LFM2ToolUtils(ToolUtils):
 
 TOOLS = {
     "default": DefaultToolUtils(),
+    "ernie5_5": Ernie55ToolUtils(),
     "gemma4": Gemma4ToolUtils(),
     "glm4": GLM4ToolUtils(),
     "llama3": Llama3ToolUtils(),

@@ -103,7 +103,8 @@ def get_custom_gradient_checkpointing_func(gradient_checkpointing_func: Callable
     @wraps(gradient_checkpointing_func, assigned=WRAPPER_ASSIGNMENTS + ("__self__",))
     def custom_gradient_checkpointing_func(func: Callable, *args: Union["torch.Tensor", Any], **kwargs):
         if isinstance(func, partial):
-            module: torch.nn.Module = func.func.__self__
+            # newer transformers checkpoint `partial(forward, module, ...)` instead of a bound `module.__call__`
+            module: torch.nn.Module = func.func.__self__ if hasattr(func.func, "__self__") else func.args[0]
         else:
             module: torch.nn.Module = func.__self__
 

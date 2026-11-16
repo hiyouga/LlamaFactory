@@ -23,7 +23,7 @@ from ...extras.logging import get_logger
 from ...extras.misc import calculate_tps
 from ...extras.packages import is_transformers_version_greater_than
 from ...extras.ploting import plot_loss
-from ...model import load_model, load_tokenizer
+from ...model import load_config, load_model, load_tokenizer
 from ..trainer_utils import create_modelcard_and_push, create_ref_model
 from .metric import ComputeAccuracy, ComputeSimilarity, eval_logit_processor
 from .trainer import CustomSeq2SeqTrainer
@@ -48,6 +48,10 @@ def run_sft(
 ):
     tokenizer_module = load_tokenizer(model_args)
     tokenizer = tokenizer_module["tokenizer"]
+    if data_args.packing and getattr(load_config(model_args), "model_type", None) == "ernie5_5_moe":
+        # packed sequences restart their position ids, while the KV compressor numbers its entries by token offset
+        raise ValueError("ERNIE 5.5 does not support packing in SFT, please disable `packing` and `neat_packing`.")
+
     template = get_template_and_fix_tokenizer(tokenizer, data_args)
     dataset_module = get_dataset(template, model_args, data_args, training_args, stage="sft", **tokenizer_module)
     model = load_model(tokenizer, model_args, finetuning_args, training_args.do_train)

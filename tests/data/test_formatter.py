@@ -111,6 +111,43 @@ def test_default_multi_tool_extractor():
 
 
 @pytest.mark.runs_on(["cpu", "mps", "xpu"])
+def test_ernie5_5_function_formatter():
+    formatter = FunctionFormatter(slots=["{{content}}<|ernie:im_end|>"], tool_format="ernie5_5")
+    tool_calls = json.dumps([FUNCTION, {"name": "other", "arguments": {"tags": ["a", "b"], "opts": {"k": 1}}}])
+    assert formatter.apply(content=tool_calls) == [
+        "<ernie:tool_call>\n"
+        '<invoke name="tool_name"><parameter name="foo">bar</parameter><parameter name="size">10</parameter></invoke>\n'
+        '<invoke name="other"><parameter name="tags">["a", "b"]</parameter><parameter name="opts">{"k": 1}</parameter>'
+        "</invoke>\n</ernie:tool_call><|ernie:im_end|>"
+    ]
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
+def test_ernie5_5_tool_formatter():
+    formatter = ToolFormatter(tool_format="ernie5_5")
+    openai_tools = [{"type": "function", "function": TOOLS[0]}]
+    expected = "\n<ernie:tool_list>\n" + json.dumps(openai_tools, ensure_ascii=False) + "\n</ernie:tool_list>"
+    assert formatter.apply(content=json.dumps(TOOLS)) == [expected]
+    assert formatter.apply(content=json.dumps(openai_tools)) == [expected]
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
+def test_ernie5_5_tool_extractor():
+    formatter = ToolFormatter(tool_format="ernie5_5")
+    result = (
+        "Let me check.\n<ernie:tool_call>\n"
+        '<invoke name="tool_name"><parameter name="foo">bar</parameter><parameter name="size">10</parameter></invoke>\n'
+        '<invoke name="other"><parameter name="tags">["a", "b"]</parameter></invoke>\n'
+        "</ernie:tool_call>"
+    )
+    assert formatter.extract(result) == [
+        ("tool_name", json.dumps({"foo": "bar", "size": 10})),
+        ("other", json.dumps({"tags": ["a", "b"]})),
+    ]
+    assert formatter.extract("It is sunny.") == "It is sunny."
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
 def test_glm4_function_formatter():
     formatter = FunctionFormatter(slots=["{{content}}"], tool_format="glm4")
     tool_calls = json.dumps(FUNCTION)
