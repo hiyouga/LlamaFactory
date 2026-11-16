@@ -62,3 +62,50 @@ def test_sharegpt_converter():
         "_videos": None,
         "_audios": None,
     }
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
+def test_openai_converter_with_tool_calls_and_no_content():
+    # OpenAI's schema permits assistant messages without `content` when
+    # `tool_calls` is present (e.g. raw streaming messages).
+    dataset_attr = DatasetAttr(
+        "hf_hub",
+        "llamafactory/tiny-supervised-dataset",
+        formatting="openai",
+        messages="messages",
+        role_tag="role",
+        content_tag="content",
+        user_tag="user",
+        assistant_tag="assistant",
+        observation_tag="tool",
+        function_tag="function",
+        system_tag="system",
+    )
+    data_args = DataArguments()
+    example = {
+        "messages": [
+            {"role": "user", "content": "What is the weather?"},
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "weather", "arguments": "{}"}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "Sunny."},
+            {"role": "assistant", "content": "It is sunny."},
+        ]
+    }
+    dataset_converter = get_dataset_converter("openai", dataset_attr, data_args)
+    assert dataset_converter(example) == {
+        "_prompt": [
+            {"role": Role.USER.value, "content": "What is the weather?"},
+            {"role": Role.FUNCTION.value, "content": '[{"name": "weather", "arguments": "{}"}]'},
+            {"role": Role.OBSERVATION.value, "content": "Sunny."},
+        ],
+        "_response": [{"role": Role.ASSISTANT.value, "content": "It is sunny."}],
+        "_system": "detailed thinking off",
+        "_tools": "",
+        "_images": None,
+        "_videos": None,
+        "_audios": None,
+    }
