@@ -35,6 +35,41 @@ from ..callbacks import SaveProcessorCallback
 from ..trainer_utils import create_custom_optimizer, create_custom_scheduler, get_batch_logps, nested_detach
 
 
+_LOGPS_CHUNK_ELEMENTS = 2**24  # ~64 MB of float32 temporaries per chunk, summed over the batch dim
+
+
+def get_batch_logps_memory_efficient(
+    logits: "torch.Tensor",
+    labels: "torch.Tensor",
+    label_pad_token_id: int = IGNORE_INDEX,
+    chunk_size: Optional[int] = None,
+) -> tuple["torch.Tensor", "torch.Tensor"]:
+    r"""Compute label log probabilities without materializing full-vocabulary log-softmax.
+
+    The sequence dimension is processed in chunks so that only ``chunk_size`` positions of
+    float32 logit copies are allocated at a time. When ``chunk_size`` is None, it is derived
+    from the vocabulary size and the batch size to bound each chunk's total element count
+    (batch positions times vocabulary) near ``_LOGPS_CHUNK_ELEMENTS``.
+    """
+    labels = labels[:, 1:].clone()
+    logits = logits[:, :-1, :]
+    loss_mask = labels != label_pad_token_id
+    labels[~loss_mask] = 0
+    if chunk_size is None:
+        chunk_size = max(1, _LOGPS_CHUNK_ELEMENTS // (logits.size(-1) * logits.size(0)))
+
+    logps = []
+    for start in range(0, logits.size(1), chunk_size):
+        chunk = logits[:, start : start + chunk_size, :].float()
+        chunk_labels = labels[:, start : start + chunk_size]
+        target_logits = torch.gather(chunk, dim=2, index=chunk_labels.unsqueeze(2)).squeeze(2)
+        logps.append(target_logits - torch.logsumexp(chunk, dim=-1))
+
+    per_token_logps = torch.cat(logps, dim=1)
+    valid_length = loss_mask.sum(-1)
+    return (per_token_logps * loss_mask).sum(-1), valid_length
+
+
 if TYPE_CHECKING:
     from transformers import PreTrainedModel, ProcessorMixin
 
@@ -227,16 +262,20 @@ class CustomDPOTrainer(DPOTrainer):
             batch = nested_detach(batch, clone=True)  # avoid error
 
         labels = batch.pop("labels")  # dpo do not need compute loss in forward
-        all_logits: torch.Tensor = model(**batch, return_dict=True, use_cache=False).logits.to(torch.float32)
-        all_logps, valid_length = get_batch_logps(
-            logits=all_logits, labels=labels, ld_alpha=(self.ld_alpha if not is_ref_model else None)
-        )
+        all_logits: torch.Tensor = model(**batch, return_dict=True, use_cache=False).logits
+        if self.ld_alpha is not None and not is_ref_model:
+            all_logps, valid_length = get_batch_logps(logits=all_logits.float(), labels=labels, ld_alpha=self.ld_alpha)
+        else:
+            all_logps, valid_length = get_batch_logps_memory_efficient(logits=all_logits, labels=labels)
         if self.loss_type in ["ipo", "orpo", "simpo"]:
             all_logps = all_logps / valid_length
 
         batch_size = batch["input_ids"].size(0) // 2
         chosen_logps, rejected_logps = all_logps.split(batch_size, dim=0)
-        chosen_logits, rejected_logits = all_logits.split(batch_size, dim=0)
+        # only the means are consumed by get_batch_loss_metrics; reduce here so the full
+        # [batch, seq, vocab] logits are released before the reference model forward
+        chosen_logits = all_logits[:batch_size].mean()
+        rejected_logits = all_logits[batch_size:].mean()
         chosen_length, _ = valid_length.split(batch_size, dim=0)
         if self.loss_type in ["ipo", "orpo", "simpo"]:
             chosen_logps_avg = chosen_logps
@@ -308,8 +347,8 @@ class CustomDPOTrainer(DPOTrainer):
         metrics[f"{prefix}rewards/margins"] = (chosen_rewards - rejected_rewards).mean().item()
         metrics[f"{prefix}logps/chosen"] = policy_chosen_logps.mean().item()
         metrics[f"{prefix}logps/rejected"] = policy_rejected_logps.mean().item()
-        metrics[f"{prefix}logits/chosen"] = policy_chosen_logits.mean().item()
-        metrics[f"{prefix}logits/rejected"] = policy_rejected_logits.mean().item()
+        metrics[f"{prefix}logits/chosen"] = policy_chosen_logits.item()
+        metrics[f"{prefix}logits/rejected"] = policy_rejected_logits.item()
         if self.loss_type == "orpo":
             metrics[f"{prefix}sft_loss"] = sft_loss.mean().item()
             metrics[f"{prefix}odds_ratio_loss"] = ((losses - sft_loss) / self.beta).mean().item()
