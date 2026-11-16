@@ -62,3 +62,34 @@ def test_sharegpt_converter():
         "_videos": None,
         "_audios": None,
     }
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
+def test_sharegpt_converter_preserves_video_frame_paths(tmp_path):
+    dataset_attr = DatasetAttr("file", "sample.json", formatting="sharegpt", videos="videos")
+    example = {
+        "conversations": [
+            {"from": "human", "value": "Compare <video> with <video>."},
+            {"from": "gpt", "value": "They show different scenes."},
+        ],
+        "videos": [["first.jpg", "missing.jpg"], ["second.jpg"]],
+    }
+    first_dir = tmp_path / "first"
+    second_dir = tmp_path / "second"
+    for media_dir in (first_dir, second_dir):
+        media_dir.mkdir()
+        (media_dir / "first.jpg").touch()
+        (media_dir / "second.jpg").touch()
+
+    first_converter = get_dataset_converter("sharegpt", dataset_attr, DataArguments(media_dir=str(first_dir)))
+    second_converter = get_dataset_converter("sharegpt", dataset_attr, DataArguments(media_dir=str(second_dir)))
+
+    first_result = first_converter(example)
+    second_result = second_converter(example)
+
+    assert first_result["_videos"] == [[str(first_dir / "first.jpg"), "missing.jpg"], [str(first_dir / "second.jpg")]]
+    assert second_result["_videos"] == [
+        [str(second_dir / "first.jpg"), "missing.jpg"],
+        [str(second_dir / "second.jpg")],
+    ]
+    assert example["videos"] == [["first.jpg", "missing.jpg"], ["second.jpg"]]
