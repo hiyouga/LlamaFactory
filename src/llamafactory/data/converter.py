@@ -198,19 +198,21 @@ class SharegptDatasetConverter(DatasetConverter):
                 or rejected[self.dataset_attr.role_tag] not in accept_tags[-1]
             ):
                 logger.warning_rank0(f"Invalid role tag in {[chosen, rejected]}.")
-                broken_data = True
-
-            prompt = aligned_messages
-            response = [
-                {
-                    "role": tag_mapping[chosen[self.dataset_attr.role_tag]],
-                    "content": chosen[self.dataset_attr.content_tag],
-                },
-                {
-                    "role": tag_mapping[rejected[self.dataset_attr.role_tag]],
-                    "content": rejected[self.dataset_attr.content_tag],
-                },
-            ]
+                # The flag used to be set here and then ignored, so a user turn
+                # was still returned as the preferred answer.
+                prompt, response = [], []
+            else:
+                prompt = aligned_messages
+                response = [
+                    {
+                        "role": tag_mapping[chosen[self.dataset_attr.role_tag]],
+                        "content": chosen[self.dataset_attr.content_tag],
+                    },
+                    {
+                        "role": tag_mapping[rejected[self.dataset_attr.role_tag]],
+                        "content": rejected[self.dataset_attr.content_tag],
+                    },
+                ]
         else:  # normal example
             prompt = aligned_messages[:-1]
             response = aligned_messages[-1:]
@@ -319,19 +321,21 @@ class OpenAIDatasetConverter(DatasetConverter):
                 or rejected[self.dataset_attr.role_tag] not in accept_tags[-1]
             ):
                 logger.warning_rank0(f"Invalid role tag in {[chosen, rejected]}.")
-                broken_data = True
-
-            prompt = aligned_messages
-            response = [
-                {
-                    "role": tag_mapping[chosen[self.dataset_attr.role_tag]],
-                    "content": chosen[self.dataset_attr.content_tag],
-                },
-                {
-                    "role": tag_mapping[rejected[self.dataset_attr.role_tag]],
-                    "content": rejected[self.dataset_attr.content_tag],
-                },
-            ]
+                # The flag used to be set here and then ignored, so a user turn
+                # was still returned as the preferred answer.
+                prompt, response = [], []
+            else:
+                prompt = aligned_messages
+                response = [
+                    {
+                        "role": tag_mapping[chosen[self.dataset_attr.role_tag]],
+                        "content": chosen[self.dataset_attr.content_tag],
+                    },
+                    {
+                        "role": tag_mapping[rejected[self.dataset_attr.role_tag]],
+                        "content": rejected[self.dataset_attr.content_tag],
+                    },
+                ]
         else:  # normal example
             prompt = aligned_messages[:-1]
             response = aligned_messages[-1:]
