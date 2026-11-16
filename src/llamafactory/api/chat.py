@@ -25,8 +25,8 @@ from ..data import Role as DataRole
 from ..extras import logging
 from ..extras.constants import AUDIO_PLACEHOLDER, IMAGE_PLACEHOLDER, VIDEO_PLACEHOLDER
 from ..extras.misc import is_env_enabled
-from ..extras.packages import is_fastapi_available, is_pillow_available, is_requests_available
-from .common import check_lfi_path, check_ssrf_url, dictify, jsonify
+from ..extras.packages import is_fastapi_available, is_pillow_available
+from .common import check_lfi_path, dictify, fetch_safe_url, jsonify
 from .protocol import (
     ChatCompletionMessage,
     ChatCompletionResponse,
@@ -48,10 +48,6 @@ if is_fastapi_available():
 
 if is_pillow_available():
     from PIL import Image
-
-
-if is_requests_available():
-    import requests
 
 
 if TYPE_CHECKING:
@@ -127,8 +123,7 @@ def _process_request(
                         check_lfi_path(image_url)
                         image_stream = open(image_url, "rb")
                     else:  # web uri
-                        check_ssrf_url(image_url)
-                        image_stream = requests.get(image_url, stream=True).raw
+                        image_stream = fetch_safe_url(image_url).raw
 
                     images.append(Image.open(image_stream).convert("RGB"))
                 elif input_item.type == "video_url":
@@ -140,8 +135,7 @@ def _process_request(
                         check_lfi_path(video_url)
                         video_stream = video_url
                     else:  # web uri
-                        check_ssrf_url(video_url)
-                        video_stream = requests.get(video_url, stream=True).raw
+                        video_stream = fetch_safe_url(video_url).raw
 
                     videos.append(video_stream)
                 elif input_item.type == "audio_url":
@@ -153,8 +147,7 @@ def _process_request(
                         check_lfi_path(audio_url)
                         audio_stream = audio_url
                     else:  # web uri
-                        check_ssrf_url(audio_url)
-                        audio_stream = requests.get(audio_url, stream=True).raw
+                        audio_stream = fetch_safe_url(audio_url).raw
 
                     audios.append(audio_stream)
                 else:
