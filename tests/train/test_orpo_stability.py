@@ -52,7 +52,9 @@ def _decimal_reference(chosen, rejected, beta):
 
 @pytest.mark.parametrize("implementation", ["legacy", "v1"])
 @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
-@pytest.mark.parametrize("case", ["chosen_near_one", "rejected_near_one", "both_near_one", "ordinary", "small_probs"])
+@pytest.mark.parametrize(
+    "case", ["chosen_near_one", "rejected_near_one", "both_near_one", "ordinary", "small_probs", "negative_tail"]
+)
 def test_orpo_loss_and_gradients_match_high_precision(implementation, dtype, case):
     epsilon = 1e-8 if dtype == torch.float32 else 1e-18
     chosen_value, rejected_value = {
@@ -61,6 +63,7 @@ def test_orpo_loss_and_gradients_match_high_precision(implementation, dtype, cas
         "both_near_one": (-epsilon, -2 * epsilon),
         "ordinary": (-1.0, -2.0),
         "small_probs": (-1000.0, -999.0),
+        "negative_tail": (-40.0, -39.0),
     }[case]
     chosen = torch.tensor([chosen_value], dtype=dtype, requires_grad=True)
     rejected = torch.tensor([rejected_value], dtype=dtype, requires_grad=True)
