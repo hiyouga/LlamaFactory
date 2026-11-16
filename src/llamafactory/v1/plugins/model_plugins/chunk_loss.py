@@ -95,8 +95,9 @@ class _ChunkedLinearCrossEntropy(torch.autograd.Function):
 
         ctx.save_for_backward(
             grad_hidden.reshape_as(hidden_states) if grad_hidden is not None else None,
-            grad_weight.to(head_weight.dtype) if grad_weight is not None else None,
-            grad_bias.to(head_bias.dtype) if grad_bias is not None else None,
+            # Apply the upstream loss scaling before autograd casts these gradients to the head dtype.
+            grad_weight,
+            grad_bias,
         )
         return loss
 
