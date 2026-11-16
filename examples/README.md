@@ -49,6 +49,32 @@ llamafactory-cli train examples/train_lora/qwen3_lora_pretrain.yaml
 llamafactory-cli train examples/train_lora/qwen3_lora_sft.yaml
 ```
 
+#### Nanbeige4.2 (Looped Transformer)
+
+Both Base and Instruct share `model_type=nanbeige` (require `trust_remote_code: true`, `use_fast_tokenizer: false`).
+
+| Goal | Config |
+| ---- | ------ |
+| Instruct chat SFT (recommended) | `examples/train_lora/nanbeige42_lora_sft.yaml` |
+| Instruct QLoRA (low VRAM) | `examples/train_qlora/nanbeige42_lora_sft_otfq.yaml` |
+| Instruct full SFT (multi-GPU) | `examples/train_full/nanbeige42_full_sft.yaml` |
+| Base continued pre-training | `examples/train_lora/nanbeige42_base_lora_pretrain.yaml` |
+| Base → chat SFT (adds ChatML specials) | `examples/train_lora/nanbeige42_base_lora_sft.yaml` |
+| Base → chat full SFT | `examples/train_full/nanbeige42_base_full_sft.yaml` |
+
+Notes:
+
+- Prefer **Instruct** (`Nanbeige/Nanbeige4.2-3B`) for chat SFT; tokenizer already has `<|im_start|>` / `<think>` tokens.
+- **Do not** set `template: nanbeige` on raw Base without `add_special_tokens` — those strings map to UNK.
+- Templates: `nanbeige` (thinking) / `nanbeige_nothink` (empty thinking block).
+- `num_loops=2` roughly doubles forward compute vs a plain 22-layer model.
+
+```bash
+llamafactory-cli train examples/train_lora/nanbeige42_lora_sft.yaml
+llamafactory-cli train examples/train_lora/nanbeige42_base_lora_pretrain.yaml
+llamafactory-cli train examples/train_lora/nanbeige42_base_lora_sft.yaml
+```
+
 #### Multimodal Supervised Fine-Tuning
 
 ```bash
