@@ -1869,6 +1869,41 @@ register_model_group(
 
 register_model_group(
     models={
+        "Ling-3.0-tiny": {
+            DownloadSource.DEFAULT: "inclusionAI/Ling-3.0-tiny",
+            DownloadSource.MODELSCOPE: "LLM-Research/Ling-3.0-tiny",
+        },
+        "Ling-3.0-tiny-FP8": {
+            DownloadSource.DEFAULT: "inclusionAI/Ling-3.0-tiny-fp8",
+            DownloadSource.MODELSCOPE: "LLM-Research/Ling-3.0-tiny-fp8",
+        },
+        "Ling-3.0-tiny-INT4": {
+            DownloadSource.DEFAULT: "inclusionAI/Ling-3.0-tiny-int4",
+            DownloadSource.MODELSCOPE: "LLM-Research/Ling-3.0-tiny-int4",
+        },
+        "Ling-3.0-flash": {
+            DownloadSource.DEFAULT: "inclusionAI/Ling-3.0-flash",
+            DownloadSource.MODELSCOPE: "LLM-Research/Ling-3.0-flash",
+        },
+        "Ling-3.0-flash-FP8": {
+            DownloadSource.DEFAULT: "inclusionAI/Ling-3.0-flash-fp8",
+            DownloadSource.MODELSCOPE: "LLM-Research/Ling-3.0-flash-fp8",
+        },
+        "Ling-3.0-flash-FP4": {
+            DownloadSource.DEFAULT: "inclusionAI/Ling-3.0-flash-fp4",
+            DownloadSource.MODELSCOPE: "LLM-Research/Ling-3.0-flash-fp4",
+        },
+        "Ling-3.0-flash-INT4": {
+            DownloadSource.DEFAULT: "inclusionAI/Ling-3.0-flash-int4",
+            DownloadSource.MODELSCOPE: "LLM-Research/Ling-3.0-flash-int4",
+        },
+    },
+    template="bailing_v2",
+)
+
+
+register_model_group(
+    models={
         "MiMo-7B-Base": {
             DownloadSource.DEFAULT: "XiaomiMiMo/MiMo-7B-Base",
             DownloadSource.MODELSCOPE: "XiaomiMiMo/MiMo-7B-Base",
@@ -1933,6 +1968,18 @@ register_model_group(
         },
     },
     template="qwen2_vl",
+    multimodal=True,
+)
+
+
+register_model_group(
+    models={
+        "Muse-Glimmer-30B": {
+            DownloadSource.DEFAULT: "meta-models/Muse-Glimmer-30B",
+            DownloadSource.MODELSCOPE: "meta-models/Muse-Glimmer-30B",
+        },
+    },
+    template="muse_glimmer",
     multimodal=True,
 )
 
