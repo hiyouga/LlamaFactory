@@ -14,8 +14,9 @@
 
 import json
 from enum import StrEnum, unique
-from typing import TYPE_CHECKING, Any, Optional, TypedDict, Union
+from typing import TYPE_CHECKING, Any, Optional, TypedDict, Union, get_args, get_type_hints
 
+import datasets
 import fsspec
 from datasets import DatasetDict, concatenate_datasets, interleave_datasets
 
@@ -70,6 +71,7 @@ def merge_dataset(
             "interleave_over": "all_exhausted",
             "interleave_once": "all_exhausted_without_replacement",
         }[data_args.mix_strategy]
+        _check_stopping_strategy(strategy_map)
 
         return interleave_datasets(
             datasets=all_datasets,
@@ -80,6 +82,23 @@ def merge_dataset(
 
     else:
         raise ValueError(f"Unknown mixing strategy: {data_args.mix_strategy}.")
+
+
+def _check_stopping_strategy(stopping_strategy: str) -> None:
+    r"""Raise an actionable error when the installed ``datasets`` lacks the strategy.
+
+    ``interleave_once`` needs ``all_exhausted_without_replacement``, which only
+    exists in newer ``datasets`` releases than the current upper bound (4.0.0);
+    reading the signature literal avoids hard-coding a version number.
+    """
+    hints = get_type_hints(interleave_datasets)
+    supported = get_args(hints.get("stopping_strategy"))
+    if stopping_strategy not in supported:
+        raise ValueError(
+            f"`{stopping_strategy}` requires a newer `datasets` version; "
+            f"installed {datasets.__version__} supports {list(supported)}. "
+            "Use `mix_strategy=concat` or upgrade `datasets`."
+        )
 
 
 def split_dataset(
