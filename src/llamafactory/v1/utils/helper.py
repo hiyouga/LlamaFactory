@@ -125,6 +125,8 @@ def log1mexp(x: Tensor) -> Tensor:
     turn the gradients into NaN.
 
     """
+    # Clamp each input to its branch domain: torch.where evaluates both branches,
+    # so this keeps the unselected branch finite; on the selected branch, it is a no-op.
     hi = torch.log(-torch.expm1(x.clamp(min=-_LOG2)))
     lo = torch.log1p(-torch.exp(x.clamp(max=-_LOG2)))
     return torch.where(x > -_LOG2, hi, lo)
