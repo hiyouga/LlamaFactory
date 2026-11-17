@@ -8,7 +8,7 @@ on:
     paths:
       - "**/*.py"
       - "pyproject.toml"
-      - "requirements/fsdpturbo.txt"
+      - "requirements/*.txt"
       - "Makefile"
       - ".github/workflows/*.yml"
   pull_request:
@@ -17,7 +17,7 @@ on:
     paths:
       - "**/*.py"
       - "pyproject.toml"
-      - "requirements/fsdpturbo.txt"
+      - "requirements/*.txt"
       - "Makefile"
       - ".github/workflows/*.yml"
 
