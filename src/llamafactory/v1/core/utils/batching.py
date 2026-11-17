@@ -219,7 +219,7 @@ class BatchGenerator(Iterator):
         )
 
     def _init_data_provider(self) -> None:
-        if len(self.dataset) != -1:
+        if not getattr(self.dataset, "streaming", False):
             sampler = StatefulDistributedSampler(
                 self.dataset,
                 num_replicas=DistributedInterface().get_world_size(Dim.DP),
