@@ -110,7 +110,8 @@ def v4_cp_model(monkeypatch):
     ("positions", "mask", "message"),
     [
         ([[0, 0, 1, 2]], None, "packed sequences"),
-        ([[0, 1, 3, 4]], None, "contiguous positions"),
+        ([[0, 1, 3, 4]], None, "contiguous zero-based positions"),
+        ([[1, 2, 3, 4]], None, "zero-based positions"),
         ([[[0, 1, 2, 3]]], None, "2D position_ids"),
         ([[0, 1, 2, 3]], [[[[0.0] * 4] * 4]], "custom masks"),
         ([[0, 1, 2, 3]], [[1.0, 0.5, 1.0, 1.0]], "binary 2D padding mask"),
@@ -143,11 +144,11 @@ def test_deepseek_v4_rejects_packed_boundary_between_cp_ranks(v4_cp_model):
 @pytest.mark.parametrize(
     ("positions", "mask"),
     [
-        ([[1, 2, 3, 4]], None),
-        ([[1, 2, 0, 0]], [[1, 1, 0, 0]]),
-        ([[0, 0, 1, 2]], [[0, 0, 1, 1]]),
+        ([[0, 1, 2, 3]], None),
+        ([[0, 1, 0, 0]], [[1, 1, 0, 0]]),
+        ([[0, 1, 2, 3]], [[0, 0, 1, 1]]),
         ([[0, 0, 0, 0]], [[0, 0, 0, 0]]),
-        ([[5, 6, 7, 8]], [[1, 1, 1, 0], [0, 1, 1, 1]]),
+        ([[0, 1, 2, 3]], [[1, 1, 1, 0], [0, 1, 1, 1]]),
     ],
 )
 def test_deepseek_v4_accepts_contiguous_positions_with_ordinary_padding(v4_cp_model, positions, mask):
@@ -222,22 +223,39 @@ def _check_attention(rank, ratio, length):
             dist.all_reduce(parameter.grad)
             torch.testing.assert_close(parameter.grad, ref_parameter.grad, atol=2e-5, rtol=2e-4, msg=name)
 
+    if (ratio, length) in ((4, 132), (128, 132)):
+        future = ratio - 1
+        changed = hidden.detach().clone()
+        changed[:, future] += torch.linspace(-3, 3, 32, dtype=hidden.dtype)
+        with torch.no_grad():
+            perturbed, _ = reference(changed, embeddings(changed, positions), positions, mask)
+            torch.testing.assert_close(perturbed[:, :future], expected.detach()[:, :future], atol=0, rtol=0)
+            local_changed = changed.chunk(2, dim=1)[rank].contiguous()
+            cp_perturbed, _ = candidate(
+                local_changed, embeddings(local_changed, local_positions), local_positions, local_mask
+            )
+            past_local = max(0, min(local_hidden.shape[1], future - rank * local_hidden.shape[1]))
+            torch.testing.assert_close(cp_perturbed[:, :past_local], actual.detach()[:, :past_local], atol=0, rtol=0)
+        # Past outputs must also have no differentiable path to the future token.
+        causal_hidden = local_hidden.detach().clone().requires_grad_()
+        causal, _ = candidate(causal_hidden, embeddings(causal_hidden, local_positions), local_positions, local_mask)
+        future_grad = torch.autograd.grad(causal[:, :past_local].sum(), causal_hidden)[0]
+        local_future = future - rank * local_hidden.shape[1]
+        if 0 <= local_future < local_hidden.shape[1]:
+            assert torch.count_nonzero(future_grad[:, local_future]) == 0
 
-def _check_full_model(rank):
+
+def _check_full_model(rank, cp_size, rendered):
     from types import SimpleNamespace
 
     import torch.nn.functional as F
     from torch.distributed.device_mesh import init_device_mesh
 
     from llamafactory.v1.plugins.model_plugins.parallelization import hook, sequence_parallel
-    from llamafactory.v1.utils.packages import is_transformers_version_greater_than
 
-    # HF's V4 full-model training/cache contract changed after 5.8; the pinned integration uses 5.16.
-    if not is_transformers_version_greater_than("5.16.0"):
-        return
     torch.manual_seed(42)
     config = hf.DeepseekV4Config(
-        vocab_size=64,
+        vocab_size=512,
         hidden_size=32,
         head_dim=16,
         q_lora_rank=16,
@@ -261,32 +279,34 @@ def _check_full_model(rank):
     config._attn_implementation = "eager"
     config._experts_implementation = "eager"
     reference = hf.DeepseekV4ForCausalLM(config).double()
-    reference.model.layers[0].mlp.gate.tid2eid.copy_((torch.arange(64)[:, None] + torch.arange(2)[None, :]) % 4)
+    reference.model.layers[0].mlp.gate.tid2eid.copy_((torch.arange(512)[:, None] + torch.arange(2)[None, :]) % 4)
     candidate = copy.deepcopy(reference)
     reference.gradient_checkpointing_enable({"use_reentrant": False})
     candidate.gradient_checkpointing_enable({"use_reentrant": False})
-    mesh = init_device_mesh("cpu", (2,), mesh_dim_names=("cp",))
+    mesh = init_device_mesh("cpu", (cp_size,), mesh_dim_names=("cp",))
     interface = SimpleNamespace(
         current_device=torch.device("cpu"), get_device_mesh=lambda _: mesh, get_group=lambda _: mesh.get_group()
     )
     old_hook, old_routing = hook.DistributedInterface, sequence_parallel.DistributedInterface
     hook.DistributedInterface = sequence_parallel.DistributedInterface = lambda: interface
     try:
-        sequence_parallel.apply_sequence_parallel(candidate, 2)
-        ids = torch.randint(0, 64, (2, 131))
-        positions = torch.arange(1, 132).unsqueeze(0).expand(2, -1)
+        sequence_parallel.apply_sequence_parallel(candidate, cp_size)
+        ids = torch.tensor(rendered["input_ids"]).unsqueeze(0).expand(2, -1)
+        positions = torch.tensor(rendered["position_ids"]).unsqueeze(0).expand(2, -1)
+        labels = torch.tensor(rendered["labels"]).unsqueeze(0).expand(2, -1)
+        weights = torch.tensor(rendered["loss_weights"]).unsqueeze(0).expand(2, -1)
+        padding = (-ids.shape[-1]) % cp_size
         batch = {
             "input_ids": ids,
             "position_ids": positions,
             "attention_mask": torch.ones_like(ids),
-            "labels": ids.clone(),
-            "loss_weights": torch.ones_like(ids, dtype=torch.float32),
+            "labels": labels,
+            "loss_weights": weights,
         }
         expected = reference(
-            input_ids=F.pad(ids, (0, 1)),
-            position_ids=F.pad(positions, (0, 1)),
-            attention_mask=F.pad(torch.ones_like(ids), (0, 1)),
-            labels=F.pad(ids, (0, 1), value=-100),
+            input_ids=F.pad(ids, (0, padding)),
+            attention_mask=F.pad(torch.ones_like(ids), (0, padding)),
+            labels=F.pad(labels, (0, padding), value=-100),
             use_cache=False,
         ).loss
         actual = sequence_parallel.sequence_parallel_loss(candidate, batch)
@@ -298,7 +318,7 @@ def _check_full_model(rank):
                 assert param.grad is None, name
             else:
                 dist.all_reduce(param.grad)
-                param.grad.div_(2)
+                param.grad.div_(cp_size)
                 torch.testing.assert_close(param.grad, ref.grad, rtol=3e-4, atol=3e-5, msg=name)
     finally:
         hook.DistributedInterface, sequence_parallel.DistributedInterface = old_hook, old_routing
@@ -309,7 +329,6 @@ def _worker(rank, rendezvous):
     try:
         for ratio, length in ((0, 132), (4, 132), (128, 126), (128, 132), (4, 256), (128, 256)):
             _check_attention(rank, ratio, length)
-        _check_full_model(rank)
     finally:
         dist.destroy_process_group()
 
@@ -317,3 +336,30 @@ def _worker(rank, rendezvous):
 def test_native_attention_and_compressors_preserve_full_sequence_forward_and_backward():
     with tempfile.TemporaryDirectory() as directory:
         mp.spawn(_worker, args=(directory + "/group",), nprocs=2, join=True)
+
+
+def _full_model_worker(rank, rendezvous, cp_size, rendered):
+    dist.init_process_group("gloo", init_method="file://" + rendezvous, rank=rank, world_size=cp_size)
+    try:
+        _check_full_model(rank, cp_size, rendered)
+    finally:
+        dist.destroy_process_group()
+
+
+@pytest.mark.parametrize("cp_size", [2, 4])
+def test_rendered_zero_based_positions_match_native_full_model(tokenizer, cp_size):
+    from llamafactory.v1.core.rendering import create_renderer
+    from llamafactory.v1.utils.packages import is_transformers_version_greater_than
+
+    if not is_transformers_version_greater_than("5.16.0"):
+        pytest.skip("Native V4 full-model CP requires Transformers >=5.16")
+    sample = {
+        "messages": [
+            {"role": "user", "content": [{"type": "text", "value": "x " * 64}]},
+            {"role": "assistant", "content": [{"type": "text", "value": "answer"}]},
+        ]
+    }
+    batch = create_renderer(tokenizer, SimpleNamespace(model_type="deepseek_v4")).process_samples([sample])[0]
+    assert batch["position_ids"] == list(range(len(batch["input_ids"])))
+    with tempfile.TemporaryDirectory() as directory:
+        mp.spawn(_full_model_worker, args=(directory + "/group", cp_size, batch), nprocs=cp_size, join=True)

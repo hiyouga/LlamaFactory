@@ -67,6 +67,9 @@ class ModelEngine:
         self._sync_chat_template()
         self.model_config = self._init_model_config()
         """Model configuration."""
+        self.attn_implementation = self.args.flash_attn or (
+            "eager" if getattr(self.model_config, "model_type", None) == "deepseek_v4" else "sdpa"
+        )
         self.renderer = create_renderer(
             self.processor, self.model_config, use_model_template=not bool(self.args.custom_chat_template)
         )
@@ -131,6 +134,10 @@ class ModelEngine:
         )
         if getattr(config, "model_type", None) == "xing4_0":
             check_version("transformers>=5.4.0", mandatory=True)
+        if getattr(config, "model_type", None) == "deepseek_v4":
+            check_version("transformers>=5.16.0", mandatory=True)
+            if self.args.flash_attn not in (None, "eager"):
+                raise ValueError("DeepSeek V4 requires `flash_attn: eager`; omit it to select eager automatically.")
 
         return config
 
@@ -148,7 +155,7 @@ class ModelEngine:
             init_device = DistributedInterface().current_device
 
         init_kwargs = {} if self._deepspeed_zero3_enabled else {"device_map": init_device}
-        logger.info_rank0(f"Using attention implementation: {self.args.flash_attn}.")
+        logger.info_rank0(f"Using attention implementation: {self.attn_implementation}.")
 
         if self.args.quant_config is not None:
             from ..plugins.model_plugins.quantization import QuantizationPlugin
@@ -196,13 +203,13 @@ class ModelEngine:
         if init_device.type == DeviceType.META:
             assert self.args.quant_config is None, "Quantization is not supported with meta device."
             with init_empty_weights():
-                model = AutoClass.from_config(self.model_config, attn_implementation=self.args.flash_attn)
+                model = AutoClass.from_config(self.model_config, attn_implementation=self.attn_implementation)
         else:
             model = AutoClass.from_pretrained(
                 self.args.model,
                 config=self.model_config,
                 dtype="auto",
-                attn_implementation=self.args.flash_attn,
+                attn_implementation=self.attn_implementation,
                 trust_remote_code=self.args.trust_remote_code,
                 **init_kwargs,
             )

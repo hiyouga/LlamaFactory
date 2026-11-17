@@ -17,36 +17,11 @@
 from types import SimpleNamespace
 
 import pytest
-from tokenizers import Tokenizer, decoders, models, pre_tokenizers, trainers
+from tokenizers import Tokenizer, models
 from transformers import PreTrainedTokenizerFast
 
 from llamafactory.v1.core.rendering import Renderer, create_renderer
-from llamafactory.v1.models.deepseek_v4.template import DeepseekV4Renderer
-
-
-SPECIALS = ["<｜begin▁of▁sentence｜>", "<｜end▁of▁sentence｜>", "<｜User｜>", "<｜Assistant｜>", "<think>", "</think>"]
-ORIGINAL_TEMPLATE = "{% for m in messages %}{{ m['role'] + ': ' + m['content'] + '\\n' }}{% endfor %}assistant: "
-
-
-@pytest.fixture
-def tokenizer():
-    backend = Tokenizer(models.BPE())
-    backend.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
-    backend.decoder = decoders.ByteLevel()
-    backend.train_from_iterator(
-        ["user: hi\nassistant: hello\nassistant: ", "system text analysis answer 中文问题你好 second turn"] * 10,
-        trainers.BpeTrainer(
-            vocab_size=300, special_tokens=SPECIALS, initial_alphabet=pre_tokenizers.ByteLevel.alphabet()
-        ),
-    )
-    return PreTrainedTokenizerFast(
-        tokenizer_object=backend,
-        bos_token=SPECIALS[0],
-        eos_token=SPECIALS[1],
-        pad_token=SPECIALS[1],
-        additional_special_tokens=SPECIALS[2:],
-        chat_template=ORIGINAL_TEMPLATE,
-    )
+from llamafactory.v1.models.deepseek_v4.template import DEEPSEEK_V4_CHAT_TEMPLATE, DeepseekV4Renderer
 
 
 def message(role, text, reasoning=None):
@@ -56,8 +31,9 @@ def message(role, text, reasoning=None):
     return {"role": role, "content": blocks}
 
 
-def test_chat_matches_experiment_template_without_editing_checkpoint(tokenizer, tmp_path):
+def test_chat_matches_official_text_format_without_editing_checkpoint(tokenizer, tmp_path):
     answer = " hello你好"
+    before_template = tokenizer.chat_template
     tokenizer.save_pretrained(tmp_path)
     before = {p.name: p.read_bytes() for p in tmp_path.iterdir() if p.is_file()}
     renderer = create_renderer(tokenizer, SimpleNamespace(model_type="deepseek_v4"))
@@ -68,7 +44,7 @@ def test_chat_matches_experiment_template_without_editing_checkpoint(tokenizer, 
     assert result["input_ids"] == tokenizer.encode(full, add_special_tokens=False)
     assert result["labels"][: len(prefix)] == [-100] * len(prefix)
     assert result["labels"][len(prefix) :] == result["input_ids"][len(prefix) :]
-    assert tokenizer.chat_template == ORIGINAL_TEMPLATE
+    assert tokenizer.chat_template == before_template
     assert before == {p.name: p.read_bytes() for p in tmp_path.iterdir() if p.is_file()}
 
 
@@ -120,18 +96,31 @@ def test_tools_are_not_silently_discarded(tokenizer):
 
 
 @pytest.mark.parametrize(
-    ("model_type", "custom"), [("deepseek_v4", None), ("deepseek_v4", "explicit user template"), ("qwen3", None)]
+    ("model_type", "custom", "attention"),
+    [
+        ("deepseek_v4", None, None),
+        ("deepseek_v4", "explicit user template", None),
+        ("qwen3", None, None),
+        ("qwen3", None, "eager"),
+        ("qwen3", None, "flash_attention_2"),
+    ],
 )
-def test_model_engine_selects_adapter_and_respects_custom_template(tokenizer, monkeypatch, model_type, custom):
+def test_model_engine_selects_adapter_and_respects_custom_template(
+    tokenizer, monkeypatch, model_type, custom, attention
+):
     from llamafactory.v1.config.model_args import ModelArguments
+
+    original_template = tokenizer.chat_template
     from llamafactory.v1.core.model_engine import ModelEngine
 
     monkeypatch.setattr(ModelEngine, "_init_processor", lambda self: tokenizer)
     monkeypatch.setattr(ModelEngine, "_init_model_config", lambda self: SimpleNamespace(model_type=model_type))
     monkeypatch.setattr(ModelEngine, "_init_model", lambda self: object())
-    engine = ModelEngine(ModelArguments(model="unused-local-model", custom_chat_template=custom))
-    assert type(engine.renderer) is (DeepseekV4Renderer if model_type == "deepseek_v4" and not custom else Renderer)
-    assert tokenizer.chat_template == (custom or ORIGINAL_TEMPLATE)
+    engine = ModelEngine(ModelArguments(model="unused-local-model", custom_chat_template=custom, flash_attn=attention))
+    assert type(engine.renderer) is (DeepseekV4Renderer if model_type == "deepseek_v4" else Renderer)
+    assert engine.renderer.position_start == (0 if model_type == "deepseek_v4" else 1)
+    assert engine.attn_implementation == (attention or ("eager" if model_type == "deepseek_v4" else "sdpa"))
+    assert tokenizer.chat_template == (custom or original_template)
 
 
 def test_missing_checkpoint_template_does_not_install_chatml(tokenizer):
@@ -140,3 +129,94 @@ def test_missing_checkpoint_template_does_not_install_chatml(tokenizer):
     result = renderer.render_messages([message("user", "hi"), message("assistant", "hello")])
     assert result["input_ids"]
     assert tokenizer.chat_template is None
+
+
+@pytest.mark.parametrize(
+    ("thinking_mode", "drop_thinking", "old_turn", "current_turn"),
+    [
+        ("chat", True, "</think>hello", "</think>answer"),
+        ("thinking", True, "</think>hello", "<think>analysis</think>answer"),
+        ("thinking", False, "<think>old analysis</think>hello", "<think>analysis</think>answer"),
+    ],
+)
+def test_multiturn_tokens_match_official_encoding(tokenizer, thinking_mode, drop_thinking, old_turn, current_turn):
+    # Golden text from encoding_dsv4.py at DeepSeek-V4-Flash revision 60d8d70770c6776ff598c94bb586a859a38244f1.
+    messages = [
+        message("system", "system text"),
+        message("user", "hi"),
+        message("assistant", "hello", reasoning="old analysis"),
+        message("user", "second turn"),
+        message("assistant", "answer", reasoning="analysis"),
+    ]
+    result = DeepseekV4Renderer(tokenizer).render_messages(
+        messages, thinking_mode=thinking_mode, drop_thinking=drop_thinking
+    )
+    expected = (
+        "<｜begin▁of▁sentence｜>system text<｜User｜>hi<｜Assistant｜>"
+        + old_turn
+        + "<｜end▁of▁sentence｜><｜User｜>second turn<｜Assistant｜>"
+        + current_turn
+        + "<｜end▁of▁sentence｜>"
+    )
+    assert result["input_ids"] == tokenizer.encode(expected, add_special_tokens=False)
+    target = ("analysis</think>" if thinking_mode == "thinking" else "") + "answer<｜end▁of▁sentence｜>"
+    assert [v for v in result["labels"] if v != -100] == tokenizer.encode(target, add_special_tokens=False)
+
+
+@pytest.mark.parametrize(("model_type", "custom"), [("deepseek_v4", False), ("deepseek_v4", True), ("qwen3", False)])
+def test_position_origin_including_custom_templates_and_preference_pairs(tokenizer, model_type, custom):
+    tokenizer.chat_template = DEEPSEEK_V4_CHAT_TEMPLATE
+    renderer = create_renderer(tokenizer, SimpleNamespace(model_type=model_type), use_model_template=not custom)
+    origin = 0 if model_type == "deepseek_v4" else 1
+    messages = [message("user", "hi"), message("assistant", "answer")]
+    single, pair = renderer.process_samples(
+        [{"messages": messages}, {"chosen_messages": messages, "rejected_messages": messages}]
+    )
+    assert single["position_ids"] == list(range(origin, origin + len(single["input_ids"])))
+    boundary = pair["token_type_ids"].index(2)
+    assert pair["position_ids"] == list(range(origin, origin + boundary)) * 2
+
+
+@pytest.mark.parametrize("attention", [None, "eager", "sdpa", "flash_attention_2"])
+def test_v4_attention_capabilities_checked_before_model_loading(tokenizer, monkeypatch, attention):
+    from llamafactory.v1.config.model_args import ModelArguments
+    from llamafactory.v1.core import model_engine
+
+    requirements = []
+    loaded = []
+    monkeypatch.setattr(model_engine.ModelEngine, "_init_processor", lambda self: tokenizer)
+    monkeypatch.setattr(
+        model_engine.AutoConfig, "from_pretrained", lambda *a, **k: SimpleNamespace(model_type="deepseek_v4")
+    )
+    monkeypatch.setattr(model_engine, "check_version", lambda requirement, **kwargs: requirements.append(requirement))
+    monkeypatch.setattr(model_engine.ModelEngine, "_init_model", lambda self: loaded.append(self.attn_implementation))
+    args = ModelArguments(model="unused-local-model", flash_attn=attention)
+    if attention not in (None, "eager"):
+        with pytest.raises(ValueError, match="requires.*eager"):
+            model_engine.ModelEngine(args)
+        assert not loaded
+    else:
+        model_engine.ModelEngine(args)
+        assert loaded == ["eager"]
+    assert requirements == ["transformers>=5.16.0"]
+
+
+def test_v4_old_transformers_is_rejected_during_configuration(tokenizer, monkeypatch):
+    from llamafactory.v1.config.model_args import ModelArguments
+    from llamafactory.v1.core import model_engine
+
+    monkeypatch.setattr(model_engine.ModelEngine, "_init_processor", lambda self: tokenizer)
+    monkeypatch.setattr(
+        model_engine.AutoConfig, "from_pretrained", lambda *a, **k: SimpleNamespace(model_type="deepseek_v4")
+    )
+
+    def reject(requirement, mandatory):
+        assert requirement == "transformers>=5.16.0" and mandatory
+        raise ImportError("transformers>=5.16.0 required")
+
+    monkeypatch.setattr(model_engine, "check_version", reject)
+    monkeypatch.setattr(
+        model_engine.ModelEngine, "_init_model", lambda self: pytest.fail("must reject before loading weights")
+    )
+    with pytest.raises(ImportError, match="5.16"):
+        model_engine.ModelEngine(ModelArguments(model="unused-local-model"))

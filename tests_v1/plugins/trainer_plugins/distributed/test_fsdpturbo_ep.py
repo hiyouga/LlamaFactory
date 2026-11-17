@@ -12,10 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import copy
+import tempfile
 from types import SimpleNamespace
 
 import pytest
 import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+from torch.distributed.device_mesh import init_device_mesh
+from torch.distributed.tensor import distribute_tensor
 
 from llamafactory.v1.plugins.trainer_plugins.distributed.fsdpturbo import (
     FSDPTurboEPModelSpec,
@@ -209,3 +215,94 @@ def test_deepseek_v4_ep_model_spec():
 def test_ep_dispatcher_rejects_unknown_mode():
     with pytest.raises(ValueError, match="ep_dispatcher"):
         FSDPTurboParams(ep_dispatcher="unknown")
+
+
+def _qwen_expert_contract(model_type, ep_mesh, device):
+    from fsdp_turbo.distributed.expert_parallel.expert_parallel import expert_parallelize_modules
+    from fsdp_turbo.fsdp_turbo_config import EPPlanConfig
+
+    if model_type == "qwen3_moe":
+        from transformers.models.qwen3_moe import modeling_qwen3_moe as hf
+
+        config = hf.Qwen3MoeConfig(hidden_size=16, moe_intermediate_size=8, num_experts=8)
+        block = hf.Qwen3MoeSparseMoeBlock(config)
+    else:
+        from transformers.models.qwen3_5_moe import modeling_qwen3_5_moe as hf
+
+        config = hf.Qwen3_5MoeTextConfig(hidden_size=16, moe_intermediate_size=8, num_experts=8)
+        block = hf.Qwen3_5MoeSparseMoeBlock(config)
+    config._experts_implementation = "eager"
+    for parameter in block.experts.parameters():
+        torch.nn.init.normal_(parameter, mean=0.1, std=0.02)
+    block.to(device)
+    reference = copy.deepcopy(block.experts)
+    had_alias = hasattr(block.experts, "hidden_size")
+    model = torch.nn.Module()
+    model.config = SimpleNamespace(model_type=model_type)
+    model.model = torch.nn.Module()
+    parent = model.model
+    if model_type == "qwen3_5_moe":
+        parent.language_model = torch.nn.Module()
+        parent = parent.language_model
+    layer = torch.nn.Module()
+    layer.mlp = block
+    parent.layers = torch.nn.ModuleList([layer])
+    spec = FSDPTurboEPModelSpec.get(model)
+    spec.prepare(model)
+    plan = EPPlanConfig(apply_modules=spec.ep_modules, use_fused_ops=False)
+    expert_parallelize_modules(model, ep_mesh, plan)
+    assert hasattr(block.experts, "hidden_size") == had_alias
+
+    hidden = torch.randn(6, 16, device="cpu").to(device).requires_grad_()
+    original = hidden.detach().clone().requires_grad_()
+    indices = (torch.arange(12, device="cpu").reshape(6, 2) % 8).to(device)
+    weights = torch.tensor([0.4, 0.6], device=device).expand(6, -1)
+    expected = reference(original, indices, weights)
+    actual = block.experts(hidden, indices, weights)
+    torch.testing.assert_close(actual, expected, rtol=1e-5, atol=1e-6)
+    expected.square().sum().backward()
+    actual.square().sum().backward()
+    torch.testing.assert_close(hidden.grad, original.grad, rtol=1e-5, atol=1e-6)
+    for (name, parameter), (_, ref) in zip(
+        block.experts.named_parameters(), reference.named_parameters(), strict=True
+    ):
+        oracle = distribute_tensor(ref.grad, parameter.device_mesh, parameter.placements, src_data_rank=None)
+        # EP-only dispatch accumulates this pair's inputs; EFSDP normally supplies the DP average.
+        torch.testing.assert_close(
+            parameter.grad.to_local() / ep_mesh.size(), oracle.to_local(), rtol=1e-5, atol=1e-6, msg=name
+        )
+
+
+def _qwen_accelerator_worker(rank, rendezvous, device_type):
+    from fsdp_turbo.utils.device import set_accelerator_compatible
+
+    set_accelerator_compatible()
+    torch.get_device_module(device_type).set_device(rank)
+    torch.set_float32_matmul_precision("highest")
+    if device_type == "npu":
+        torch.get_device_module(device_type).matmul.allow_hf32 = False
+    dist.init_process_group(
+        "hccl" if device_type == "npu" else "nccl", init_method="file://" + rendezvous, rank=rank, world_size=2
+    )
+    try:
+        mesh = init_device_mesh(device_type, (2,), mesh_dim_names=("ep",))
+        for model_type in ("qwen3_moe", "qwen3_5_moe"):
+            torch.manual_seed(43)
+            _qwen_expert_contract(model_type, mesh, torch.device(device_type, rank))
+    finally:
+        dist.destroy_process_group()
+
+
+def test_qwen_native_backend_ep_forward_backward_without_legacy_alias(monkeypatch):
+    from llamafactory.v1.accelerator.helper import get_current_accelerator, get_device_count
+    from llamafactory.v1.utils.packages import is_transformers_version_greater_than
+
+    device = get_current_accelerator()
+    if device.type not in ("npu", "cuda") or get_device_count() < 2:
+        pytest.skip("Requires two admitted NPU/CUDA devices")
+    if not is_transformers_version_greater_than("5.16.0"):
+        pytest.skip("The pinned backend's native expert contract requires Transformers >=5.16")
+    monkeypatch.setenv("EP_BINCOUNT_DISPATCH", "1")
+    pytest.importorskip("fsdp_turbo.distributed.expert_parallel.expert_parallel")
+    with tempfile.TemporaryDirectory() as directory:
+        mp.spawn(_qwen_accelerator_worker, args=(directory + "/group", device.type), nprocs=2, join=True)
