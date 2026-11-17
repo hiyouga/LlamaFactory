@@ -19,8 +19,8 @@ sibling modules:
   - ``format``  -- v1<->HF message conversion
   - ``escape``  -- special-token escaping (prompt-injection hardening)
 
-Note: ``position_ids`` are assigned by ``process_samples`` (1-based); multimodal (mrope) position
-ids are expected to be recomputed by the model/trainer.
+Note: ``position_ids`` are assigned by ``process_samples`` using the renderer's position origin;
+multimodal (mrope) position ids are expected to be recomputed by the model/trainer.
 """
 
 import json
@@ -52,7 +52,7 @@ def _render_messages(
 ) -> ModelInput:
     r"""Render messages using the model's own chat template, locating supervision by a prompt/full diff.
 
-    Note: ``position_ids`` are not produced here; ``process_samples`` assigns a 1-based range.
+    Note: ``position_ids`` are assigned by ``process_samples``, not by this function.
     """
     tokenizer = get_tokenizer(processor)
     is_multimodal = not is_tokenizer(processor)
@@ -175,6 +175,8 @@ def _render_messages(
 
 
 class Renderer:
+    position_start = 1
+
     def __init__(self, processor: Processor, config=None):
         # Keep ``config`` for compatibility with older callers. Supervision uses a
         # prompt/full token diff; model-specific template selection lives in create_renderer.
@@ -276,7 +278,9 @@ class Renderer:
             rendered: list[ModelInput] = []
             if "messages" in sample:
                 model_input = self.render_messages(sample["messages"], sample.get("tools"))
-                model_input["position_ids"] = list(range(1, len(model_input["input_ids"]) + 1))
+                model_input["position_ids"] = list(
+                    range(self.position_start, self.position_start + len(model_input["input_ids"]))
+                )
                 rendered.append(model_input)
             elif "chosen_messages" in sample and "rejected_messages" in sample:
                 chosen_input = self.render_messages(sample["chosen_messages"], sample.get("tools"))
@@ -290,11 +294,10 @@ class Renderer:
                     loss_weights=chosen_input["loss_weights"] + rejected_input["loss_weights"],
                     token_type_ids=chosen_input["token_type_ids"] + rejected_input["token_type_ids"],
                 )
-                # chosen and rejected are independent sequences; position ids must restart at 1 for
-                # each (a single continuous range would offset rejected's positional embeddings).
-                model_input["position_ids"] = list(range(1, len(chosen_input["input_ids"]) + 1)) + list(
-                    range(1, len(rejected_input["input_ids"]) + 1)
-                )
+                # Chosen and rejected are independent sequences, so restart the position policy for each.
+                model_input["position_ids"] = list(
+                    range(self.position_start, self.position_start + len(chosen_input["input_ids"]))
+                ) + list(range(self.position_start, self.position_start + len(rejected_input["input_ids"])))
 
                 for key in _MULTIMODAL_PASSTHROUGH_KEYS:
                     tensors = [inp[key] for inp in (chosen_input, rejected_input) if key in inp]
@@ -322,8 +325,8 @@ class Renderer:
 
 def create_renderer(processor: Processor, config: HFConfig, *, use_model_template: bool = True) -> Renderer:
     """Select a renderer by model type, preserving explicit user template overrides."""
-    if use_model_template and getattr(config, "model_type", None) == "deepseek_v4":
+    if getattr(config, "model_type", None) == "deepseek_v4":
         from ...models.deepseek_v4.template import DeepseekV4Renderer
 
-        return DeepseekV4Renderer(processor)
+        return DeepseekV4Renderer(processor, use_model_template=use_model_template)
     return Renderer(processor)

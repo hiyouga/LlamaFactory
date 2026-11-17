@@ -12,7 +12,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from functools import wraps
 from types import MethodType
 
 import torch
@@ -43,13 +42,12 @@ def validate_deepseek_v4_sequence_parallel_inputs(
     else:
         valid = torch.ones_like(position_ids, dtype=torch.bool)
 
-    # A single sequence has one position offset, ignoring ordinary left/right padding.
+    # Unmasked positions follow global token indices; padding entries are ignored.
     offsets = position_ids - torch.arange(position_ids.shape[-1], device=position_ids.device)
     offsets, valid = torch.broadcast_tensors(offsets, valid)
-    first_valid = valid.int().argmax(dim=-1, keepdim=True)
-    if torch.any(valid & (offsets != offsets.gather(-1, first_valid))):
+    if torch.any(valid & (offsets != 0)):
         raise ValueError(
-            "DeepSeek V4 context parallelism requires contiguous positions on unmasked tokens; "
+            "DeepSeek V4 context parallelism requires contiguous zero-based positions matching global token indices; "
             "packed sequences and position resets are unsupported."
         )
 
@@ -119,44 +117,33 @@ def _expand_deepseek_v4_attention_mask(module, query, key, attention_mask, group
     return full_mask
 
 
-def _get_deepseek_v4_eager_attention_fn(fn, group):
-    """Adapt the official eager callable to LF's post-Ulysses tensors."""
+def _deepseek_v4_eager_attention(module, query, key, attention_mask, group, **kwargs):
+    """Use native eager attention with this CP rank's differentiable sink slice."""
+    from transformers.models.deepseek_v4.modeling_deepseek_v4 import eager_attention_forward
 
-    @wraps(fn)
-    def wrapper(module, query, key, value, attention_mask=None, *args, **kwargs):
-        cp_size = dist.get_world_size(group)
-        cp_rank = dist.get_rank(group)
-        local_heads = query.shape[1]
-        sinks = module.sinks
-        if sinks.shape[0] == local_heads:
-            local_sinks = sinks
-        elif sinks.shape[0] == local_heads * cp_size:
-            local_sinks = sinks.narrow(0, cp_rank * local_heads, local_heads)
-        else:
-            raise ValueError(
-                f"DeepSeek V4 has {sinks.shape[0]} attention sinks, expected {local_heads} or "
-                f"{local_heads * cp_size} for CP size {cp_size}."
-            )
-
-        if query.shape[1] % key.shape[1] != 0:
-            raise ValueError("DeepSeek V4 query heads must be divisible by the post-Ulysses KV heads.")
-        module_proxy = _DeepseekV4AttentionModuleProxy(
-            module,
-            sinks=local_sinks,
-            num_key_value_groups=query.shape[1] // key.shape[1],
+    cp_size = dist.get_world_size(group)
+    local_heads = query.shape[1]
+    sinks = module.sinks
+    if sinks.shape[0] == local_heads:
+        local_sinks = sinks
+    elif sinks.shape[0] == local_heads * cp_size:
+        local_sinks = sinks.narrow(0, dist.get_rank(group) * local_heads, local_heads)
+    else:
+        raise ValueError(
+            f"DeepSeek V4 has {sinks.shape[0]} attention sinks, expected {local_heads} or "
+            f"{local_heads * cp_size} for CP size {cp_size}."
         )
-        attention_mask = _expand_deepseek_v4_attention_mask(module, query, key, attention_mask, group)
-        kwargs["s_aux"] = local_sinks
-        return fn(module_proxy, query, key, value, attention_mask, *args, **kwargs)
-
-    return wrapper
+    if query.shape[1] % key.shape[1] != 0:
+        raise ValueError("DeepSeek V4 query heads must be divisible by the post-Ulysses KV heads.")
+    proxy = _DeepseekV4AttentionModuleProxy(module, local_sinks, query.shape[1] // key.shape[1])
+    return eager_attention_forward(proxy, query, key, key, attention_mask, **kwargs)
 
 
 def _deepseek_v4_attention_forward(
     module, hidden_states, position_embeddings, position_ids, attention_mask, past_key_values=None, **kwargs
 ):
     """Run native V4 projections/compression around LF-owned Ulysses exchanges."""
-    from transformers.models.deepseek_v4.modeling_deepseek_v4 import apply_rotary_pos_emb, eager_attention_forward
+    from transformers.models.deepseek_v4.modeling_deepseek_v4 import DeepseekV4HCACompressor, apply_rotary_pos_emb
 
     if past_key_values is not None:
         raise ValueError("DeepSeek V4 context parallelism requires past_key_values=None during training.")
@@ -175,7 +162,10 @@ def _deepseek_v4_attention_forward(
     compressed_kv, block_bias = None, None
     if module.compressor is not None:
         global_hidden = torch.cat(all_gather(hidden_states.contiguous(), group=group), dim=1)
-        global_residual = torch.cat(all_gather(q_residual.contiguous(), group=group), dim=1)
+        # HCA only projects hidden states; CSA additionally needs global indexer queries.
+        global_residual = None
+        if not isinstance(module.compressor, DeepseekV4HCACompressor):
+            global_residual = torch.cat(all_gather(q_residual.contiguous(), group=group), dim=1)
         positions = [torch.empty_like(position_ids) for _ in range(dist.get_world_size(group))]
         dist.all_gather(positions, position_ids.contiguous(), group=group)
         compressed = module.compressor(
@@ -198,13 +188,12 @@ def _deepseek_v4_attention_forward(
             block_bias = attention_mask.new_zeros((*attention_mask.shape[:-1], compressed_kv.shape[2]))
         attention_mask = torch.cat([attention_mask, block_bias.to(attention_mask.dtype)], dim=-1)
 
-    attention = _get_deepseek_v4_eager_attention_fn(eager_attention_forward, group)
-    output, weights = attention(
+    output, weights = _deepseek_v4_eager_attention(
         module,
         query,
         key,
-        key,
         attention_mask,
+        group,
         dropout=0.0 if not module.training else module.attention_dropout,
         scaling=module.scaling,
         **kwargs,

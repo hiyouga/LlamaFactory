@@ -19,34 +19,50 @@ from ...utils.helper import get_tokenizer
 from ...utils.types import Message, ModelInput
 
 
-# The ordinary-chat branch matches DeepSeek's assistant/end-of-thinking markers.
-# Supply it per render call: never replace or save the checkpoint's chat_template.
+# Text/reasoning protocol from DeepSeek-V4-Flash's official encoding_dsv4.py,
+# revision 60d8d70770c6776ff598c94bb586a859a38244f1. Tools/media require a custom template.
 DEEPSEEK_V4_CHAT_TEMPLATE = """
+{%- set thinking = thinking_mode == 'thinking' if thinking_mode is defined else enable_thinking | default(false) %}
+{%- set drop = drop_thinking | default(true) %}
+{%- set ns = namespace(last_user=-1) %}
+{%- for message in messages %}
+    {%- if message['role'] == 'user' %}{%- set ns.last_user = loop.index0 %}{%- endif %}
+{%- endfor %}
 {%- if bos_token %}{{ bos_token }}{%- else %}{{ '<｜begin▁of▁sentence｜>' }}{%- endif %}
 {%- for message in messages %}
-    {%- if message['role'] == 'system' %}{{ message['content'] }}
-    {%- elif message['role'] == 'user' %}{{ '<｜User｜>' }}{{ message['content'] }}
+    {%- if message['role'] == 'system' %}{{ message['content'] or '' }}
+    {%- elif message['role'] == 'user' %}
+        {%- if not loop.first and messages[loop.index0 - 1]['role'] == 'user' %}
+            {{- '\n\n' }}
+        {%- else %}{{ '<｜User｜>' }}{%- endif %}
+        {{- message['content'] or '' }}
+        {%- if (loop.last and add_generation_prompt) or (not loop.last and messages[loop.index0 + 1]['role'] == 'assistant') %}
+            {{- '<｜Assistant｜>' }}
+            {%- if thinking and (not drop or loop.index0 >= ns.last_user) %}
+                {{- '<think>' }}
+            {%- else %}{{ '</think>' }}{%- endif %}
+        {%- endif %}
     {%- elif message['role'] == 'assistant' %}
-        {{- '<｜Assistant｜>' }}
-        {%- if message.get('reasoning_content') %}
-            {{- '<think>' }}{{ message['reasoning_content'] }}{{ '</think>' }}
-        {%- else %}{{ '</think>' }}{%- endif %}
-        {{- message['content'] }}{{ '<｜end▁of▁sentence｜>' }}
+        {%- if thinking and (not drop or loop.index0 > ns.last_user) %}
+            {{- message.get('reasoning_content', '') or '' }}{{ '</think>' }}
+        {%- endif %}
+        {{- message['content'] or '' }}{{ '<｜end▁of▁sentence｜>' }}
     {%- else %}{{ raise_exception('DeepSeek V4 text rendering supports system, user, and assistant roles only.') }}
     {%- endif %}
 {%- endfor %}
-{%- if add_generation_prompt %}
-    {{- '<｜Assistant｜>' }}
-    {%- if enable_thinking | default(false) %}{{ '<think>' }}{%- else %}{{ '</think>' }}{%- endif %}
-{%- endif %}
 """.strip()
 
 
 class DeepseekV4Renderer(Renderer):
     """Use V4 token boundaries without rewriting model files or weakening label checks."""
 
-    def __init__(self, processor):
+    position_start = 0
+
+    def __init__(self, processor, *, use_model_template: bool = True):
         super().__init__(processor)
+        self.use_model_template = use_model_template
+        if not use_model_template:
+            return
         tokenizer = get_tokenizer(processor)
         for token in (
             "<｜begin▁of▁sentence｜>",
@@ -63,6 +79,10 @@ class DeepseekV4Renderer(Renderer):
     def render_messages(
         self, messages: list[Message], tools: str | None = None, is_generate: bool = False, **kwargs
     ) -> ModelInput:
+        if not self.use_model_template:
+            return super().render_messages(messages, tools, is_generate, **kwargs)
+        if kwargs.get("reasoning_effort") not in (None, "high"):
+            raise ValueError("DeepSeek V4's built-in text renderer supports default/high reasoning effort only.")
         if tools or any(
             message["role"] not in {"system", "user", "assistant"}
             or any(block["type"] not in {"text", "reasoning"} for block in message["content"])
