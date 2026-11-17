@@ -2017,6 +2017,18 @@ register_model_group(
 
 register_model_group(
     models={
+        "MiniCPM-OCR-1.0": {
+            DownloadSource.DEFAULT: "openbmb/MiniCPM-OCR-1.0",
+            DownloadSource.MODELSCOPE: "OpenBMB/MiniCPM-OCR-1.0",
+        },
+    },
+    template="minicpm_ocr",
+    multimodal=True,
+)
+
+
+register_model_group(
+    models={
         "Ministral-8B-Instruct-2410": {
             DownloadSource.DEFAULT: "mistralai/Ministral-8B-Instruct-2410",
             DownloadSource.MODELSCOPE: "mistralai/Ministral-8B-Instruct-2410",
