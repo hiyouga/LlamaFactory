@@ -24,6 +24,7 @@ from ..core.data_engine import DataEngine
 from ..core.model_engine import ModelEngine
 from ..utils import logging
 from ..utils.types import BatchInput, HFModel, Tensor
+from .dropout import disable_dropout_in_model
 
 
 logger = logging.get_logger(__name__)
@@ -80,6 +81,9 @@ class RMTrainer(BaseTrainer):
             raise NotImplementedError("RM trainer currently only supports cp_size == 1.")
         if args.chunk_loss_size is not None:
             raise NotImplementedError("Chunk Loss currently only supports SFT training.")
+
+        if args.disable_dropout:
+            disable_dropout_in_model(model)
 
         super().__init__(args, model, renderer, train_dataset, callbacks)
 
