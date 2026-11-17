@@ -290,6 +290,7 @@ def _qwen_accelerator_worker(rank, rendezvous, device_type):
         dist.destroy_process_group()
 
 
+@pytest.mark.require_distributed(2)
 def test_qwen_native_backend_ep_forward_backward(monkeypatch):
     from llamafactory.v1.accelerator.helper import get_current_accelerator, get_device_count
     from llamafactory.v1.utils.packages import is_transformers_version_greater_than
