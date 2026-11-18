@@ -13,7 +13,7 @@
 | torch-npu | `2.10.0.post7` |
 | torchvision | `0.25.0` |
 | torchaudio | `2.10.0` |
-| Triton Ascend | `3.2.1` |
+| Triton Ascend | `3.6.0` |
 
 安装前使用[Ascend 兼容性查询助手](https://www.hiascend.com/hardware/compatibility)确认硬件与操作系统组合，并从[CANN 9.2.0 社区版资源中心](https://www.hiascend.com/developer/download/community/result?cann=9.2.0&module=cann)选择对应 CPU 架构的软件包。
 

@@ -1,6 +1,6 @@
 # 面向昇腾 NPU 的 LlamaFactory 镜像
 
-LlamaFactory 昇腾 NPU 镜像面向华为昇腾 Atlas NPU，提供可直接使用的 LlamaFactory 环境。镜像基于昇腾 CANN 容器镜像构建，预装 Python、PyTorch、TorchNPU、DeepSpeed、LlamaFactory 等组件。
+LlamaFactory 昇腾 NPU 镜像面向华为昇腾 Atlas NPU，提供可直接使用的 LlamaFactory 环境。镜像基于昇腾 CANN 容器镜像构建，预装 Python、PyTorch、TorchNPU、DeepSpeed、FSDPTurbo、LlamaFactory 等组件。
 
 安装方法和问题排查请参考 [LlamaFactory NPU 安装及配置文档](https://llamafactory.readthedocs.io/zh-cn/latest/multibackend/npu/npu_installation.html)。
 
@@ -37,7 +37,7 @@ LlamaFactory 昇腾 NPU 镜像面向华为昇腾 Atlas NPU，提供可直接使�
 | TorchNPU | `2.10.0.post7` |
 | torchvision / torchaudio | `0.25.0` / `2.10.0` |
 | Transformers | 构建时的最新兼容版本 |
-| Triton Ascend | `3.2.1` |
+| Triton Ascend | `3.6.0` |
 | DeepSpeed | 构建时的最新兼容版本 |
 | LlamaFactory | 从构建上下文中的仓库源码安装 |
 

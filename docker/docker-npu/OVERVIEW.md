@@ -1,6 +1,6 @@
 # LlamaFactory Image for Ascend NPU
 
-LlamaFactory Ascend NPU images are designed for Huawei Ascend Atlas NPUs and provide a ready-to-use LlamaFactory environment. Built on Ascend CANN container images, they include Python, PyTorch, TorchNPU, DeepSpeed, LlamaFactory, and other components.
+LlamaFactory Ascend NPU images are designed for Huawei Ascend Atlas NPUs and provide a ready-to-use LlamaFactory environment. Built on Ascend CANN container images, they include Python, PyTorch, TorchNPU, DeepSpeed, FSDPTurbo, LlamaFactory, and other components.
 
 For installation and troubleshooting details, see the [English NPU installation guide](https://llamafactory.readthedocs.io/en/latest/multibackend/npu/npu_installation.html).
 
@@ -37,7 +37,7 @@ The image includes the following core components:
 | TorchNPU | `2.10.0.post7` |
 | torchvision / torchaudio | `0.25.0` / `2.10.0` |
 | Transformers | Latest compatible version at build time |
-| Triton Ascend | `3.2.1` |
+| Triton Ascend | `3.6.0` |
 | DeepSpeed | Latest compatible version at build time |
 | LlamaFactory | Installed from the repository build context |
 
