@@ -20,6 +20,7 @@ import fsspec
 from datasets import DatasetDict, concatenate_datasets, interleave_datasets
 
 from ..extras import logging
+from ..extras.misc import check_version
 
 
 if TYPE_CHECKING:
@@ -64,6 +65,9 @@ def merge_dataset(
     elif data_args.mix_strategy.startswith("interleave"):
         if not data_args.streaming:
             logger.warning_rank0_once("We recommend using `mix_strategy=concat` in non-streaming mode.")
+
+        if data_args.mix_strategy == "interleave_once":
+            check_version("datasets>=4.6.0", mandatory=True)
 
         strategy_map: str = {
             "interleave_under": "first_exhausted",
