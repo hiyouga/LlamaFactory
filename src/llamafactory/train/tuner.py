@@ -139,6 +139,10 @@ def _training_function(config: dict[str, Any]) -> None:
         run_pt(model_args, data_args, training_args, finetuning_args, callbacks)
     elif finetuning_args.stage == "sft":
         run_sft(model_args, data_args, training_args, finetuning_args, generating_args, callbacks)
+    elif finetuning_args.stage == "decision":
+        from .decision import run_decision
+
+        run_decision(model_args, data_args, training_args, finetuning_args, callbacks)
     elif finetuning_args.stage == "rm":
         run_rm(model_args, data_args, training_args, finetuning_args, callbacks)
     elif finetuning_args.stage == "ppo":

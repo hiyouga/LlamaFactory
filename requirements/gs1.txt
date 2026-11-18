@@ -1,0 +1,6 @@
+torch==2.9.1
+torchvision==0.24.1
+transformers==5.3.0
+typesafe-sdk==0.7.0
+pydantic>=2.8,<3
+pillow>=11,<13

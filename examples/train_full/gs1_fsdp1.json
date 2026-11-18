@@ -1,0 +1,8 @@
+{
+  "version": 1,
+  "use_orig_params": true,
+  "transformer_layer_cls_to_wrap": [
+    "GS1DecoderLayer",
+    "Qwen3_5VisionBlock"
+  ]
+}

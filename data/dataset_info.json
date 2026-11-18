@@ -1,4 +1,8 @@
 {
+  "gs1_demo": {
+    "file_name": "gs1_demo.jsonl",
+    "formatting": "gs1"
+  },
   "identity": {
     "file_name": "identity.json"
   },
