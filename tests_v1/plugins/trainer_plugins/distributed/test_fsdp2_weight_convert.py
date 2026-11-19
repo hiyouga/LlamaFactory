@@ -14,10 +14,10 @@
 
 import types
 
-import pytest
 import torch
 import torch.nn as nn
 from safetensors.torch import save_file
+from transformers import PretrainedConfig, PreTrainedModel
 
 from llamafactory.v1.accelerator.interface import DistributedInterface
 from llamafactory.v1.plugins.trainer_plugins.distributed.fsdp2 import FSDP2Engine
@@ -32,12 +32,17 @@ class Holder(nn.Module):
     pass
 
 
-class FakeFusedExpertsModel(nn.Module):
+class FakeQwen3MoeConfig(PretrainedConfig):
+    model_type = "qwen3_moe"
+
+
+# transformers v5 only collects model-specific weight conversions from `PreTrainedModel` submodules.
+class FakeFusedExpertsModel(PreTrainedModel):
+    config_class = FakeQwen3MoeConfig
     base_model_prefix = "model"
 
     def __init__(self):
-        super().__init__()
-        self.config = types.SimpleNamespace(model_type="qwen3_moe")
+        super().__init__(FakeQwen3MoeConfig())
 
         self.model = Holder()
         self.model.layers = nn.ModuleList([Holder()])
@@ -98,7 +103,6 @@ def build_checkpoint():
     return ckpt, gates, ups, downs
 
 
-@pytest.mark.xfail(reason="unknown error")
 def test_fsdp2_gate_up_proj_loading(tmp_path):
     engine = build_engine()
     ckpt, gates, ups, downs = build_checkpoint()
