@@ -180,6 +180,34 @@ def _check_plugin(
     )
 
 
+@pytest.mark.parametrize("mode", ["RGBA", "LA", "P"])
+def test_transparent_image_uses_white_background(mode: str):
+    import io
+
+    from PIL import ImageDraw
+
+    base = Image.new("RGBA", (224, 224), (0, 0, 0, 0))
+    ImageDraw.Draw(base).rectangle([56, 56, 168, 168], outline=(0, 0, 0, 255), width=8)
+    if mode == "RGBA":
+        image, save_kwargs = base, {}
+    elif mode == "LA":
+        image, save_kwargs = base.convert("LA"), {}
+    else:
+        image = Image.new("P", base.size, 0)
+        image.putpalette([0, 0, 0, 0, 0, 0] + [0] * 762)  # colour 0 is transparent, colour 1 is black
+        image.paste(1, mask=base.getchannel("A"))
+        save_kwargs = {"transparency": 0}
+
+    buffer = io.BytesIO()
+    image.save(buffer, "PNG", **save_kwargs)
+    plugin = get_mm_plugin("qwen2_vl", image_token="<|image_pad|>")
+    output = plugin._regularize_images([buffer.getvalue()], image_max_pixels=768 * 768, image_min_pixels=32 * 32)
+    result = output["images"][0]
+    assert result.mode == "RGB"
+    assert result.getpixel((10, 10)) == (255, 255, 255)  # transparent area becomes white
+    assert result.getpixel((112, 60)) == (0, 0, 0)  # opaque black line is kept
+
+
 @pytest.mark.runs_on(["cpu", "mps", "xpu"])
 def test_base_plugin():
     tokenizer_module = _load_tokenizer_module(model_name_or_path=TINY_LLAMA3)

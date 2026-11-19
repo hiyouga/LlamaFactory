@@ -130,7 +130,9 @@ def _process_request(
                         check_ssrf_url(image_url)
                         image_stream = requests.get(image_url, stream=True).raw
 
-                    images.append(Image.open(image_stream).convert("RGB"))
+                    image = Image.open(image_stream)
+                    image.load()  # read the pixels now, while the stream is open
+                    images.append(image)
                 elif input_item.type == "video_url":
                     text_content += VIDEO_PLACEHOLDER
                     video_url = input_item.video_url.url
