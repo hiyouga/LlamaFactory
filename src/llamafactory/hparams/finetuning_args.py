@@ -457,9 +457,17 @@ class FinetuningArguments(
         default=False,
         metadata={"help": "Whether or not to train model in purely bf16 precision (without AMP)."},
     )
-    stage: Literal["pt", "sft", "rm", "ppo", "dpo", "kto"] = field(
+    stage: Literal["pt", "sft", "rm", "ppo", "dpo", "kto", "decision"] = field(
         default="sft",
         metadata={"help": "Which stage will be performed in training."},
+    )
+    decision_warmup: bool = field(
+        default=False,
+        metadata={"help": "Train GS1 head, structural token rows and routers for the NLL warmup stage."},
+    )
+    decision_brier_weight: float = field(
+        default=1.0,
+        metadata={"help": "Weight of the expected multiclass Brier loss in the decision stage (0 for NLL only)."},
     )
     finetuning_type: Literal["lora", "oft", "freeze", "full"] = field(
         default="lora",

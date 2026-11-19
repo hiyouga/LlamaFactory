@@ -30,7 +30,7 @@ class DatasetAttr:
     # basic configs
     load_from: Literal["hf_hub", "ms_hub", "om_hub", "script", "file"]
     dataset_name: str
-    formatting: Literal["alpaca", "sharegpt", "openai"] = "alpaca"
+    formatting: Literal["alpaca", "sharegpt", "openai", "gs1"] = "alpaca"
     ranking: bool = False
     # extra configs
     subset: str | None = None

@@ -1,0 +1,39 @@
+### model
+model_name_or_path: bigai/GS1-0.8B
+model_revision: 5c8dfd6486ac0eaabd27d3ec7637982bcd5eb3e9
+trust_remote_code: true
+
+### method
+stage: decision
+do_train: true
+finetuning_type: full
+freeze_vision_tower: true
+decision_brier_weight: 1.0
+
+### dataset
+dataset: gs1_demo
+cutoff_len: 16640
+
+### output
+output_dir: saves/gs1-0.8b/full/decision
+logging_steps: 1
+save_steps: 100
+save_total_limit: 2
+report_to: none
+
+### train
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 256  # Global batch 4096 with 16 GPUs.
+learning_rate: 2.0e-5
+num_train_epochs: 1.0
+lr_scheduler_type: cosine_warmup_with_min_lr
+lr_scheduler_kwargs:
+  min_lr_rate: 0.1
+  warmup_lr_rate: 0.1
+warmup_steps: 100
+weight_decay: 0.01
+max_grad_norm: 1.0
+seed: 41
+disable_shuffling: true
+bf16: true
+gradient_checkpointing: true
