@@ -22,6 +22,7 @@
 
 import math
 import os
+from collections import defaultdict
 
 import torch
 import torch.distributed as dist
@@ -73,21 +74,22 @@ def zeropower_via_newtonschulz5(G: "torch.Tensor", steps: int) -> "torch.Tensor"
     stable in bf16, matching upstream Keller Jordan / Moonlight). The caller's in-place ``add_``
     upcasts the operand to the parameter dtype, so no cast-back to ``G.dtype`` is needed.
     """
-    assert len(G.shape) == 2
+    assert G.ndim in (2, 3)
     a, b, c = (3.4445, -4.7750, 2.0315)
     X = G.bfloat16()
-    if G.size(0) > G.size(1):
-        X = X.T
+    if G.size(-2) > G.size(-1):
+        X = X.mT
     # Ensure spectral norm is at most 1
-    X = X / (X.norm() + 1e-7)
+    norm = X.norm() if G.ndim == 2 else X.norm(dim=(-2, -1), keepdim=True)
+    X = X / (norm + 1e-7)
     # Perform the NS iterations
     for _ in range(steps):
-        A = X @ X.T
+        A = X @ X.mT
         B = b * A + c * A @ A  # adapted from suggestion by @jxbz, @leloykun, and @YouJiacheng
         X = a * X + B @ X
 
-    if G.size(0) > G.size(1):
-        X = X.T
+    if G.size(-2) > G.size(-1):
+        X = X.mT
     return X
 
 
@@ -110,6 +112,9 @@ class Muon(torch.optim.Optimizer):
         momentum: The momentum used by the internal SGD. (0.95 is a good default)
         nesterov: Whether to use Nesterov-style momentum in the internal SGD. (recommended)
         ns_steps: The number of Newton-Schulz iterations to run. (6 is probably always enough)
+        ns_batch_size: Maximum same-shaped matrices per Newton-Schulz batch. Defaults to the
+            serial path (1). Batching trades temporary memory and BF16 rounding differences
+            for fewer kernel launches. DTensor parameters retain the serial path.
         adamw_params: The parameters to be optimized by AdamW. Any parameters in `muon_params` which are
         {0, 1}-D or are detected as being the embed or lm_head will be optimized by AdamW as well.
         adamw_betas: The betas for the internal AdamW.
@@ -127,7 +132,10 @@ class Muon(torch.optim.Optimizer):
         adamw_params=None,
         adamw_betas=(0.9, 0.95),
         adamw_eps=1e-8,
+        ns_batch_size=1,
     ):
+        if not isinstance(ns_batch_size, int) or ns_batch_size < 1:
+            raise ValueError("ns_batch_size must be a positive integer.")
         defaults = dict(
             lr=lr,
             wd=wd,
@@ -136,6 +144,7 @@ class Muon(torch.optim.Optimizer):
             ns_steps=ns_steps,
             adamw_betas=adamw_betas,
             adamw_eps=adamw_eps,
+            ns_batch_size=ns_batch_size,
         )
 
         params = list(muon_params)
@@ -194,6 +203,37 @@ class Muon(torch.optim.Optimizer):
         adjusted_lr = lr * adjusted_ratio
         return adjusted_lr
 
+    @torch.no_grad()
+    def _step_muon_batched(self, params, group):
+        buckets = defaultdict(list)
+        for p in params:
+            buckets[(p.shape, p.device, p.dtype)].append(p)
+
+        batch_size = group["ns_batch_size"]
+        momentum = group["momentum"]
+        for bucket in buckets.values():
+            for start in range(0, len(bucket), batch_size):
+                batch = bucket[start : start + batch_size]
+                gradients = []
+                for p in batch:
+                    state = self.state[p]
+                    if "momentum_buffer" not in state:
+                        state["momentum_buffer"] = torch.zeros_like(p.grad)
+                    buf = state["momentum_buffer"]
+                    buf.mul_(momentum).add_(p.grad)
+                    gradients.append(p.grad.add(buf, alpha=momentum) if group["nesterov"] else buf)
+
+                if len(batch) == 1:
+                    updates = [zeropower_via_newtonschulz5(gradients[0], group["ns_steps"])]
+                else:
+                    updates = zeropower_via_newtonschulz5(torch.stack(gradients), group["ns_steps"])
+                adjusted_lr = self.adjust_lr_for_muon(group["lr"], batch[0].shape)
+                for p, update in zip(batch, updates, strict=True):
+                    p.mul_(1 - group["lr"] * group["wd"])
+                    p.add_(update, alpha=-adjusted_lr)
+                # Do not retain the preceding bucket's temporaries while computing the next one.
+                del gradients, updates, update
+
     def step(self, closure=None):
         """Perform a single optimization step.
 
@@ -212,6 +252,12 @@ class Muon(torch.optim.Optimizer):
             lr = group["lr"]
             wd = group["wd"]
             momentum = group["momentum"]
+
+            # Older checkpoints omit ns_batch_size; their restored groups remain serial.
+            if group.get("ns_batch_size", 1) > 1:
+                batched = [p for p in params if p.grad is not None and not _is_dtensor(p.grad)]
+                self._step_muon_batched(batched, group)
+                params = [p for p in params if p.grad is not None and _is_dtensor(p.grad)]
 
             # generate weight updates in distributed fashion
             for p in params:
