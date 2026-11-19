@@ -255,8 +255,16 @@ class HuggingfaceEngine(BaseEngine):
             clean_up_tokenization_spaces=True,
         )
         results = []
+        stop_token_ids = gen_kwargs["generation_config"].eos_token_id
+        if stop_token_ids is None:
+            stop_token_ids = [tokenizer.eos_token_id]
+        elif isinstance(stop_token_ids, int):
+            stop_token_ids = [stop_token_ids]
+
         for i in range(len(response)):
-            eos_index = (response_ids[i] == tokenizer.eos_token_id).nonzero()
+            eos_index = torch.isin(
+                response_ids[i], torch.tensor(stop_token_ids, device=response_ids[i].device)
+            ).nonzero()
             response_length = (eos_index[0].item() + 1) if len(eos_index) else len(response_ids[i])
             results.append(
                 Response(
