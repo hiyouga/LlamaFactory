@@ -2452,8 +2452,6 @@ class Qwen2VLPlugin(BasePlugin):
                 metadata["width"], metadata["height"], image_max_pixels, image_min_pixels
             )
             num_frames = len(metadata["sample_indices"])
-            if num_frames % 2 != 0:
-                num_frames += 1
 
             resized_size = self._get_qwen_video_resize(
                 num_frames,
