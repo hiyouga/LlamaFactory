@@ -1,0 +1,44 @@
+### CIG-SFT on the ordinary Transformers SFT path.
+### The frozen reference model scores each response with the original user message and with the erased prompt.
+### `cig_erased_prompt` may be a preset (`default`, `math`, `code`, `medical`) or a literal replacement prompt.
+
+### model
+model_name_or_path: Qwen/Qwen2.5-0.5B-Instruct
+trust_remote_code: true
+
+### method
+stage: sft
+do_train: true
+finetuning_type: full
+use_cig_sft_loss: true
+cig_lambda: 0.3
+cig_erased_prompt: default
+
+### dataset
+dataset: identity,alpaca_en_demo
+template: qwen
+cutoff_len: 2048
+max_samples: 1000
+overwrite_cache: true
+preprocessing_num_workers: 16
+dataloader_num_workers: 4
+
+### output
+output_dir: saves/qwen2.5-0_5b/full/cig_sft
+cig_credit_cache: saves/qwen2.5-0_5b/full/cig_sft_credit.pt
+logging_steps: 1
+save_steps: 500
+plot_loss: true
+overwrite_output_dir: true
+save_only_model: false
+report_to: none
+
+### train
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 8
+learning_rate: 1.0e-5
+num_train_epochs: 3.0
+lr_scheduler_type: cosine
+warmup_ratio: 0.1
+bf16: true
+ddp_timeout: 180000000

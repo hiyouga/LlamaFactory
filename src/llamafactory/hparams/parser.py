@@ -670,6 +670,26 @@ def get_train_args(args: dict[str, Any] | list[str] | None = None) -> _TRAIN_CLS
         model_args.compute_dtype = torch.float16
 
     data_args.packing = data_args.packing if data_args.packing is not None else finetuning_args.stage == "pt"
+
+    if finetuning_args.use_cig_sft_loss:
+        if finetuning_args.stage != "sft":
+            raise ValueError("The CIG-SFT loss is only available in the `sft` stage.")
+
+        if finetuning_args.finetuning_type not in ["full", "freeze"]:
+            raise ValueError("The CIG-SFT loss currently supports only `full` and `freeze` fine-tuning.")
+
+        if data_args.streaming:
+            raise ValueError("The CIG-SFT loss does not support streaming datasets yet.")
+
+        if data_args.packing or data_args.neat_packing:
+            raise ValueError("The CIG-SFT loss does not support packing yet.")
+
+        if finetuning_args.use_hyper_parallel or finetuning_args.use_megatron_bridge or finetuning_args.use_mca:
+            raise ValueError("The CIG-SFT loss currently supports the ordinary Transformers SFT path only.")
+
+        if data_args.train_on_prompt or data_args.mask_history:
+            raise ValueError("The CIG-SFT loss requires response-only, single-turn labels.")
+
     model_args.device_map = {"": get_current_device()}
     model_args.model_max_length = data_args.cutoff_len
     model_args.block_diag_attn = data_args.neat_packing

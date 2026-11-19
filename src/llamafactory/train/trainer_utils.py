@@ -826,6 +826,137 @@ def _eaft_cross_entropy(
     return loss
 
 
+def _shifted_cross_entropy(
+    logits: "torch.Tensor", labels: "torch.Tensor", ignore_index: int = IGNORE_INDEX
+) -> "torch.Tensor":
+    """Return unreduced causal cross entropy with shape ``(batch, sequence - 1)``."""
+    shift_logits = logits[..., :-1, :].reshape(-1, logits.size(-1))
+    shift_labels = labels[..., 1:].reshape(-1).to(shift_logits.device)
+    per_token_ce = F.cross_entropy(shift_logits, shift_labels, ignore_index=ignore_index, reduction="none")
+    return per_token_ce.view(labels.size(0), -1)
+
+
+def _supervised_extent(labels: "torch.Tensor", ignore_index: int = IGNORE_INDEX) -> "torch.Tensor":
+    """Return the index just past the last supervised token in each row."""
+    valid = labels != ignore_index
+    positions = torch.arange(labels.size(-1), device=labels.device).expand_as(labels)
+    return torch.where(valid, positions + 1, torch.zeros_like(positions)).max(dim=-1).values
+
+
+def _response_spans(labels: "torch.Tensor", ignore_index: int = IGNORE_INDEX) -> tuple["torch.Tensor", "torch.Tensor"]:
+    """Return the start and length of each contiguous supervised response span."""
+    valid = labels != ignore_index
+    counts = valid.sum(dim=-1)
+    positions = torch.arange(labels.size(-1), device=labels.device).expand_as(labels)
+    starts = torch.where(valid, positions, labels.size(-1)).min(dim=-1).values
+    ends = torch.where(valid, positions, -1).max(dim=-1).values
+    non_empty = counts > 0
+    starts = torch.where(non_empty, starts, torch.zeros_like(starts))
+    ends = torch.where(non_empty, ends, torch.zeros_like(ends))
+    if not bool(torch.all((ends - starts + 1)[non_empty] == counts[non_empty])):
+        raise ValueError("The CIG-SFT loss expects the supervised tokens to form one contiguous run per row.")
+
+    return starts, counts
+
+
+def _clip_columns(last_columns: "torch.Tensor", columns: "torch.Tensor") -> "torch.Tensor":
+    """Keep per-row column indices in range while ragged rows are padded to a common length."""
+    last_columns = last_columns.clamp(min=0).unsqueeze(-1).expand_as(columns)
+    return torch.minimum(columns.clamp(min=0), last_columns)
+
+
+def _pair_columns(
+    start: "torch.Tensor", count: "torch.Tensor", num_offsets: int
+) -> tuple["torch.Tensor", "torch.Tensor", "torch.Tensor"]:
+    """Return row and shifted-logit columns for each aligned response-token offset."""
+    offsets = torch.arange(num_offsets, device=start.device)
+    rows = torch.arange(start.size(0), device=start.device).unsqueeze(-1)
+    columns = _clip_columns(start + count - 2, start.unsqueeze(-1) + offsets.unsqueeze(0) - 1)
+    return rows.expand_as(columns), columns, offsets
+
+
+def cig_sft_credit_func(
+    logits: "torch.Tensor",
+    labels: "torch.Tensor",
+    erased_logits: "torch.Tensor",
+    erased_labels: "torch.Tensor",
+    cig_eps: float = 1e-8,
+    ignore_index: int = IGNORE_INDEX,
+) -> list["torch.Tensor"]:
+    """Compute detached per-token CIG credits from two frozen reference-model views.
+
+    The two response spans are aligned from their first supervised token. A token receives credit for the positive
+    likelihood gain caused by retaining the task input, normalized by its likelihood under the erased view. Tokens
+    present in only one response are ignored because no aligned comparison exists.
+    """
+    per_token_ce = _shifted_cross_entropy(logits, labels, ignore_index)
+    erased_per_token_ce = _shifted_cross_entropy(erased_logits, erased_labels, ignore_index)
+    start, count = _response_spans(labels, ignore_index)
+    erased_start, erased_count = _response_spans(erased_labels, ignore_index)
+    keep = torch.minimum(count, erased_count)
+    num_offsets = int(keep.max())
+    if num_offsets == 0:
+        return [torch.zeros(0) for _ in range(labels.size(0))]
+
+    rows, columns, _ = _pair_columns(start, count, num_offsets)
+    _, erased_columns, _ = _pair_columns(erased_start, erased_count, num_offsets)
+    with_erased_ce = erased_per_token_ce[rows, erased_columns]
+    without_erased_ce = per_token_ce[rows, columns]
+    gain = with_erased_ce - without_erased_ce
+    denominator = with_erased_ce.clamp(min=0.0).add(cig_eps)
+    credit = gain.clamp(min=0.0) / denominator
+    credit = torch.where(torch.isfinite(gain) & torch.isfinite(denominator), credit, torch.zeros_like(credit)).clamp(
+        0.0, 1.0
+    )
+
+    return [row[: int(keep[index])].detach().cpu() for index, row in enumerate(credit)]
+
+
+def cig_sft_loss_func(
+    outputs: "torch.Tensor",
+    labels: "torch.Tensor",
+    credits: list["torch.Tensor"],
+    cig_lambda: float = 0.3,
+    cig_max_beta: float = 60.0,
+    ignore_index: int = IGNORE_INDEX,
+) -> "torch.Tensor":
+    """Compute the CIG-SFT weighted causal cross entropy.
+
+    Credits and projection weights are detached. Gradients therefore flow only through the ordinary model cross
+    entropy, while the frozen reference model is used once to materialize the fixed credit cache.
+    """
+    logits = outputs.get("logits")
+    if logits is None:
+        return outputs.get("loss", torch.tensor(0.0))
+
+    logits = logits.float()
+    per_token_ce = _shifted_cross_entropy(logits, labels, ignore_index)
+    start, count = _response_spans(labels, ignore_index)
+
+    keeps = torch.tensor([credit.numel() for credit in credits], device=per_token_ce.device)
+    num_offsets = int(keeps.max()) if keeps.numel() > 0 else 0
+    if num_offsets == 0:
+        return per_token_ce.sum() * 0.0
+
+    padded_credit = torch.zeros((labels.size(0), num_offsets), device=per_token_ce.device, dtype=per_token_ce.dtype)
+    for index, credit in enumerate(credits):
+        if credit.numel() > 0:
+            padded_credit[index, : credit.numel()] = credit.to(per_token_ce.device)
+
+    rows, columns, offsets = _pair_columns(start, count, num_offsets)
+    pair_mask = (offsets.unsqueeze(0) < keeps.unsqueeze(-1)).to(per_token_ce.dtype)
+    ce = per_token_ce[rows, columns]
+
+    with torch.no_grad():
+        probs = torch.exp(-ce).clamp(0.0, 1.0)
+        exponent = (padded_credit / float(cig_lambda)).clamp(max=float(cig_max_beta))
+        exp_exponent = torch.exp(exponent)
+        weights = probs * (exp_exponent - 1.0) / (1.0 - probs + probs * exp_exponent + 1e-12)
+
+    weighted_losses = weights * ce * pair_mask
+    return weighted_losses.sum() / pair_mask.sum().clamp(min=1.0)
+
+
 def nested_detach(
     tensors: Union["torch.Tensor", list["torch.Tensor"], tuple["torch.Tensor"], dict[str, "torch.Tensor"]],
     clone: bool = False,
