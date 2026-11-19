@@ -12,6 +12,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import pytest
+
 from llamafactory.v1.config import DataArguments, ModelArguments, TrainingArguments
 from llamafactory.v1.core.data_engine import DataEngine
 from llamafactory.v1.core.model_engine import ModelEngine
@@ -574,3 +576,27 @@ def test_drop_unsupervised_samples():
     kept = BatchGenerator._drop_unsupervised(gen, samples)
     assert kept == [samples[0], samples[2], samples[3]]
     assert gen._warned_truncation is True
+
+
+def test_init_data_provider_rejects_a_streaming_dataset():
+    """A streaming dataset must reach the explicit NotImplementedError.
+
+    `DataEngine.__len__` returns -1 when streaming, but `len()` rejects a negative
+    return before any caller sees it, so probing the length raised
+    `ValueError: __len__() should return >= 0` instead.
+    """
+
+    class _StreamingDataset:
+        streaming = True
+
+        def __len__(self) -> int:
+            return -1
+
+        def __getitem__(self, index):
+            raise ValueError("Streaming dataset does not support index access.")
+
+    batch_generator = BatchGenerator.__new__(BatchGenerator)
+    batch_generator.dataset = _StreamingDataset()
+
+    with pytest.raises(NotImplementedError, match="Iterable dataset is not supported yet"):
+        batch_generator._init_data_provider()
