@@ -23,7 +23,7 @@ from transformers.utils import is_torch_npu_available
 from ..chat import ChatModel
 from ..data import Role
 from ..extras.constants import PEFT_METHODS
-from ..extras.misc import torch_gc
+from ..extras.misc import is_env_enabled, torch_gc
 from ..extras.packages import is_gradio_available
 from .common import get_save_dir, load_config
 from .locales import ALERTS
@@ -136,7 +136,7 @@ class WebChatModel(ChatModel):
             enable_liger_kernel=(get("top.booster") == "liger_kernel"),
             infer_backend=get("infer.infer_backend"),
             infer_dtype=get("infer.infer_dtype"),
-            trust_remote_code=True,
+            trust_remote_code=is_env_enabled("LLAMAFACTORY_WEBUI_TRUST_REMOTE_CODE"),
         )
         args.update(json.loads(get("infer.extra_args")))
 
