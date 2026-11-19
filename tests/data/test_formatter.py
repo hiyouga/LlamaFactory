@@ -111,6 +111,42 @@ def test_default_multi_tool_extractor():
 
 
 @pytest.mark.runs_on(["cpu", "mps", "xpu"])
+def test_default_tool_extractor_with_non_alphanumeric_name():
+    formatter = ToolFormatter(tool_format="default")
+    result = """Action: get-weather\nAction Input: {"location": "San Francisco"}"""
+    assert formatter.extract(result) == [("get-weather", """{"location": "San Francisco"}""")]
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
+def test_default_multi_tool_extractor_with_non_alphanumeric_name():
+    formatter = ToolFormatter(tool_format="default")
+    result = (
+        """Action: get-weather\nAction Input: {"location": "San Francisco"}\n"""
+        """Action: browser.search\nAction Input: {"query": "news"}"""
+    )
+    assert formatter.extract(result) == [
+        ("get-weather", """{"location": "San Francisco"}"""),
+        ("browser.search", """{"query": "news"}"""),
+    ]
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
+def test_default_tool_extractor_with_action_in_arguments():
+    formatter = ToolFormatter(tool_format="default")
+    result = """Action: test_tool\nAction Input: {"instruction": "Action: run the command"}"""
+    assert formatter.extract(result) == [("test_tool", """{"instruction": "Action: run the command"}""")]
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
+def test_default_tool_round_trip_with_non_alphanumeric_name():
+    formatter = FunctionFormatter(slots=["{{content}}"], tool_format="default")
+    tool_formatter = ToolFormatter(tool_format="default")
+    original = {"name": "get-weather", "arguments": {"location": "San Francisco", "days": 3}}
+    rendered = formatter.apply(content=json.dumps(original))[0]
+    assert tool_formatter.extract(rendered) == [("get-weather", json.dumps(original["arguments"], ensure_ascii=False))]
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
 def test_glm4_function_formatter():
     formatter = FunctionFormatter(slots=["{{content}}"], tool_format="glm4")
     tool_calls = json.dumps(FUNCTION)
