@@ -37,7 +37,7 @@ from .common import (
     save_args,
     save_cmd,
 )
-from .control import get_trainer_info
+from .control import get_checkpoint_dir, get_trainer_info
 from .locales import ALERTS, LOCALES
 
 
@@ -190,10 +190,15 @@ class Runner:
         if get("top.checkpoint_path"):
             if finetuning_type in PEFT_METHODS:  # list
                 args["adapter_name_or_path"] = ",".join(
-                    [get_save_dir(model_name, finetuning_type, adapter) for adapter in get("top.checkpoint_path")]
+                    [
+                        get_checkpoint_dir(model_name, finetuning_type, adapter)
+                        for adapter in get("top.checkpoint_path")
+                    ]
                 )
             else:  # str
-                args["model_name_or_path"] = get_save_dir(model_name, finetuning_type, get("top.checkpoint_path"))
+                args["model_name_or_path"] = get_checkpoint_dir(
+                    model_name, finetuning_type, get("top.checkpoint_path")
+                )
 
         # quantization
         if get("top.quantization_bit") != "none":
@@ -228,10 +233,10 @@ class Runner:
         if args["stage"] == "ppo":
             if finetuning_type in PEFT_METHODS:
                 args["reward_model"] = ",".join(
-                    [get_save_dir(model_name, finetuning_type, adapter) for adapter in get("train.reward_model")]
+                    [get_checkpoint_dir(model_name, finetuning_type, adapter) for adapter in get("train.reward_model")]
                 )
             else:
-                args["reward_model"] = get_save_dir(model_name, finetuning_type, get("train.reward_model"))
+                args["reward_model"] = get_checkpoint_dir(model_name, finetuning_type, get("train.reward_model"))
 
             args["reward_model_type"] = "lora" if finetuning_type == "lora" else "full"
             args["ppo_score_norm"] = get("train.ppo_score_norm")
@@ -339,10 +344,15 @@ class Runner:
         if get("top.checkpoint_path"):
             if finetuning_type in PEFT_METHODS:  # list
                 args["adapter_name_or_path"] = ",".join(
-                    [get_save_dir(model_name, finetuning_type, adapter) for adapter in get("top.checkpoint_path")]
+                    [
+                        get_checkpoint_dir(model_name, finetuning_type, adapter)
+                        for adapter in get("top.checkpoint_path")
+                    ]
                 )
             else:  # str
-                args["model_name_or_path"] = get_save_dir(model_name, finetuning_type, get("top.checkpoint_path"))
+                args["model_name_or_path"] = get_checkpoint_dir(
+                    model_name, finetuning_type, get("top.checkpoint_path")
+                )
 
         # quantization
         if get("top.quantization_bit") != "none":
