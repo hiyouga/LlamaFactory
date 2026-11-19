@@ -617,13 +617,9 @@ def get_batch_logps(
         chosen_lengths = valid_length[:num_examples]
         rejected_lengths = valid_length[num_examples:]
         min_lengths = torch.min(chosen_lengths, rejected_lengths)
-        start_positions = torch.argmax(loss_mask.int(), dim=1)
-        public_lengths = start_positions + torch.cat([min_lengths, min_lengths], dim=0)
-
-        seq_len = labels.shape[-1]
-        position_ids = torch.arange(seq_len, device=per_token_logps.device).expand_as(per_token_logps)
-
-        ld_mask = position_ids < public_lengths.unsqueeze(1)
+        public_lengths = torch.cat([min_lengths, min_lengths], dim=0)
+        token_positions = loss_mask.cumsum(dim=-1)
+        ld_mask = token_positions <= public_lengths.unsqueeze(1)
         front_mask = (ld_mask * loss_mask).float()
         rear_mask = (~ld_mask * loss_mask).float()
 

@@ -214,17 +214,8 @@ class DPOTrainer(BaseTrainer):
         ld_alpha = self.ld_alpha if use_ld else None
         if ld_alpha is not None:
             min_lengths = torch.min(chosen_valid_len, rejected_valid_len)
-            chosen_starts = torch.argmax(chosen_mask.int(), dim=1)
-            rejected_starts = torch.argmax(rejected_mask.int(), dim=1)
-
-            chosen_public_lengths = chosen_starts + min_lengths
-            rejected_public_lengths = rejected_starts + min_lengths
-
-            seq_len = shift_labels.size(1)
-            position_ids = torch.arange(seq_len, device=self.device).unsqueeze(0)
-
-            chosen_ld_mask = position_ids < chosen_public_lengths.unsqueeze(1)
-            rejected_ld_mask = position_ids < rejected_public_lengths.unsqueeze(1)
+            chosen_ld_mask = chosen_mask.cumsum(dim=-1) <= min_lengths.unsqueeze(1)
+            rejected_ld_mask = rejected_mask.cumsum(dim=-1) <= min_lengths.unsqueeze(1)
 
             chosen_front_mask = (chosen_ld_mask * chosen_mask).float()
             chosen_rear_mask = ((~chosen_ld_mask) * chosen_mask).float()
