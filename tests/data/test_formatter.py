@@ -474,6 +474,34 @@ def test_lfm2_tool_extractor_rejects_nonliteral_values(value):
 
 
 @pytest.mark.runs_on(["cpu", "mps", "xpu"])
+def test_seed_oss_function_formatter():
+    formatter = FunctionFormatter(slots=["{{content}}"], tool_format="seed_oss")
+    tool_calls = json.dumps(FUNCTION)
+    assert formatter.apply(content=tool_calls) == [
+        "\n<seed:tool_call>\n<function=tool_name>\n<parameter=foo>bar</parameter>\n"
+        "<parameter=size>10</parameter>\n</function>\n</seed:tool_call>"
+    ]
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
+def test_seed_oss_tool_extractor():
+    formatter = ToolFormatter(tool_format="seed_oss")
+    result = (
+        "<seed:tool_call>\n<function=test_tool>\n<parameter=foo>bar</parameter>\n"
+        "<parameter=size>10</parameter>\n</function>\n</seed:tool_call>"
+    )
+    assert formatter.extract(result) == [("test_tool", """{"foo": "bar", "size": 10}""")]
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
+def test_seed_oss_tool_round_trip():
+    function_formatter = FunctionFormatter(slots=["{{content}}"], tool_format="seed_oss")
+    tool_formatter = ToolFormatter(tool_format="seed_oss")
+    text = function_formatter.apply(content=json.dumps(FUNCTION))[0]
+    assert tool_formatter.extract(text) == [("tool_name", """{"foo": "bar", "size": 10}""")]
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
 def test_minicpm5_function_formatter():
     formatter = FunctionFormatter(slots=["{{content}}<|im_end|>\n"], tool_format="minicpm5")
     tool_calls = json.dumps(FUNCTION)
