@@ -12,6 +12,7 @@
 [![Discord](assets/thirdparty/discord.svg)](https://discord.gg/rKfvV9r9FK)
 [![WeChat](https://img.shields.io/badge/WeChat-User%20Group-blue?logo=wechat)](https://github.com/hiyouga/llamafactory-community)
 [![Blog](https://img.shields.io/badge/Hugo-Official%20Blog-blue?logo=hugo)](https://blog.llamafactory.net/en/)
+[![GitCode](https://gitcode.com/hiyouga/LlamaFactory/star/badge.svg)](https://gitcode.com/hiyouga/LlamaFactory)
 
 [![Open in Colab](assets/thirdparty/colab.svg)](https://colab.research.google.com/drive/1eRTPn37ltBbYsISy9Aw2NuI2Aq5CQrD9?usp=sharing)
 [![Open in DSW](assets/thirdparty/dsw.svg)](https://gallery.pai-ml.com/#/preview/deepLearning/nlp/llama_factory)
