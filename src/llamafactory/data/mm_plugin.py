@@ -1017,7 +1017,9 @@ class Gemma4Plugin(BasePlugin):
     ) -> dict[str, Union[list[int], "torch.Tensor"]]:
         image_processor = getattr(processor, "image_processor", None)
         video_processor = getattr(processor, "video_processor", None)
-        feature_extractor = getattr(processor, "feature_extractor", None)
+        feature_extractor = getattr(processor, "feature_extractor", None) or getattr(
+            processor, "audio_processor", None
+        )
         mm_inputs = {}
 
         if len(images) != 0:
@@ -1093,6 +1095,9 @@ class Gemma4Plugin(BasePlugin):
         image_token: str = getattr(processor, "image_token")
         video_token: str = getattr(processor, "video_token")
         audio_token: str = getattr(processor, "audio_token")
+        feature_extractor = getattr(processor, "feature_extractor", None) or getattr(
+            processor, "audio_processor", None
+        )
 
         if self.expand_mm_tokens:
             mm_inputs = self._get_mm_inputs(images, videos, audios, processor)
@@ -1132,9 +1137,10 @@ class Gemma4Plugin(BasePlugin):
 
             while AUDIO_PLACEHOLDER in content:
                 current_audio = next(audio_iter)
+                # Input validation rejects a missing audio extractor before expansion.
                 if self.expand_mm_tokens:
                     num_audio_tokens = processor._compute_audio_num_tokens(
-                        current_audio, processor.feature_extractor.sampling_rate
+                        current_audio, feature_extractor.sampling_rate
                     )
                     audio_str = f"{boa_token}{audio_token * num_audio_tokens}{eoa_token}"
                 else:
