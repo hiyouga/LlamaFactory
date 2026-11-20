@@ -3051,6 +3051,17 @@ register_model_group(
 
 register_model_group(
     models={
+        "Audio-Flamingo-3": {
+            DownloadSource.DEFAULT: "nvidia/audio-flamingo-3-hf",
+        },
+    },
+    template="audio_flamingo_3",
+    multimodal=True,
+)
+
+
+register_model_group(
+    models={
         "Qwen2.5-Omni-3B": {
             DownloadSource.DEFAULT: "Qwen/Qwen2.5-Omni-3B",
             DownloadSource.MODELSCOPE: "Qwen/Qwen2.5-Omni-3B",
