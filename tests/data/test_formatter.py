@@ -261,6 +261,24 @@ def test_qwen_multi_function_formatter():
 
 
 @pytest.mark.runs_on(["cpu", "mps", "xpu"])
+@pytest.mark.parametrize(
+    "tool_format, expected",
+    [
+        ("qwen", """<tool_call>\n{"name": "tool_name", "arguments": {"foo": "bar", "size": 10}}\n</tool_call>"""),
+        (
+            "qwen3_5",
+            "<tool_call>\n<function=tool_name>\n<parameter=foo>\nbar\n</parameter>\n"
+            "<parameter=size>\n10\n</parameter>\n</function>\n</tool_call>",
+        ),
+    ],
+)
+def test_function_formatter_with_string_arguments(tool_format: str, expected: str):
+    formatter = FunctionFormatter(slots=["{{content}}"], tool_format=tool_format)
+    tool_calls = json.dumps({"name": "tool_name", "arguments": json.dumps(FUNCTION["arguments"])})  # openai style
+    assert formatter.apply(content=tool_calls) == [expected]
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
 def test_qwen_tool_formatter():
     formatter = ToolFormatter(tool_format="qwen")
     wrapped_tool = {"type": "function", "function": TOOLS[0]}
