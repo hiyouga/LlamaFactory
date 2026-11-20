@@ -85,6 +85,51 @@ def test_chunk_loss_matches_eager_loss_and_gradients(frozen_head):
             _assert_gradients_close(actual.grad, expected.grad)
 
 
+@pytest.mark.parametrize("supervision", ["none", "sparse", "full"])
+def test_chunk_loss_only_projects_supervised_rows(monkeypatch, supervision):
+    torch.manual_seed(0)
+    eager_head = nn.Linear(4, 7).to(torch.bfloat16)
+    chunk_head = deepcopy(eager_head)
+    eager_hidden = torch.randn(2, 6, 4, dtype=torch.bfloat16, requires_grad=True)
+    chunk_hidden = eager_hidden.detach().clone().requires_grad_()
+    if supervision == "full":
+        labels = torch.tensor([[0, 1, 2, 3, 4, 5], [6, 5, 4, 3, 2, 1]])
+        loss_weights = torch.tensor([[1.0, 0.5, 1.0, 0.25, 1.0, 1.0], [0.75, 1.0, 1.0, 0.5, 1.0, 1.0]])
+    else:
+        # A row counts only if it has a label and a non-zero weight.
+        labels = torch.tensor(
+            [[IGNORE_INDEX, IGNORE_INDEX, 1, IGNORE_INDEX, 3, 4], [IGNORE_INDEX, 6, IGNORE_INDEX, 5, 2, 0]]
+        )
+        loss_weights = torch.tensor([[1.0, 0.0, 0.5, 0.0, 0.0, 1.0], [0.0, 0.25, 1.0, 0.0, 0.75, 1.0]])
+        if supervision == "none":
+            labels.fill_(IGNORE_INDEX)
+    supervised = (labels != IGNORE_INDEX) & (loss_weights != 0)
+
+    eager_loss = _weighted_cross_entropy(eager_head(eager_hidden), labels, loss_weights)
+    eager_loss.backward()
+
+    projected_rows = []
+    linear = F.linear
+
+    def counting_linear(input, *args, **kwargs):
+        projected_rows.append(input.size(0))
+        return linear(input, *args, **kwargs)
+
+    monkeypatch.setattr(F, "linear", counting_linear)
+    chunk_loss = _ChunkedLinearCrossEntropy.apply(
+        chunk_hidden, chunk_head.weight, chunk_head.bias, labels, loss_weights, 2
+    )
+    chunk_loss.backward()
+
+    assert sum(projected_rows) == supervised.sum().item()
+    assert all(rows <= 2 for rows in projected_rows)
+    torch.testing.assert_close(chunk_loss, eager_loss)
+    _assert_gradients_close(chunk_hidden.grad, eager_hidden.grad)
+    assert not chunk_hidden.grad[~supervised].any()
+    for actual, expected in zip(chunk_head.parameters(), eager_head.parameters()):
+        _assert_gradients_close(actual.grad, expected.grad)
+
+
 @pytest.mark.parametrize("zero_supervision", [False, True])
 def test_chunk_sft_loss_matches_reference(zero_supervision):
     model = _make_model()
