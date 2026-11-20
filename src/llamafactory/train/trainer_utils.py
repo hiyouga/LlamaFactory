@@ -18,6 +18,7 @@
 # limitations under the License.
 
 import json
+import math
 import os
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Any, Optional, Union
@@ -634,6 +635,19 @@ def get_batch_logps(
         logps = (per_token_logps * loss_mask).sum(-1)
 
     return logps, valid_length
+
+
+def log1mexp(x: "torch.Tensor") -> "torch.Tensor":
+    r"""Compute log(1 - exp(x)) without cancellation for x <= 0.
+
+    Use expm1 near zero and log1p in the negative tail, switching at -log(2).
+    Clamp the unused branch too: torch.where evaluates both branches, and an
+    unused log1p(-1) would otherwise produce NaN gradients near zero.
+    """
+    cutoff = -math.log(2)
+    near_zero = torch.log(-torch.expm1(x.clamp(min=cutoff)))
+    negative_tail = torch.log1p(-torch.exp(x.clamp(max=cutoff)))
+    return torch.where(x > cutoff, near_zero, negative_tail)
 
 
 def dft_loss_func(

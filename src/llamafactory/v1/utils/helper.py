@@ -13,6 +13,7 @@
 # limitations under the License.
 
 
+import math
 import random
 
 import numpy as np
@@ -23,7 +24,7 @@ from transformers import set_seed as hf_set_seed
 from ..accelerator.helper import is_torch_npu_available
 from ..accelerator.interface import DistributedInterface
 from .constants import IGNORE_INDEX
-from .types import BatchInput, Processor
+from .types import BatchInput, Processor, Tensor
 
 
 def enable_full_determinism(seed: int) -> None:
@@ -106,3 +107,16 @@ def model_uses_mrope(config) -> bool:
     text_config = getattr(config, "text_config", config)
     rope = getattr(text_config, "rope_scaling", None) or getattr(text_config, "rope_parameters", None)
     return isinstance(rope, dict) and "mrope_section" in rope
+
+
+def log1mexp(x: Tensor) -> Tensor:
+    r"""Compute log(1 - exp(x)) without cancellation for x <= 0.
+
+    Use expm1 near zero and log1p in the negative tail, switching at -log(2).
+    Clamp the unused branch too: torch.where evaluates both branches, and an
+    unused log1p(-1) would otherwise produce NaN gradients near zero.
+    """
+    cutoff = -math.log(2)
+    near_zero = torch.log(-torch.expm1(x.clamp(min=cutoff)))
+    negative_tail = torch.log1p(-torch.exp(x.clamp(max=cutoff)))
+    return torch.where(x > cutoff, near_zero, negative_tail)
