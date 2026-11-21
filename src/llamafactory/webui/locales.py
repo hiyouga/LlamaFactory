@@ -2974,6 +2974,28 @@ LOCALES = {
             "info": "Hugging Face Hub にモデルをアップロードするためのリポジトリ ID。",
         },
     },
+    "export_hub_private": {
+        "en": {
+            "label": "Create private repository",
+            "info": "Create a private repository on Hugging Face Hub.",
+        },
+        "ru": {
+            "label": "Создать приватный репозиторий",
+            "info": "Создать приватный репозиторий на Hugging Face Hub.",
+        },
+        "zh": {
+            "label": "创建私有仓库",
+            "info": "在 Hugging Face Hub 上创建私有仓库。",
+        },
+        "ko": {
+            "label": "비공개 저장소 생성",
+            "info": "Hugging Face Hub에 비공개 저장소를 생성합니다.",
+        },
+        "ja": {
+            "label": "非公開リポジトリを作成",
+            "info": "Hugging Face Hub に非公開リポジトリを作成します。",
+        },
+    },
     "export_btn": {
         "en": {
             "value": "Export",
