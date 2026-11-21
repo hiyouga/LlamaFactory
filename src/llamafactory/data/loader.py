@@ -183,7 +183,7 @@ def _get_merged_dataset(
     if return_dict:
         return datasets
     else:
-        return merge_dataset(list(datasets.values()), data_args, seed=training_args.seed)
+        return merge_dataset(list(datasets.values()), data_args, seed=training_args.data_seed)
 
 
 def _get_dataset_processor(
@@ -312,7 +312,7 @@ def get_dataset(
 
     with training_args.main_process_first(desc="pre-process dataset", local=(not data_args.data_shared_file_system)):
         # move front to make sure eval_dataset(if contain or split) can preprocessed appropriately
-        train_dict, eval_dict = split_dataset(dataset, eval_dataset, data_args, seed=training_args.seed)
+        train_dict, eval_dict = split_dataset(dataset, eval_dataset, data_args, seed=training_args.data_seed)
 
         if "train" in train_dict:
             train_dict["train"] = _get_preprocessed_dataset(

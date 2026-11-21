@@ -166,7 +166,7 @@ def _load_aligned_datasets(
         stage,
         return_dict=data_args.eval_on_each_dataset,
     )
-    train_dict, eval_dict = split_dataset(dataset, eval_dataset, data_args, seed=training_args.seed)
+    train_dict, eval_dict = split_dataset(dataset, eval_dataset, data_args, seed=training_args.data_seed)
     return train_dict.get("train"), eval_dict
 
 
@@ -308,7 +308,7 @@ def run_pt(
             output_dir=dataset_dir,
             eval_dataset=eval_dict.get("validation") if eval_dict else None,
             val_size=data_args.val_size,
-            seed=training_args.seed,
+            seed=training_args.data_seed,
             stage="pt",
         )
 
@@ -351,7 +351,7 @@ def run_sft(
             output_dir=dataset_dir,
             eval_dataset=eval_dict or None,
             val_size=data_args.val_size if not eval_dict else 0.0,
-            seed=training_args.seed,
+            seed=training_args.data_seed,
             stage="sft",
             model_name_or_path=model_args.model_name_or_path,
             trust_remote_code=model_args.trust_remote_code,
