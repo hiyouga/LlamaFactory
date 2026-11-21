@@ -62,3 +62,35 @@ def test_sharegpt_converter():
         "_videos": None,
         "_audios": None,
     }
+
+
+@pytest.mark.runs_on(["cpu", "mps"])
+def test_sharegpt_converter_merges_consecutive_observations():
+    dataset_attr = DatasetAttr("hf_hub", "llamafactory/tiny-supervised-dataset")
+    data_args = DataArguments()
+    example = {
+        "conversations": [
+            {"from": "human", "value": "Check both symbols."},
+            {"from": "function_call", "value": "<tool_call>lookup_a</tool_call>\n<tool_call>lookup_b</tool_call>"},
+            {"from": "observation", "value": '{"symbol": "A", "price": 10}'},
+            {"from": "observation", "value": '{"symbol": "B", "price": 20}'},
+            {"from": "gpt", "value": "A is 10 and B is 20."},
+        ]
+    }
+    dataset_converter = get_dataset_converter("sharegpt", dataset_attr, data_args)
+    assert dataset_converter(example) == {
+        "_prompt": [
+            {"role": Role.USER.value, "content": "Check both symbols."},
+            {"role": Role.FUNCTION.value, "content": "<tool_call>lookup_a</tool_call>\n<tool_call>lookup_b</tool_call>"},
+            {
+                "role": Role.OBSERVATION.value,
+                "content": '{"symbol": "A", "price": 10}\n</tool_response>\n<tool_response>\n{"symbol": "B", "price": 20}',
+            },
+        ],
+        "_response": [{"role": Role.ASSISTANT.value, "content": "A is 10 and B is 20."}],
+        "_system": "",
+        "_tools": "",
+        "_images": None,
+        "_videos": None,
+        "_audios": None,
+    }
