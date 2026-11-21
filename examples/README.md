@@ -49,6 +49,11 @@ llamafactory-cli train examples/train_lora/qwen3_lora_pretrain.yaml
 llamafactory-cli train examples/train_lora/qwen3_lora_sft.yaml
 ```
 
+Set `drop_long_samples: true` in the training YAML to keep complete SFT examples within the token limit.
+The full length includes all conversation turns, template tokens, multimodal tokens, and any final EOS token.
+Examples above the limit are dropped before truncation. This applies to ordinary SFT and packed SFT;
+packing reserves one position from `cutoff_len` for padding. The default `false` preserves truncation.
+
 #### Multimodal Supervised Fine-Tuning
 
 ```bash
