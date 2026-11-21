@@ -49,6 +49,11 @@ def jsonify(data: "BaseModel") -> str:
         return data.json(exclude_unset=True, ensure_ascii=False)
 
 
+def is_web_uri(url: str) -> bool:
+    """Return True for http(s)/ftp URIs; scheme matching is case-insensitive."""
+    return urlparse(url).scheme.lower() in {"http", "https", "ftp"}
+
+
 def check_lfi_path(path: str) -> None:
     """Checks if a given path is vulnerable to LFI. Raises HTTPException if unsafe."""
     if not ALLOW_LOCAL_FILES:
@@ -59,10 +64,20 @@ def check_lfi_path(path: str) -> None:
         real_path = os.path.realpath(path)
         safe_path = os.path.realpath(SAFE_MEDIA_PATH)
 
-        if not real_path.startswith(safe_path):
+        # Use path-segment containment, not string prefix: siblings such as
+        # ``safe_media_backup`` must not pass when the allowlist is ``safe_media``.
+        if os.path.commonpath([real_path, safe_path]) != safe_path:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN, detail="File access is restricted to the safe media directory."
             )
+    except HTTPException:
+        raise
+    except ValueError:
+        # ``os.path.commonpath`` raises ValueError when paths are on different
+        # drives (Windows). Keep fail-closed with the same 403 as path escapes.
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN, detail="File access is restricted to the safe media directory."
+        )
     except Exception:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid or inaccessible file path.")
 
@@ -71,7 +86,7 @@ def check_ssrf_url(url: str) -> None:
     """Checks if a given URL is vulnerable to SSRF. Raises HTTPException if unsafe."""
     try:
         parsed_url = urlparse(url)
-        if parsed_url.scheme not in ["http", "https"]:
+        if parsed_url.scheme.lower() not in ["http", "https"]:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only HTTP/HTTPS URLs are allowed.")
 
         hostname = parsed_url.hostname
@@ -79,18 +94,38 @@ def check_ssrf_url(url: str) -> None:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid URL hostname.")
 
         ip_info = socket.getaddrinfo(hostname, parsed_url.port)
-        ip_address_str = ip_info[0][4][0]
-        ip = ipaddress.ip_address(ip_address_str)
-
-        if not ip.is_global:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="Access to private or reserved IP addresses is not allowed.",
-            )
+        # Reject if *any* resolved address is non-global (multi-A / dual-stack hosts).
+        for entry in ip_info:
+            ip = ipaddress.ip_address(entry[4][0])
+            if not ip.is_global:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Access to private or reserved IP addresses is not allowed.",
+                )
 
     except socket.gaierror:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST, detail=f"Could not resolve hostname: {parsed_url.hostname}"
         )
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid URL: {e}")
+
+
+def fetch_remote_media(url: str):
+    """SSRF-check and fetch remote media without following redirects.
+
+    Rejects non-2xx responses (including unfollowed 3xx) before callers pass
+    the body to Image.open / video / audio loaders.
+    """
+    import requests
+
+    check_ssrf_url(url)
+    resp = requests.get(url, stream=True, allow_redirects=False, timeout=(5, 30))
+    if not (200 <= resp.status_code < 300):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Remote media fetch failed with HTTP {resp.status_code}.",
+        )
+    return resp.raw
