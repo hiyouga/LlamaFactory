@@ -302,9 +302,13 @@ https://github.com/user-attachments/assets/43b700c6-a178-41db-b1f8-8190a5d3fcfc
 | [GPT-OSS](https://huggingface.co/openai)                          | 20B/120B                         | gpt_oss              |
 | [Granite 3-4](https://huggingface.co/ibm-granite)                 | 1B/2B/3B/7B/8B                   | granite3/granite4    |
 | [Hunyuan/Hunyuan1.5 (MT)](https://huggingface.co/tencent/)        | 0.5B/1.8B/4B/7B/13B              | hunyuan/hunyuan_small|
+| [InCoder-32B](https://huggingface.co/Multilingual-Multimodal-NLP/IndustrialCoder) | 32B                              | 分词器模板（v1）            |
+| [InCoder-32B-Thinking](https://huggingface.co/Multilingual-Multimodal-NLP/IndustrialCoder-Thinking) | 32B                              | 分词器模板（v1）            |
 | [InternLM 2-3](https://huggingface.co/internlm)                   | 7B/8B/20B                        | intern2              |
 | [InternVL 2.5-3.5](https://huggingface.co/OpenGVLab)              | 1B/2B/4B/8B/14B/30B/38B/78B/241B | intern_vl            |
 | [Intern-S1-mini](https://huggingface.co/internlm/)                | 8B                               | intern_s1            |
+| [IQuest-Coder (V1 Instruct/Thinking)](https://huggingface.co/collections/IQuestLab/iquest-coder) | 7B/14B/40B                       | 分词器模板（v1）            |
+| [IQuest-Q1](https://huggingface.co/IQuestLab/IQuest-Q1)           | 320B-A15B                        | [官方模板](https://huggingface.co/IQuestLab/IQuest-Q1/blob/main/chat_template.jinja)（微调待验证） |
 | [Kimi-VL](https://huggingface.co/moonshotai)                      | 16B                              | kimi_vl              |
 | [Ling 2.0 (mini/flash)](https://huggingface.co/inclusionAI)       | 16B/100B                         | bailing_v2           |
 | [LFM 2.5 (VL)](https://huggingface.co/LiquidAI)                   | 1.2B/1.6B                        | lfm2/lfm2_vl         |
