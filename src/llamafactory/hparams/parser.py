@@ -548,6 +548,15 @@ def get_train_args(args: dict[str, Any] | list[str] | None = None) -> _TRAIN_CLS
     if (
         not finetuning_args.use_mca
         and not finetuning_args.use_megatron_bridge
+        and training_args.fp8_enable_fsdp_float8_all_gather
+        and not training_args.fp8
+    ):
+        logger.warning_rank0("fp8_enable_fsdp_float8_all_gather requires fp8=True. Setting fp8=True.")
+        training_args.fp8 = True
+
+    if (
+        not finetuning_args.use_mca
+        and not finetuning_args.use_megatron_bridge
         and training_args.fp8
         and model_args.quantization_bit is not None
     ):
@@ -566,15 +575,6 @@ def get_train_args(args: dict[str, Any] | list[str] | None = None) -> _TRAIN_CLS
     _verify_model_args(model_args, data_args, finetuning_args)
     _check_extra_dependencies(model_args, finetuning_args, training_args)
     _verify_trackio_args(training_args)
-
-    if (
-        not finetuning_args.use_mca
-        and not finetuning_args.use_megatron_bridge
-        and training_args.fp8_enable_fsdp_float8_all_gather
-        and not training_args.fp8
-    ):
-        logger.warning_rank0("fp8_enable_fsdp_float8_all_gather requires fp8=True. Setting fp8=True.")
-        model_args.fp8 = True
 
     if (
         training_args.do_train
