@@ -292,6 +292,7 @@ Read technical notes:
 | [DeepSeek 3-3.2](https://huggingface.co/deepseek-ai)              | 236B/671B                        | deepseek3            |
 | [DeepSeek R1 (Distill)](https://huggingface.co/deepseek-ai)       | 1.5B/7B/8B/14B/32B/70B/671B      | deepseekr1           |
 | [ERNIE-4.5](https://huggingface.co/baidu)                         | 0.3B/21B/300B                    | ernie_nothink        |
+| [ERNIE-5.5](https://huggingface.co/baidu)                         | 280B-A14B                        | ernie5_5             |
 | [Falcon/Falcon H1](https://huggingface.co/tiiuae)                 | 0.5B/1.5B/3B/7B/11B/34B/40B/180B | falcon/falcon_h1     |
 | [Gemma/Gemma 2/CodeGemma](https://huggingface.co/google)          | 2B/7B/9B/27B                     | gemma/gemma2         |
 | [Gemma 3/Gemma 3n](https://huggingface.co/google)                 | 270M/1B/4B/6B/8B/12B/27B         | gemma3/gemma3n       |
