@@ -149,19 +149,14 @@ class BaseTrainer:
         if self.args.cp_size > 1:
             from ..plugins.model_plugins.parallelization.sequence_parallel import SequenceParallelModelPlugin
 
-            if model.config._attn_implementation != "flash_attention_2":
-                raise ValueError(
-                    "Sequence parallelism requires flash attention. Please set `flash_attn: flash_attention_2`."
-                )
-
             SequenceParallelModelPlugin(self.args.cp_mode)(model, self.args.cp_size)
 
     def _create_batch_generator(self) -> None:
         if (
-            self.args.batching_strategy == BatchingStrategy.PADDING_FREE
+            self.args.batching_strategy in (BatchingStrategy.PADDING_FREE, BatchingStrategy.DYNAMIC_PADDING_FREE)
             and getattr(self.model.config, "_attn_implementation", None) != "flash_attention_2"
         ):
-            raise ValueError("`padding_free` requires `flash_attn: flash_attention_2`.")
+            raise ValueError(f"`{self.args.batching_strategy}` requires `flash_attn: flash_attention_2`.")
 
         self.train_batch_generator = BatchGenerator(
             dataset=self.train_dataset,
@@ -288,9 +283,11 @@ class BaseTrainer:
                     grad_norm = self._deepspeed_engine.get_grad_norm()
                 else:
                     dist_name = self.args.dist_config.name if self.args.dist_config else None
-                    if dist_name == "fsdpturbo":
+                    if dist_name is not None:
                         from ..plugins.trainer_plugins.distributed.interface import DistributedPlugin
 
+                        DistributedPlugin(dist_name).synchronize_gradients(self.model)
+                    if dist_name == "fsdpturbo":
                         grad_norm = DistributedPlugin(dist_name).clip_grad_norm(self.model, self.args.max_grad_norm)
                     else:
                         # FSDP2 shards params/grads across the fsdp mesh, so clip_grad_norm_ returns a

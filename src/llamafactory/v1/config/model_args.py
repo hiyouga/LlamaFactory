@@ -33,10 +33,10 @@ class ModelArguments:
         default=False,
         metadata={"help": "Trust remote code from Hugging Face."},
     )
-    flash_attn: AttentionFunction = field(
-        default=AttentionFunction.SDPA,
+    flash_attn: AttentionFunction | None = field(
+        default=None,
         metadata={
-            "help": "Attention implementation to use: eager, sdpa, or flash_attention_2. SDPA is the default implementation for models."
+            "help": "Attention implementation: eager, sdpa, or flash_attention_2. Defaults to SDPA, or eager for DeepSeek V4."
         },
     )
     model_class: ModelClass = field(
@@ -62,7 +62,7 @@ class ModelArguments:
 
     def __post_init__(self) -> None:
         supported_flash_attn = [item.value for item in AttentionFunction]
-        if self.flash_attn not in supported_flash_attn:
+        if self.flash_attn is not None and self.flash_attn not in supported_flash_attn:
             raise ValueError(
                 f"Unsupported `flash_attn`: {self.flash_attn}. Supported values are: {supported_flash_attn}."
             )

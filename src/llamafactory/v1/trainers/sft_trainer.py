@@ -68,6 +68,9 @@ def run_sft(args: InputArgument = None):
         train_dataset=train_dataset,
     )
     trainer.fit()
+    if training_args.dist_config and training_args.dist_config.name in ("fsdp2", "fsdpturbo"):
+        # Final HF export needs weights only; free Adam/momentum buffers before full-state gathers.
+        trainer.optimizer.state.clear()
     trainer.save_model()
     DistributedInterface().destroy()
 
