@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Any, Optional
 
 from ...extras import logging
 from ...extras.constants import IGNORE_INDEX
+from ..data_utils import Role
 from .processor_utils import DatasetProcessor, greedy_knapsack, infer_seqlen
 
 
@@ -76,16 +77,25 @@ class SupervisedDatasetProcessor(DatasetProcessor):
             source_len, target_len = infer_seqlen(
                 len(source_ids), len(target_ids), self.data_args.cutoff_len - total_length
             )
-            source_ids = source_ids[:source_len]
+            if source_len < len(source_ids):
+                message_idx = len(encoded_pairs) - 1 - turn_idx if self.data_args.mask_history else turn_idx
+                message = messages[2 * message_idx]
+                if message["role"] == Role.USER and not (images or videos or audios):
+                    source_ids = self.template.truncate_user_prompt(
+                        self.tokenizer, source_ids, source_len, message["content"], message_idx, system, tools
+                    )
+                else:
+                    source_ids = source_ids[:source_len]
             target_ids = target_ids[:target_len]
+            # A character that spans several tokens can leave part of this turn's allocation unused.
             total_length += source_len + target_len
 
             if self.data_args.train_on_prompt:
                 source_label = source_ids
-            elif self.template.efficient_eos and turn_idx != 0:
-                source_label = [self.tokenizer.eos_token_id] + [IGNORE_INDEX] * (source_len - 1)
+            elif self.template.efficient_eos and turn_idx != 0 and source_ids:
+                source_label = [self.tokenizer.eos_token_id] + [IGNORE_INDEX] * (len(source_ids) - 1)
             else:
-                source_label = [IGNORE_INDEX] * source_len
+                source_label = [IGNORE_INDEX] * len(source_ids)
 
             if self.data_args.mask_history and turn_idx != 0:  # train on the last turn only
                 target_label = [IGNORE_INDEX] * target_len
