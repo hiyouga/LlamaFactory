@@ -29,7 +29,7 @@ jobs:
         python:
           - "3.12"
         os:
-          - "linux-aarch64-a2-4"
+          - "linux-aarch64-a2-llamafactory-fed-4"
         pytorch_npu:
           - "2.10.0"
 
