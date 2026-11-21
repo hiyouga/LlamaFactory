@@ -175,16 +175,21 @@ class MultiModalDataCollatorForSeq2Seq(DataCollatorForSeq2Seq):
             features["rope_deltas"] = torch.zeros(features["input_ids"].shape[0])
             return
 
-        if "mm_token_type_ids" in inspect.signature(self.get_rope_func).parameters:
-            image_token_id = getattr(self.model.config, "image_token_id", None)
-            video_token_id = getattr(self.model.config, "video_token_id", None)
-            if image_token_id is not None or video_token_id is not None:
-                mm_token_type_ids = torch.zeros_like(features["input_ids"])
-                if image_token_id is not None:
-                    mm_token_type_ids[features["input_ids"] == image_token_id] = 1
-                if video_token_id is not None:
-                    mm_token_type_ids[features["input_ids"] == video_token_id] = 2
-                rope_index_kwargs["mm_token_type_ids"] = mm_token_type_ids
+        image_token_id = getattr(self.model.config, "image_token_id", None)
+        video_token_id = getattr(self.model.config, "video_token_id", None)
+
+        # Newer transformers implementations (e.g. Qwen2VL, Gemma4) may require
+        # mm_token_type_ids in get_rope_index(). Do not rely on inspect.signature()
+        # here because wrapped/bound methods may not expose the expected signature.
+        if "mm_token_type_ids" in features:
+            rope_index_kwargs["mm_token_type_ids"] = features["mm_token_type_ids"]
+        elif image_token_id is not None or video_token_id is not None:
+            mm_token_type_ids = torch.zeros_like(features["input_ids"])
+            if image_token_id is not None:
+                mm_token_type_ids[features["input_ids"] == image_token_id] = 1
+            if video_token_id is not None:
+                mm_token_type_ids[features["input_ids"] == video_token_id] = 2
+            rope_index_kwargs["mm_token_type_ids"] = mm_token_type_ids
 
         if "second_per_grid_ts" in mm_inputs:  # for qwen2vl
             rope_index_kwargs["second_per_grid_ts"] = mm_inputs.get("second_per_grid_ts")
@@ -259,9 +264,14 @@ class MultiModalDataCollatorForSeq2Seq(DataCollatorForSeq2Seq):
 
             if num_sub_seqs <= 1:
                 sample_features = {
-                    "input_ids": features["input_ids"],
+                    "input_ids": features["input_ids"][sample_idx : sample_idx + 1],
                     "attention_mask": features["attention_mask"][sample_idx : sample_idx + 1],
                 }
+                if "mm_token_type_ids" in features:
+                    sample_features["mm_token_type_ids"] = features["mm_token_type_ids"][sample_idx : sample_idx + 1]
+                if "token_type_ids" in features:
+                    sample_features["token_type_ids"] = features["token_type_ids"][sample_idx : sample_idx + 1]
+
                 mm_inputs_for_sample = _slice_mm_inputs_for_sample(
                     mm_inputs, batch_imglens, batch_vidlens, sample_idx=sample_idx
                 )
@@ -280,6 +290,15 @@ class MultiModalDataCollatorForSeq2Seq(DataCollatorForSeq2Seq):
                             sample_idx : sample_idx + 1, subseq_start:subseq_end
                         ],
                     }
+                    if "mm_token_type_ids" in features:
+                        subseq_features["mm_token_type_ids"] = features["mm_token_type_ids"][
+                            sample_idx : sample_idx + 1, subseq_start:subseq_end
+                        ]
+                    if "token_type_ids" in features:
+                        subseq_features["token_type_ids"] = features["token_type_ids"][
+                            sample_idx : sample_idx + 1, subseq_start:subseq_end
+                        ]
+
                     mm_inputs_for_subseq = _slice_mm_inputs_for_sample(
                         mm_inputs,
                         batch_imglens,
@@ -412,11 +431,14 @@ class MultiModalDataCollatorForSeq2Seq(DataCollatorForSeq2Seq):
             batch_input_ids,
             self.processor,
         )
+
         if "token_type_ids" in mm_inputs:
             token_type_ids = mm_inputs.pop("token_type_ids")
             for i, feature in enumerate(features):
                 feature["token_type_ids"] = token_type_ids[i]
 
+        # Keep raw mm_token_type_ids aside and align them after super().__call__()
+        mm_token_type_ids = mm_inputs.pop("mm_token_type_ids", None)
         if "mm_token_type_ids" in mm_inputs:  # need tensor-like for gemma4
             mm_token_type_ids = mm_inputs.pop("mm_token_type_ids")
             max_len = max(len(ids) for ids in mm_token_type_ids)
@@ -438,6 +460,38 @@ class MultiModalDataCollatorForSeq2Seq(DataCollatorForSeq2Seq):
             "qwen3_omni_moe_thinker",
         ]
 
+        # If the processor provides mm_token_type_ids, keep them for all models.
+        if mm_token_type_ids is not None:
+            padded_mm_token_type_ids = []
+            for ids in mm_token_type_ids:
+                if torch.is_tensor(ids):
+                    ids = ids.tolist()
+
+                pad_len = seq_len - len(ids)
+                if pad_len < 0:
+                    ids = ids[:seq_len]
+                    pad_len = 0
+
+                if self.tokenizer.padding_side == "right":
+                    padded_ids = ids + [0] * pad_len
+                else:
+                    padded_ids = [0] * pad_len + ids
+
+                padded_mm_token_type_ids.append(padded_ids)
+
+            features["mm_token_type_ids"] = torch.tensor(
+                padded_mm_token_type_ids,
+                dtype=torch.long,
+                device=features["input_ids"].device,
+            )
+        elif model_type == "gemma4":
+            # Gemma 4 text-only batches still require the field.
+            features["mm_token_type_ids"] = torch.zeros_like(features["input_ids"])
+
+        # Keep token_type_ids present as well for Gemma 4 text-only robustness.
+        if model_type == "gemma4" and "token_type_ids" not in features:
+            features["token_type_ids"] = torch.zeros_like(features["input_ids"])
+
         if self.get_rope_func is not None:
             # for mmrope situation, we should calculate position_ids and rope_deltas per sample.
             # When neat_packing is on, each sample has packing_params; None means no packing for that sample.
@@ -447,7 +501,6 @@ class MultiModalDataCollatorForSeq2Seq(DataCollatorForSeq2Seq):
                 # FIXME: too tricky, need to be refactored @kuangdd
                 features["has_dummy_image"] = True
 
-            # When fake image/audio was injected, sequence_boundaries no longer match the tensor; use non-packing path.
             if not has_packing:
                 self._compute_rope_position_ids(features, mm_inputs)
             else:
@@ -464,7 +517,6 @@ class MultiModalDataCollatorForSeq2Seq(DataCollatorForSeq2Seq):
                     has_dummy_image,
                 )
 
-            # For transformers compatibility, after https://github.com/huggingface/transformers/issues/39400
             if features["position_ids"].dim() == 3:
                 features["position_ids"] = torch.cat(
                     [features["position_ids"][0].unsqueeze(0), features["position_ids"]], dim=0
@@ -496,8 +548,7 @@ class MultiModalDataCollatorForSeq2Seq(DataCollatorForSeq2Seq):
             return {"data": features, "input_ids": features["input_ids"], "labels": features["labels"]}
 
         return features
-
-
+    
 @dataclass
 class SFTDataCollatorWith4DAttentionMask(MultiModalDataCollatorForSeq2Seq):
     r"""Data collator for 4d attention mask."""
@@ -510,6 +561,12 @@ class SFTDataCollatorWith4DAttentionMask(MultiModalDataCollatorForSeq2Seq):
     def __post_init__(self):
         super().__post_init__()
         if self.neat_packing and self.attn_implementation == "flash_attention_2":
+            if self.model is not None and getattr(self.model.config, "model_type", None) in [
+                "qwen3_5",
+                "qwen3_5_moe",
+                "gpt_oss",
+            ]:
+                raise ValueError("Neat packing is not supported for qwen3_5, qwen3_5_moe, gpt_oss models for now.")
             if self.model is not None and getattr(self.model.config, "model_type", None) in ["gemma4", "gpt_oss"]:
                 raise ValueError("Neat packing is not supported for gemma4, gpt_oss models for now.")
 
@@ -525,7 +582,7 @@ class SFTDataCollatorWith4DAttentionMask(MultiModalDataCollatorForSeq2Seq):
         if non_padding_indices.numel() == seq_len:
             return
 
-        keys_on_seq_dim_1 = {"input_ids", "labels", "attention_mask", "token_type_ids"}
+        keys_on_seq_dim_1 = {"input_ids", "labels", "attention_mask", "token_type_ids", "mm_token_type_ids"}
         for key, value in list(features.items()):
             if not torch.is_tensor(value):
                 continue
