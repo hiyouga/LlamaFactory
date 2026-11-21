@@ -547,3 +547,48 @@ def test_minicpm5_tool_round_trip(arguments):
     function_formatter = FunctionFormatter(slots=["{{content}}"], tool_format="minicpm5")
     rendered = function_formatter.apply(content=json.dumps({"name": "test_tool", "arguments": arguments}))[0]
     assert formatter.extract(rendered) == [("test_tool", json.dumps(arguments, ensure_ascii=False))]
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
+def test_glm4_moe_tool_extractor_no_match():
+    formatter = ToolFormatter(tool_format="glm4_moe")
+    result = "This is a regular response without tool calls."
+    assert formatter.extract(result) == result
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
+@pytest.mark.parametrize("tool_format", ["glm4_moe", "glm5_next"])
+def test_glm4_moe_tool_round_trip(tool_format):
+    formatter = FunctionFormatter(slots=["{{content}}"], tool_format=tool_format)
+    tool_formatter = ToolFormatter(tool_format=tool_format)
+    original = {"name": "my_func", "arguments": {"arg1": "hello", "arg2": 42, "arg3": True}}
+    formatted = formatter.apply(content=json.dumps(original))
+    assert tool_formatter.extract(formatted[0]) == [
+        (original["name"], json.dumps(original["arguments"], ensure_ascii=False))
+    ]
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
+@pytest.mark.parametrize("tool_format", ["glm4_moe", "glm5_next"])
+def test_glm4_moe_multi_tool_round_trip(tool_format):
+    formatter = FunctionFormatter(slots=["{{content}}"], tool_format=tool_format)
+    tool_formatter = ToolFormatter(tool_format=tool_format)
+    originals = [
+        {"name": "my_func", "arguments": {"arg1": "hello", "arg2": 42}},
+        {"name": "other_func", "arguments": {"arg3": "world"}},
+    ]
+    formatted = formatter.apply(content=json.dumps(originals))
+    assert tool_formatter.extract(formatted[0]) == [
+        (original["name"], json.dumps(original["arguments"], ensure_ascii=False)) for original in originals
+    ]
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
+def test_glm4_moe_tool_round_trip_json_like_string_is_lossy():
+    formatter = FunctionFormatter(slots=["{{content}}"], tool_format="glm4_moe")
+    tool_formatter = ToolFormatter(tool_format="glm4_moe")
+    original = {"name": "my_func", "arguments": {"count": "42", "flag": "true", "empty": "null", "items": "[1, 2]"}}
+    formatted = formatter.apply(content=json.dumps(original))
+    assert tool_formatter.extract(formatted[0]) == [
+        ("my_func", json.dumps({"count": 42, "flag": True, "empty": None, "items": [1, 2]}))
+    ]
