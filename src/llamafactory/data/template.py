@@ -89,6 +89,72 @@ class Template:
         r"""Extract tool message."""
         return self.format_tools.extract(content)
 
+    def truncate_user_prompt(
+        self,
+        tokenizer: "PreTrainedTokenizer",
+        source_ids: list[int],
+        budget: int,
+        content: str,
+        turn: int,
+        system: Optional[str],
+        tools: Optional[str],
+    ) -> list[int]:
+        r"""Shorten the user text while retaining its formatted suffix within the existing token budget."""
+        truncated = source_ids[:budget]
+        # Specialized templates can move tokens between the prompt and its response.
+        if type(self) is not Template or len(source_ids) <= budget or not self.format_user.slots:
+            return truncated
+        last_slot = self.format_user.slots[-1]
+        if not content or (isinstance(last_slot, str) and last_slot.endswith("{{content}}")):
+            return truncated
+
+        def encode_user(length: int) -> list[int]:
+            slots = self.format_user.apply(content=content[:length], idx=str(turn))
+            return self._convert_elements_to_ids(tokenizer, slots)
+
+        best_ids = encode_user(0)
+        # Only the first user turn carries the template prefix and system/tools message.
+        prefix_len = 0
+        if turn == 0:
+            empty_source = self._encode(tokenizer, [{"role": Role.USER, "content": ""}], system, tools)[0]
+            prefix_len = len(empty_source) - len(best_ids)
+        available = budget - prefix_len
+        if available < len(best_ids):
+            return truncated
+        if available == len(best_ids):
+            return source_ids[:prefix_len] + best_ids
+
+        # Estimate the character cutoff from the existing token counts, then probe nearby
+        # prefixes. Rendering each candidate with the formatter preserves boundary merges.
+        low, high = 0, len(content)
+        length = max(1, (available - len(best_ids)) * high // (len(source_ids) - prefix_len - len(best_ids)))
+        if len(source_ids) - budget < available:
+            # A short removed span can locate the character cutoff directly. Its
+            # decoded text only supplies the estimate; encode_user checks the fit.
+            suffix_len = 0
+            for original, empty in zip(reversed(source_ids), reversed(best_ids)):
+                if original != empty:
+                    break
+                suffix_len += 1
+            removed = tokenizer.decode(source_ids[budget - suffix_len : len(source_ids) - suffix_len])
+            if 0 < len(removed) < high and content.endswith(removed):
+                length = high - len(removed)
+
+        stride = 1
+        while low < length < high:
+            ids = encode_user(length)
+            if len(ids) == available:
+                return source_ids[:prefix_len] + ids
+            if len(ids) < available:
+                low, best_ids = length, ids
+                length = min((low + high) // 2, low + stride)
+            else:
+                high = length
+                length = max((low + high) // 2, high - stride)
+            stride *= 2
+
+        return source_ids[:prefix_len] + best_ids
+
     def get_stop_token_ids(self, tokenizer: "PreTrainedTokenizer") -> list[int]:
         r"""Return stop token ids."""
         stop_token_ids = {tokenizer.eos_token_id}
