@@ -955,7 +955,7 @@ class SeedToolUtils(ToolUtils):
         ]
         function_texts = []
         for func in function_json:
-            prompt = "\n<seed:tool_call>\n<function=" + func["func_name"]
+            prompt = "\n<seed:tool_call>\n<function=" + func["func_name"] + ">"
             for key, value in func["func_key_values"].items():
                 prompt += "\n<parameter=" + key + ">"
                 if not isinstance(value, str):
@@ -971,7 +971,7 @@ class SeedToolUtils(ToolUtils):
     def tool_extractor(content: str) -> Union[str, list["FunctionCall"]]:
         results = []
         regex = re.compile(
-            r"<seed:tool_call>\s*<function=\s*([^\s<]+)\s*(.*?)\s*</function>\s*</seed:tool_call>", re.DOTALL
+            r"<seed:tool_call>\s*<function=\s*([^\s<>]+)\s*>\s*(.*?)\s*</function>\s*</seed:tool_call>", re.DOTALL
         )
         for func_name, params_block in re.findall(regex, content):
             args_dict = {}
