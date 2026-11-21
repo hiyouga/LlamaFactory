@@ -128,6 +128,18 @@ class Template:
         # prefixes. Rendering each candidate with the formatter preserves boundary merges.
         low, high = 0, len(content)
         length = max(1, (available - len(best_ids)) * high // (len(source_ids) - prefix_len - len(best_ids)))
+        if len(source_ids) - budget < available:
+            # A short removed span can locate the character cutoff directly. Its
+            # decoded text only supplies the estimate; encode_user checks the fit.
+            suffix_len = 0
+            for original, empty in zip(reversed(source_ids), reversed(best_ids)):
+                if original != empty:
+                    break
+                suffix_len += 1
+            removed = tokenizer.decode(source_ids[budget - suffix_len : len(source_ids) - suffix_len])
+            if 0 < len(removed) < high and content.endswith(removed):
+                length = high - len(removed)
+
         stride = 1
         while low < length < high:
             ids = encode_user(length)
