@@ -48,7 +48,7 @@ def _setup_full_tuning(
     forbidden_modules = get_forbidden_modules(model.config, finetuning_args)
     for name, param in model.named_parameters():
         if not any(forbidden_module in name for forbidden_module in forbidden_modules):
-            if cast_trainable_params_to_fp32:
+            if cast_trainable_params_to_fp32 and param.requires_grad:
                 param.data = param.data.to(torch.float32)
         else:
             param.requires_grad_(False)
@@ -130,7 +130,7 @@ def _setup_freeze_tuning(
         if any(trainable_layer in name for trainable_layer in trainable_layers) and not any(
             forbidden_module in name for forbidden_module in forbidden_modules
         ):
-            if cast_trainable_params_to_fp32:
+            if cast_trainable_params_to_fp32 and param.requires_grad:
                 param.data = param.data.to(torch.float32)
         else:
             param.requires_grad_(False)
