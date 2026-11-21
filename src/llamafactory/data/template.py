@@ -102,8 +102,13 @@ class Template:
         return f"{self.thought_words[0]}{self.thought_words[1]}" + content
 
     def remove_thought(self, content: str) -> str:
-        r"""Remove thought from assistant message."""
-        pattern = re.compile(f"{re.escape(self.thought_words[0])}(.*?){re.escape(self.thought_words[1])}", re.DOTALL)
+        r"""Remove thought from assistant message.
+
+        The whitespace around the thought words is matched leniently, so that ``<think>...</think>`` blocks are
+        removed no matter how many newlines the data uses around the tags.
+        """
+        open_word, close_word = (word.strip() for word in self.thought_words)
+        pattern = re.compile(rf"{re.escape(open_word)}\s*(.*?)\s*{re.escape(close_word)}\n*", re.DOTALL)
         return re.sub(pattern, "", content).lstrip("\n")
 
     def get_thought_word_ids(self, tokenizer: "PreTrainedTokenizer") -> list[int]:
