@@ -58,7 +58,9 @@ def _resolve_warmup_steps(training_args: "TrainingArguments", train_iters: int) 
     """
     warmup_steps = getattr(training_args, "warmup_steps", 0) or 0
     if warmup_steps > 0:
-        return warmup_steps
+        if warmup_steps < 1:
+            return min(int(train_iters * warmup_steps), train_iters)
+        return int(warmup_steps)
 
     warmup_ratio = getattr(training_args, "warmup_ratio", 0.0) or 0.0
     if warmup_ratio > 0:

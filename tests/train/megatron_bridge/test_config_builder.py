@@ -133,6 +133,14 @@ def test_resolve_warmup_steps_keeps_absolute_warmup():
     assert _resolve_warmup_steps(training_args, train_iters=5) == 10
 
 
+def test_resolve_warmup_steps_ratio_and_float_steps():
+    training_args_ratio = SimpleNamespace(warmup_steps=0, warmup_ratio=0.1)
+    assert _resolve_warmup_steps(training_args_ratio, train_iters=100) == 10
+
+    training_args_float = SimpleNamespace(warmup_steps=0.2, warmup_ratio=0.0)
+    assert _resolve_warmup_steps(training_args_float, train_iters=100) == 20
+
+
 def test_resolve_decay_iters_expands_for_warmup():
     from llamafactory.train.megatron_bridge.config_builder import _resolve_decay_iters
 
