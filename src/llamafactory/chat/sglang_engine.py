@@ -193,15 +193,14 @@ class SGLangEngine(BaseEngine):
 
         sampling_params = {
             "temperature": temperature if temperature is not None else self.generating_args["temperature"],
-            "top_p": (top_p if top_p is not None else self.generating_args["top_p"]) or 1.0,  # top_p must > 0
+            "top_p": top_p if top_p is not None else self.generating_args["top_p"],
             "top_k": (top_k if top_k is not None else self.generating_args["top_k"]) or -1,  # top_k must > 0
             "stop": stop,
             "stop_token_ids": self.template.get_stop_token_ids(self.tokenizer),
             "max_new_tokens": max_tokens,
             "repetition_penalty": (
                 repetition_penalty if repetition_penalty is not None else self.generating_args["repetition_penalty"]
-            )
-            or 1.0,  # repetition_penalty must > 0
+            ),
             "skip_special_tokens": skip_special_tokens
             if skip_special_tokens is not None
             else self.generating_args["skip_special_tokens"],
