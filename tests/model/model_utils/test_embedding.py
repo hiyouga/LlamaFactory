@@ -15,10 +15,14 @@
 import torch
 
 from llamafactory.model.model_utils.embedding import (
-    _description_based_initialization,
+    INIT_METHOD_ALIASES,
+    _description_initialization,
     _existing_embeddings,
-    _noisy_mean_initialization,
+    _make_embedding_freeze_hook,
+    _noise_initialization,
     _resolve_new_token_ids,
+    _vocab_mean_initialization,
+    _vocab_mean_noise_initialization,
 )
 
 
@@ -77,7 +81,7 @@ def test_existing_embeddings_excludes_new_token_ids():
     assert torch.allclose(everything, embed_weight)
 
 
-def test_noisy_mean_initialization_with_token_ids_targets_exact_rows():
+def test_vocab_mean_noise_initialization_with_token_ids_targets_exact_rows():
     """New tokens placed by explicit IDs must hit those rows, even inside the padding zone."""
     torch.manual_seed(0)
     vocab_size, embedding_dim = 20, 8
@@ -88,7 +92,7 @@ def test_noisy_mean_initialization_with_token_ids_targets_exact_rows():
     # num_new_tokens reflects the embedding resize delta (4 padded rows),
     # but the real new tokens sit at IDs 16 and 17 (inside what the tail slice would miss/over-cover).
     target_ids = [16, 17]
-    _noisy_mean_initialization(embed_weight, num_new_tokens=4, token_ids=target_ids)
+    _vocab_mean_noise_initialization(embed_weight, num_new_tokens=4, token_ids=target_ids)
 
     # targeted rows are initialized around the mean (~1.0) and not left at zero
     for tid in target_ids:
@@ -100,19 +104,51 @@ def test_noisy_mean_initialization_with_token_ids_targets_exact_rows():
     assert torch.allclose(embed_weight[19], torch.zeros(embedding_dim))
 
 
-def test_noisy_mean_initialization_tail_fallback():
+def test_vocab_mean_noise_initialization_tail_fallback():
     """Without token_ids, falls back to the last num_new_tokens rows."""
     torch.manual_seed(0)
     vocab_size, embedding_dim = 12, 8
     embed_weight = torch.zeros(vocab_size, embedding_dim)
     embed_weight[:10] = 1.0
 
-    _noisy_mean_initialization(embed_weight, num_new_tokens=2, token_ids=None)
+    _vocab_mean_noise_initialization(embed_weight, num_new_tokens=2, token_ids=None)
 
     # last two rows initialized, earlier rows untouched
     assert not torch.allclose(embed_weight[-1], torch.zeros(embedding_dim))
     assert not torch.allclose(embed_weight[-2], torch.zeros(embedding_dim))
     assert torch.allclose(embed_weight[0], torch.ones(embedding_dim))
+
+
+def test_noise_initialization_with_token_ids():
+    """Pure-noise init writes only the targeted rows and matches the existing std scale."""
+    torch.manual_seed(0)
+    vocab_size, embedding_dim = 64, 16
+    embed_weight = torch.zeros(vocab_size, embedding_dim)
+    embed_weight[:60].normal_(mean=0.0, std=0.02)
+
+    _noise_initialization(embed_weight, num_new_tokens=4, token_ids=[60, 61])
+
+    for tid in (60, 61):
+        assert not torch.allclose(embed_weight[tid], torch.zeros(embedding_dim))
+    # untouched rows stay zero
+    assert torch.allclose(embed_weight[62], torch.zeros(embedding_dim))
+    assert torch.allclose(embed_weight[63], torch.zeros(embedding_dim))
+
+
+def test_vocab_mean_initialization_assigns_identical_mean():
+    """Pure-mean init assigns the same mean vector to every targeted row."""
+    vocab_size, embedding_dim = 16, 8
+    # All rows are existing (2.0) except the two new tokens, which are excluded from the baseline.
+    embed_weight = torch.full((vocab_size, embedding_dim), 2.0)
+    embed_weight[12] = 0.0
+    embed_weight[13] = 0.0
+
+    _vocab_mean_initialization(embed_weight, num_new_tokens=4, token_ids=[12, 13])
+
+    expected = torch.full((embedding_dim,), 2.0)
+    assert torch.allclose(embed_weight[12], expected)
+    assert torch.allclose(embed_weight[13], expected)
+    assert torch.allclose(embed_weight[12], embed_weight[13])
 
 
 def test_description_init_excludes_new_token_ids_from_average():
@@ -129,7 +165,7 @@ def test_description_init_excludes_new_token_ids_from_average():
     tokenizer = _StubTokenizer({"<x>": 16}, desc_ids=[5, 17])
     model = _StubModel(embed_weight)
 
-    _description_based_initialization(
+    _description_initialization(
         embed_weight,
         num_new_tokens=4,
         descriptions={"<x>": "ignored, ids come from the stub"},
@@ -141,6 +177,42 @@ def test_description_init_excludes_new_token_ids_from_average():
 
     # row 16 must equal embedding of id 5 only (3.0), not the (5,17) average (1.5)
     assert torch.allclose(embed_weight[16], torch.full((embedding_dim,), 3.0))
+
+
+def test_embedding_freeze_hook_zeros_original_rows():
+    """The freeze hook must zero the gradient of original rows and keep new rows intact."""
+    vocab_size, embedding_dim, orig_size = 8, 4, 6
+    embed = torch.nn.Embedding(vocab_size, embedding_dim)
+    embed.weight.register_hook(_make_embedding_freeze_hook(orig_size, vocab_size))
+
+    # touch every row so each gets a gradient, then backprop
+    embed(torch.arange(vocab_size)).sum().backward()
+
+    grad = embed.weight.grad
+    assert torch.allclose(grad[:orig_size], torch.zeros(orig_size, embedding_dim))  # frozen
+    assert torch.all(grad[orig_size:] != 0.0)  # new rows still trainable
+
+
+def test_embedding_freeze_hook_passes_through_sharded_gradient():
+    """A partitioned/flattened gradient (ZeRO-3 / FSDP) is returned unchanged, never crashes."""
+    vocab_size, embedding_dim, orig_size = 8, 4, 6
+    hook = _make_embedding_freeze_hook(orig_size, vocab_size)
+
+    # 1D flat shard (FSDP-style) and a 2D shard with the wrong row count are both passed through
+    flat_shard = torch.ones(vocab_size * embedding_dim // 2)
+    assert torch.equal(hook(flat_shard), flat_shard)
+
+    row_shard = torch.ones(vocab_size // 2, embedding_dim)
+    assert torch.equal(hook(row_shard), row_shard)
+
+
+def test_legacy_init_method_aliases():
+    """Legacy init-method names map to their canonical equivalents."""
+    assert INIT_METHOD_ALIASES == {
+        "noise_init": "vocab_mean_noise",
+        "desc_init": "description",
+        "desc_init_w_noise": "description_noise",
+    }
 
 
 if __name__ == "__main__":
