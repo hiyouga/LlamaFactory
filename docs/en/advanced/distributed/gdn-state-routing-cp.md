@@ -12,7 +12,7 @@ Install the optional backend in the same environment as LlamaFactory:
 python -m pip install -r requirements/attention-gym.txt
 ```
 
-The backend is pinned to Attention Gym revision `755691f3fe5da772a6e4023ea08bbb4db8173b49`, matching the state-routing integration in torchtitan. This mode requires Linux/CUDA, Transformers 5.9 or newer, BF16 training, and GDN key/value head dimensions of 128. The included configuration enables BF16:
+The backend is pinned to Attention Gym revision `755691f3fe5da772a6e4023ea08bbb4db8173b49`, matching the state-routing integration in torchtitan. This mode requires Linux/CUDA, PyTorch 2.13 or newer, Transformers 5.9 or newer, BF16 training, and GDN key/value head dimensions of 128. The pinned backend requires both distributed and functional `all_gather_single` APIs, introduced in PyTorch 2.13; installation checks their presence before importing Attention Gym. GPU correctness tests use PyTorch 2.15 and Transformers 5.17. The PyTorch 2.13 lower bound describes API availability, not a separately tested GPU environment. The included configuration enables BF16:
 
 ```bash
 USE_V1=1 llamafactory-cli train examples/v1/train_full/train_full_gdn_state_cp.yaml

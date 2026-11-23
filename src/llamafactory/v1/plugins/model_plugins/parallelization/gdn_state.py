@@ -246,6 +246,12 @@ def apply_gdn_state_attention(
     """
     if not is_transformers_version_greater_than("5.9.0"):
         raise RuntimeError("State-routing CP requires Transformers >= 5.9 to forward routing metadata to GDN.")
+    from torch.distributed import _functional_collectives
+
+    if not all(callable(getattr(module, "all_gather_single", None)) for module in (dist, _functional_collectives)):
+        raise RuntimeError(
+            "State-routing GDN CP requires PyTorch >= 2.13 with distributed and functional all_gather_single APIs."
+        )
     if get_current_accelerator().type != DeviceType.CUDA:
         raise RuntimeError("State-routing GDN CP currently requires CUDA.")
     try:

@@ -247,6 +247,8 @@ def _test_state_gdn_distributed(
     value_heads=6,
     length=190,
     freeze_parameters=False,
+    loss_on_earlier_rank=False,
+    allocator_poison=None,
 ):
     import copy
 
@@ -306,7 +308,8 @@ def _test_state_gdn_distributed(
         )
         inputs = torch.randn(batch_size, length, 128, device=device, requires_grad=True)
         target = torch.zeros_like(inputs)
-        target[:, length // 2 : length // 2 + 16] = torch.randn_like(target[:, length // 2 : length // 2 + 16])
+        loss_start = 0 if loss_on_earlier_rank else length // 2
+        target[:, loss_start : loss_start + 16] = torch.randn_like(target[:, loss_start : loss_start + 16])
         target = target * mask.unsqueeze(-1)
         flat_inputs = inputs.reshape(1, batch_size * length, 128)
         flat_mask = mask.reshape(1, -1)
@@ -322,6 +325,8 @@ def _test_state_gdn_distributed(
             ).reshape_as(inputs)
         (expected * target).sum().backward()
 
+        if allocator_poison is not None:
+            _poison_state_allocator(length // world_size, key_heads, value_heads, allocator_poison, device)
         local_inputs = inputs.detach().chunk(world_size, dim=1)[local_rank].contiguous().requires_grad_(True)
         local_mask = mask.chunk(world_size, dim=1)[local_rank].contiguous()
         forward = partial(parallel, attention_mask=local_mask, gdn_cp_routing=routing)
@@ -334,8 +339,10 @@ def _test_state_gdn_distributed(
         valid = local_mask.bool()
         _assert_relative_close(output[valid], expected.chunk(world_size, dim=1)[local_rank][valid])
         _assert_relative_close(local_inputs.grad, inputs.grad.chunk(world_size, dim=1)[local_rank])
+        if loss_on_earlier_rank and local_rank > 0:
+            torch.testing.assert_close(local_inputs.grad, torch.zeros_like(local_inputs.grad), rtol=0, atol=0)
         if local_rank == 0:
-            assert inputs.grad[:, : length // 2].norm() > 0, "The later-rank loss must reach earlier-rank history."
+            assert inputs.grad[:, : length // 2].norm() > 0, "The earlier rank must receive a nonzero gradient."
         actual_gradients, reference_gradients = [], []
         for parameter, reference_parameter in zip(parallel.parameters(), reference.parameters(), strict=True):
             if freeze_parameters:
@@ -556,3 +563,96 @@ def test_hf_model_routing_survives_checkpoint_recomputation(monkeypatch):
     pytest.importorskip("attn_gym.linear.short_conv.cute")
     monkeypatch.setenv("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
     mp.spawn(_test_hybrid_model_routing, args=(2, find_available_port()), nprocs=2)
+
+
+def test_state_routing_metadata_does_not_reach_the_full_attention_kernel(monkeypatch):
+    from llamafactory.v1.plugins.model_plugins.parallelization import ulysses
+
+    monkeypatch.setattr(ulysses.SeqAllToAll4D, "apply", lambda _, tensor, *__: tensor)
+    monkeypatch.setattr(ulysses, "get_ulysses_sequence_parallel_world_size", lambda _: 2)
+
+    def fake_all_gather(outputs, tensor, **kwargs):
+        for rank, output in enumerate(outputs):
+            output.copy_(tensor + rank * 3 if tensor.shape == (1, 3) else tensor)
+
+    def native_attention(
+        query,
+        key,
+        value,
+        attention_mask,
+        *,
+        query_length,
+        is_causal,
+        dropout,
+        position_ids,
+        softmax_scale,
+        deterministic,
+        target_dtype,
+    ):
+        assert query_length == 6 and is_causal
+        assert position_ids.tolist() == [[0, 1, 2, 3, 4, 5]]
+        return query
+
+    monkeypatch.setattr(ulysses.dist, "all_gather", fake_all_gather)
+    routing = object()
+    forward_kwargs = {"gdn_cp_routing": routing, "position_ids": torch.arange(3).unsqueeze(0)}
+    query = torch.zeros(1, 3, 2, 4)
+    output = ulysses.new_flash_attn_forward(
+        query,
+        query,
+        query,
+        None,
+        sequence_parallel_size=2,
+        group=object(),
+        attn_fn=native_attention,
+        **forward_kwargs,
+    )
+
+    torch.testing.assert_close(output, query)
+    assert forward_kwargs["gdn_cp_routing"] is routing
+
+
+def _poison_state_allocator(local_tokens, key_heads, value_heads, value, device):
+    """Fill and release likely scratch-buffer sizes without changing model inputs."""
+    sizes = [
+        (value_heads * 256 * 128, torch.float32),
+        (value_heads * 128 * 128, torch.float32),
+        (local_tokens * value_heads, torch.float32),
+        (local_tokens * key_heads * 128, torch.bfloat16),
+        (local_tokens * value_heads * 128, torch.bfloat16),
+        (local_tokens * value_heads * 64, torch.bfloat16),
+    ]
+    buffers = [torch.full((size,), value, dtype=dtype, device=device) for size, dtype in sizes for _ in range(2)]
+    torch.cuda.synchronize()
+    del buffers
+
+
+@pytest.mark.runs_on(["cuda"])
+@pytest.mark.require_distributed(2)
+@pytest.mark.parametrize("allocator_poison", [None, float("nan"), 1e20], ids=["clean", "nan_pool", "large_pool"])
+def test_state_gdn_zero_successor_cotangent(allocator_poison, monkeypatch):
+    import torch.multiprocessing as mp
+
+    from llamafactory.v1.utils.env import find_available_port
+    from llamafactory.v1.utils.packages import is_transformers_version_greater_than
+
+    if not is_transformers_version_greater_than("5.9.0"):
+        pytest.skip("State-routing CP requires Transformers >= 5.9.")
+    pytest.importorskip("attn_gym.linear.gdn.context_parallel")
+    pytest.importorskip("attn_gym.linear.short_conv.cute")
+    monkeypatch.setenv("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+    mp.spawn(
+        _test_state_gdn_distributed,
+        args=(2, find_available_port(), "dense", True, 16, 48, 2048, True, True, allocator_poison),
+        nprocs=2,
+    )
+
+
+@pytest.mark.parametrize("module_name", ["torch.distributed", "torch.distributed._functional_collectives"])
+def test_state_routing_rejects_missing_collective_apis(module_name, monkeypatch):
+    import importlib
+
+    monkeypatch.setattr(gdn_state, "is_transformers_version_greater_than", lambda _: True)
+    monkeypatch.delattr(importlib.import_module(module_name), "all_gather_single", raising=False)
+    with pytest.raises(RuntimeError, match="PyTorch >= 2.13.*all_gather_single"):
+        gdn_state.apply_gdn_state_attention(nn.Identity(), 2, None, nn.Identity())
