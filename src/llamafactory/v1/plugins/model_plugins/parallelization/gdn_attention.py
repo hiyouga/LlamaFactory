@@ -13,6 +13,10 @@
 # limitations under the License.
 
 
+import inspect
+from collections.abc import Callable
+from functools import partial
+
 import torch
 import torch.distributed as dist
 import torch.nn.functional as F
@@ -47,6 +51,56 @@ def _get_gdn_module(module):
         f"Cannot find GDN module on {type(module).__name__}. "
         f"Expected either a GDN layer with in_proj_qkv or a DecoderLayer with linear_attn."
     )
+
+
+def _call_native_gdn_conv(
+    kernel: Callable,
+    x: torch.Tensor,
+    weight: torch.Tensor,
+    bias: torch.Tensor | None = None,
+    seq_idx: torch.Tensor | None = None,
+    activation: str | None = None,
+    *,
+    cu_seqlens: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Keep the instance convolution interface while using native HF argument names."""
+    kwargs = {}
+    if seq_idx is not None:
+        kwargs["seq_idx"] = seq_idx
+    if cu_seqlens is not None:
+        kwargs["cu_seq_lens_q"] = cu_seqlens
+    return kernel(x, weight, bias, activation=activation, **kwargs)
+
+
+def _bind_gdn_kernels(module: torch.nn.Module) -> None:
+    """Resolve kernel members moved to the native modeling module in Transformers 5.15.
+
+    Keep existing instance overrides, including the older convolution fallback
+    represented by None. A global fast delta-rule kernel takes precedence over
+    the Torch fallback when both are exported by the native modeling module.
+    """
+    sources = {
+        "causal_conv1d_fn": ("causal_conv1d_fn",),
+        "chunk_gated_delta_rule": ("chunk_gated_delta_rule", "torch_chunk_gated_delta_rule"),
+    }
+    missing = {name: candidates for name, candidates in sources.items() if not hasattr(module, name)}
+    if not missing:
+        return
+
+    modeling_module = inspect.getmodule(inspect.unwrap(module.forward))
+    resolved = {}
+    for name, candidates in missing.items():
+        for source in candidates:
+            kernel = getattr(modeling_module, source, None)
+            if callable(kernel):
+                resolved[name] = kernel
+                break
+        else:
+            raise RuntimeError(f"Cannot resolve GDN kernel {name!r} for {type(module).__name__}.")
+    for name, kernel in resolved.items():
+        if name == "causal_conv1d_fn":
+            kernel = partial(_call_native_gdn_conv, kernel)
+        setattr(module, name, kernel)
 
 
 def get_parameter_local_cp(param, dim, cp_group, split_sections=None):
@@ -265,6 +319,7 @@ def apply_gdn_attention(model, cp_size: int) -> None:
                 if id(gdn_module) in replaced_modules:
                     continue
                 replaced_modules.add(id(gdn_module))
+                _bind_gdn_kernels(gdn_module)
                 gdn_module.original_forward = gdn_module.forward
                 gdn_module.forward = gdn_forward_with_cp.__get__(gdn_module, type(gdn_module))
                 gdn_name = name if gdn_module is module else f"{name}.linear_attn"
