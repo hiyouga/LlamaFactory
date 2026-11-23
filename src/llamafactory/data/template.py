@@ -731,6 +731,26 @@ class Xing4ReasoningTemplate(ReasoningTemplate):
         ]
 
 
+@dataclass
+class Exaone45Template(ReasoningTemplate):
+    r"""Render the tool declaration as a separate turn before the system turn."""
+
+    @override
+    def _encode(
+        self,
+        tokenizer: "PreTrainedTokenizer",
+        messages: list[dict[str, str]],
+        system: Optional[str],
+        tools: Optional[str],
+    ) -> list[list[int]]:
+        encoded_messages = super()._encode(tokenizer, messages, system, None)
+        if encoded_messages and tools:
+            tool_ids = self._convert_elements_to_ids(tokenizer, self.format_tools.apply(content=tools))
+            encoded_messages[0] = tool_ids + encoded_messages[0]
+
+        return encoded_messages
+
+
 TEMPLATES: dict[str, "Template"] = {}
 
 
@@ -1188,6 +1208,20 @@ register_template(
     format_user=StringFormatter(slots=["[|user|]{{content}}\n[|assistant|]"]),
     format_assistant=StringFormatter(slots=["{{content}}", {"eos_token"}, "\n"]),
     format_system=StringFormatter(slots=["[|system|]{{content}}[|endofturn|]\n"]),
+)
+
+
+register_template(
+    name="exaone4_5",
+    format_user=StringFormatter(slots=["<|user|>\n{{content}}<|endofturn|>\n<|assistant|>\n"]),
+    format_assistant=StringFormatter(slots=["{{content}}", {"eos_token"}, "\n"]),
+    format_system=StringFormatter(slots=["<|system|>\n{{content}}<|endofturn|>\n"]),
+    format_function=FunctionFormatter(slots=["{{content}}", {"eos_token"}, "\n"], tool_format="exaone4_5"),
+    format_observation=StringFormatter(
+        slots=["<|tool|>\n<tool_result>{{content}}</tool_result><|endofturn|>\n<|assistant|>\n"]
+    ),
+    format_tools=ToolFormatter(tool_format="exaone4_5"),
+    template_class=Exaone45Template,
 )
 
 

@@ -152,6 +152,10 @@ class MultiModalDataCollatorForSeq2Seq(DataCollatorForSeq2Seq):
 
         if getattr(getattr(self.model, "config", None), "model_type", None) == "moss_vl":
             self.get_rope_func = None  # MOSS-VL computes its own XRoPE positions in model.forward.
+        elif getattr(getattr(self.model, "config", None), "model_type", None) == "exaone4_5":
+            # EXAONE-4.5 exposes get_rope_index, but its language model reads plain 1D position ids
+            # (the vision tower uses its own 2D-RoPE), so no position_ids are injected here.
+            self.get_rope_func = None
         elif self.model is not None and hasattr(self.model, "get_rope_index"):  # for qwen2vl mrope
             self.get_rope_func = self.model.get_rope_index  # transformers < 4.52.0 or qwen2.5 omni
         elif self.model is not None and hasattr(self.model, "model") and hasattr(self.model.model, "get_rope_index"):

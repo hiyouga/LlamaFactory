@@ -222,6 +222,16 @@ _register_composite_model(
 )
 
 
+# EXAONE-4.5: model.visual (patch_embed / blocks / merger) + model.language_model; layout matches qwen2_5_vl.
+_register_composite_model(
+    model_type="exaone4_5",
+    projector_keys=["visual.merger"],
+    vision_model_keys=["visual.patch_embed", "visual.blocks"],
+    language_model_keys=["language_model", "lm_head"],
+    lora_conflict_keys=["patch_embed"],
+)
+
+
 _register_composite_model(
     model_type="gemma3",
 )
