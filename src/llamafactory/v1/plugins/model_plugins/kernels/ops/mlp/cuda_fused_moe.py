@@ -48,6 +48,16 @@ else:
 logger = logging.getLogger(__name__)
 
 
+def _compute_expert_scatter_index(expert_index: torch.Tensor) -> torch.Tensor:
+    flat_experts = expert_index.flatten()
+    sorted_order = flat_experts.argsort(stable=True)
+    scatter_index = torch.empty_like(sorted_order)
+    scatter_index[sorted_order] = torch.arange(
+        sorted_order.numel(), dtype=sorted_order.dtype, device=sorted_order.device
+    )
+    return scatter_index.int().view(expert_index.shape)
+
+
 # ---------------------------------------------------------------------------
 # Autograd Function: Full Triton MoE forward + backward
 # ---------------------------------------------------------------------------
@@ -82,7 +92,7 @@ class TritonFusedMoeFunction(torch.autograd.Function):
             fc2_weight: (E, hidden, inter) down projection weight
         """
         # Compute scatter index: maps (token, topk) → position in sorted buffer
-        scatter_index = expert_index.flatten().argsort(stable=True).argsort().int().view(expert_index.shape)
+        scatter_index = _compute_expert_scatter_index(expert_index)
 
         # Token counts per expert and cumulative boundaries
         splits = torch.zeros(num_experts, dtype=torch.int32, device=hidden_states.device)
