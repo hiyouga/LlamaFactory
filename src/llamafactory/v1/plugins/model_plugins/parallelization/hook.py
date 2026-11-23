@@ -65,8 +65,8 @@ def _split_deepstack_inputs(kwargs: dict[str, Any], device_mesh) -> None:
     ]
 
 
-def install_sequence_parallel_hook(model: HFModel) -> None:
-    """Install the common CP split at the model's language boundary."""
+def install_sequence_parallel_hook(model: HFModel) -> nn.Module:
+    """Install the common CP split and return the language boundary."""
     get_base_model = getattr(model, "get_base_model", None)
     if callable(get_base_model):
         model = get_base_model()
@@ -117,3 +117,4 @@ def install_sequence_parallel_hook(model: HFModel) -> None:
 
     boundary.register_forward_pre_hook(sequence_parallel_pre_hook, with_kwargs=True)
     logger.info_rank0("Installed sequence-parallel pre-hook at the language boundary.")
+    return boundary

@@ -1,0 +1,26 @@
+model: Qwen/Qwen3.5-0.8B
+trust_remote_code: true
+model_class: llm
+
+flash_attn: flash_attention_2
+
+# FSDP Config
+dist_config:
+  name: fsdp2
+  dcp_path: null
+
+# Full attention uses Ulysses; GDN exchanges recurrent state and convolution tails.
+cp_mode: ulysses_gdn_state
+cp_size: 2
+
+### data
+train_dataset: data/v1_sft_demo.yaml
+
+### training
+output_dir: outputs/test_gdn_state_cp
+micro_batch_size: 1
+batching_strategy: normal
+cutoff_len: 2048
+learning_rate: 1.0e-4
+bf16: true
+max_steps: 10
