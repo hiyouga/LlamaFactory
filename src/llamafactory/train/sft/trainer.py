@@ -30,7 +30,7 @@ from ...extras import logging
 from ...extras.constants import IGNORE_INDEX
 from ..callbacks import SaveProcessorCallback
 from ..fp8_utils import configure_fp8_environment, patch_accelerator_for_fp8, verify_fp8_status
-from ..trainer_utils import create_custom_optimizer, create_custom_scheduler
+from ..trainer_utils import create_custom_optimizer, create_custom_scheduler, restore_tied_weights_state_dict
 
 
 if TYPE_CHECKING:
@@ -146,6 +146,13 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
             return torch.utils.data.SequentialSampler(self.train_dataset)
 
         return super()._get_train_sampler(*args, **kwargs)
+
+    @override
+    def _save(self, output_dir: Optional[str] = None, state_dict: Optional[dict[str, "torch.Tensor"]] = None) -> None:
+        if state_dict is not None:
+            restore_tied_weights_state_dict(self.model, state_dict)
+
+        super()._save(output_dir, state_dict)
 
     @override
     def compute_loss(self, model, inputs, *args, **kwargs):
