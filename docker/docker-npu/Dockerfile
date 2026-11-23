@@ -38,6 +38,8 @@ RUN pip uninstall -y torch torchvision torchaudio
 RUN pip install --no-cache-dir -r requirements/npu.txt --index-url "${PYTORCH_INDEX}"
 RUN pip install --no-cache-dir -r requirements/triton_ascend.txt
 RUN pip install --no-cache-dir -r requirements/deepspeed.txt
+RUN pip install --no-cache-dir --no-deps -r requirements/fsdpturbo.txt
+RUN pip install --no-cache-dir "transformers==5.8.0"
 RUN pip install --no-cache-dir -e . --no-build-isolation && \
     pip install --no-cache-dir -r requirements/metrics.txt --no-build-isolation
 

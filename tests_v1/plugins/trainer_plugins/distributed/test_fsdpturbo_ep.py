@@ -17,12 +17,12 @@ from types import SimpleNamespace
 import pytest
 import torch
 
-from llamafactory.v1.plugins.trainer_plugins.distributed import fsdpturbo as fsdpturbo_module
 from llamafactory.v1.plugins.trainer_plugins.distributed.fsdpturbo import (
     FSDPTurboEPModelSpec,
     FSDPTurboFSDP2Engine,
     FSDPTurboParallelState,
 )
+from llamafactory.v1.plugins.trainer_plugins.distributed.fsdpturbo import parallel_state as fsdpturbo_module
 from llamafactory.v1.plugins.trainer_plugins.distributed.interface import (
     DistributedPlugin,
     FSDPTurboParams,
@@ -168,8 +168,6 @@ def test_fsdpturbo_owns_expert_mesh_topology(monkeypatch):
 
 @pytest.mark.parametrize("model_type", ["qwen3_moe", "qwen3_5_moe"])
 def test_fsdpturbo_real_efsdp_selection_excludes_dense_moe_parameters(model_type):
-    from torch.distributed.fsdp._fully_shard._fsdp_init import _get_managed_modules, _get_managed_states
-
     backend = pytest.importorskip("fsdp_turbo.distributed.expert_parallel.expert_fully_shard_parallel")
     from fsdp_turbo.fsdp_turbo_config import EPPlanConfig
 
@@ -195,7 +193,7 @@ def test_fsdpturbo_real_efsdp_selection_excludes_dense_moe_parameters(model_type
         apply_modules=spec.ep_modules, apply_efsdp_modules=FSDPTurboFSDP2Engine._get_ep_fsdp_modules(spec)
     )
     targets = backend.get_efsdp_modules(model, plan)
-    parameters, _ = _get_managed_states(_get_managed_modules(tuple(targets)))
+    parameters = {param for module in targets for param in module.parameters()}
     assert set(parameters) == set(layer.mlp.experts.parameters())
     assert not set(parameters).intersection(layer.mlp.gate.parameters())
     if model_type == "qwen3_5_moe":
