@@ -230,7 +230,12 @@ class MMPluginMixin:
             width, height = int(image.width * resize_factor), int(image.height * resize_factor)
             image = image.resize((width, height))
 
-        if image.mode != "RGB":
+        if image.mode in ("RGBA", "LA", "PA") or "transparency" in image.info:
+            image = image.convert("RGBA")
+            background = Image.new("RGB", image.size, (255, 255, 255))
+            background.paste(image, mask=image.getchannel("A"))
+            image = background
+        elif image.mode != "RGB":
             image = image.convert("RGB")
 
         return image
