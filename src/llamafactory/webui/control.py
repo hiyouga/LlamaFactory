@@ -148,7 +148,7 @@ def get_trainer_info(lang: str, output_path: os.PathLike, do_train: bool) -> tup
     if os.path.isfile(swanlab_config_path):
         with open(swanlab_config_path, encoding="utf-8") as f:
             swanlab_public_config = json.load(f)
-            swanlab_link = swanlab_public_config["cloud"]["experiment_url"]
+            swanlab_link = (swanlab_public_config.get("cloud") or {}).get("experiment_url")
             if swanlab_link is not None:
                 running_info["swanlab_link"] = gr.Markdown(
                     ALERTS["info_swanlab_link"][lang] + swanlab_link, visible=True
