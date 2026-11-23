@@ -47,6 +47,10 @@ class DataArguments:
         default=2048,
         metadata={"help": "The cutoff length of the tokenized inputs in the dataset."},
     )
+    drop_long_samples: bool = field(
+        default=False,
+        metadata={"help": "Drop supervised fine-tuning examples whose full tokenized length exceeds cutoff_len."},
+    )
     train_on_prompt: bool = field(
         default=False,
         metadata={"help": "Whether or not to disable the mask on the prompt."},
