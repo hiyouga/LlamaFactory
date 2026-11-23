@@ -25,7 +25,7 @@ def check_quantization_status(model):
     quantized_info = {"bnb": []}
 
     for name, module in model.named_modules():
-        # check BitsAndBytes quantization
+        # check BitsAndBytes quantization modules
         if isinstance(module, bitsandbytes.nn.modules.Linear8bitLt) or isinstance(
             module, bitsandbytes.nn.modules.Linear4bit
         ):
