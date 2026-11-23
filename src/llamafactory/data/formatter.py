@@ -16,6 +16,7 @@ import json
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from typing import Any
 
 from typing_extensions import override
 
@@ -99,13 +100,24 @@ class FunctionFormatter(StringFormatter):
         thought_words = kwargs.pop("thought_words", None)
         tool_call_words = kwargs.pop("tool_call_words", None)
 
+        def _parse_arguments(arguments: Any) -> str:
+            if isinstance(arguments, str):  # openai-style arguments are a JSON-encoded string
+                try:
+                    decoded_arguments = json.loads(arguments)
+                    if isinstance(decoded_arguments, dict):
+                        arguments = decoded_arguments
+                except json.JSONDecodeError:
+                    pass
+
+            return json.dumps(arguments, ensure_ascii=False)
+
         def _parse_functions(json_content: str) -> list["FunctionCall"]:
             try:
                 tool_calls = json.loads(json_content)
                 if not isinstance(tool_calls, list):  # parallel function call
                     tool_calls = [tool_calls]
 
-                return [FunctionCall(tc["name"], json.dumps(tc["arguments"], ensure_ascii=False)) for tc in tool_calls]
+                return [FunctionCall(tc["name"], _parse_arguments(tc["arguments"])) for tc in tool_calls]
             except json.JSONDecodeError:
                 raise RuntimeError(f"Invalid JSON format in function message: {str([content])}.")
 
