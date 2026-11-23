@@ -38,6 +38,10 @@ class BaseDistributed(ABC):
     def shard_model(model: HFModel, dist_config: object, **kwargs) -> object: ...
 
     @staticmethod
+    def synchronize_gradients(model: HFModel) -> None:
+        """Finalize accumulated gradients before clipping/stepping; wrappers normally own reduction."""
+
+    @staticmethod
     @abstractmethod
     def save_model(model: HFModel, output_dir: str, processor: Processor) -> None: ...
 

@@ -111,6 +111,12 @@ class FSDPTurboDistributed(BaseDistributed):
         return FSDPTurboFSDP2Engine(asdict(dist_config), bf16=bool(kwargs.get("bf16"))).shard_model(model)
 
     @staticmethod
+    def synchronize_gradients(model: HFModel) -> None:
+        from .fsdpturbo import synchronize_gradients
+
+        synchronize_gradients(model)
+
+    @staticmethod
     def clip_grad_norm(model: HFModel, max_norm: float, **kwargs) -> float:
         from .fsdpturbo import clip_grad_norm_
 

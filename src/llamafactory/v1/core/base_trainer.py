@@ -288,9 +288,11 @@ class BaseTrainer:
                     grad_norm = self._deepspeed_engine.get_grad_norm()
                 else:
                     dist_name = self.args.dist_config.name if self.args.dist_config else None
-                    if dist_name == "fsdpturbo":
+                    if dist_name is not None:
                         from ..plugins.trainer_plugins.distributed.interface import DistributedPlugin
 
+                        DistributedPlugin(dist_name).synchronize_gradients(self.model)
+                    if dist_name == "fsdpturbo":
                         grad_norm = DistributedPlugin(dist_name).clip_grad_norm(self.model, self.args.max_grad_norm)
                     else:
                         # FSDP2 shards params/grads across the fsdp mesh, so clip_grad_norm_ returns a
