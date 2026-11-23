@@ -63,6 +63,12 @@ def configure_attn_implementation(config: "PretrainedConfig", model_args: "Model
             logger.warning_rank0("Youtu-VL does not support SDPA, forcing eager attention.")
             model_args.flash_attn = AttentionFunction.DISABLED
 
+    if getattr(config, "model_type", None) == "ernie5_5_moe":
+        # 512-wide HCA heads and per-head attention sinks: neither SDPA nor FlashAttention covers them
+        if model_args.flash_attn not in (AttentionFunction.AUTO, AttentionFunction.DISABLED):
+            logger.warning_rank0("ERNIE 5.5 only supports eager attention, forcing it.")
+            model_args.flash_attn = AttentionFunction.DISABLED
+
     if model_args.flash_attn == AttentionFunction.AUTO:
         if is_torch_supa_available():
             # supa has no FlashAttention build, and AUTO would otherwise be resolved against the
