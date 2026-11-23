@@ -222,8 +222,8 @@ class Template:
 
     @staticmethod
     def _jinja_escape(content: str) -> str:
-        r"""Escape single quotes in content."""
-        return content.replace("'", r"\'")
+        r"""Escape backslashes and single quotes in content."""
+        return content.replace("\\", "\\\\").replace("'", r"\'")
 
     @staticmethod
     def _convert_slots_to_jinja(slots: "SLOTS", tokenizer: "PreTrainedTokenizer", placeholder: str = "content") -> str:

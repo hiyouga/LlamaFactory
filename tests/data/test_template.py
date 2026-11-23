@@ -14,9 +14,11 @@
 
 import os
 from copy import deepcopy
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import pytest
+from jinja2.sandbox import ImmutableSandboxedEnvironment
 from transformers import AutoTokenizer
 
 from llamafactory.data import get_template_and_fix_tokenizer
@@ -316,6 +318,15 @@ def test_jinja_template():
     tokenizer.chat_template = template._get_jinja_template(tokenizer)  # llama3 template no replace
     assert tokenizer.chat_template != ref_tokenizer.chat_template
     assert tokenizer.apply_chat_template(MESSAGES) == ref_tokenizer.apply_chat_template(MESSAGES)
+
+
+def test_jinja_template_escape():
+    tokenizer = SimpleNamespace(bos_token_id=None, eos_token="</s>", eos_token_id=2)
+    template = deepcopy(TEMPLATES["alpaca"])
+    template.default_system = "Put the answer in \\boxed{}, don't use C:\\new\\"
+    jinja_template = ImmutableSandboxedEnvironment().from_string(template._get_jinja_template(tokenizer))
+    rendered = jinja_template.render(messages=[{"role": "user", "content": "Hi"}])
+    assert rendered == template.default_system + "### Instruction:\nHi\n\n### Response:\n"
 
 
 @pytest.mark.runs_on(["cpu", "mps", "xpu"])
