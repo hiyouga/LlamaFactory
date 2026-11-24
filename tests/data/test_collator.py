@@ -19,17 +19,58 @@ from collections import Counter
 import pytest
 import torch
 from PIL import Image
-from transformers import AutoConfig, AutoModelForImageTextToText
+from tokenizers import Tokenizer
+from tokenizers.models import WordLevel
+from transformers import AutoConfig, AutoModelForImageTextToText, PreTrainedTokenizerFast
 
 from llamafactory.data import get_template_and_fix_tokenizer
 from llamafactory.data.collator import MultiModalDataCollatorForSeq2Seq, prepare_4d_attention_mask
 from llamafactory.extras.constants import IGNORE_INDEX
 from llamafactory.extras.packages import is_transformers_version_greater_than
-from llamafactory.hparams import get_infer_args
+from llamafactory.hparams import DataArguments, get_infer_args
 from llamafactory.model import load_tokenizer
 
 
 TINY_LLAMA3 = os.getenv("TINY_LLAMA3", "llamafactory/tiny-random-Llama-3")
+
+
+@pytest.mark.skipif(not is_transformers_version_greater_than("5.8.0"), reason="EXAONE-4.5 requires Transformers 5.8.0")
+def test_exaone45_text_collator_and_loss():
+    tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=Tokenizer(WordLevel({"[PAD]": 0, "[UNK]": 1, "hello": 2, "world": 3}, unk_token="[UNK]")),
+        pad_token="[PAD]",
+        unk_token="[UNK]",
+    )
+    config = AutoConfig.for_model(
+        "exaone4_5",
+        text_config={
+            "vocab_size": 16,
+            "hidden_size": 32,
+            "intermediate_size": 64,
+            "num_hidden_layers": 2,
+            "num_attention_heads": 4,
+            "num_key_value_heads": 2,
+            "layer_types": ["sliding_attention", "full_attention"],
+            "pad_token_id": 0,
+        },
+        vision_config={
+            "depth": 1,
+            "hidden_size": 32,
+            "intermediate_size": 64,
+            "num_heads": 4,
+            "num_key_value_heads": 4,
+            "out_hidden_size": 32,
+            "fullatt_block_indexes": [0],
+        },
+    )
+    model = AutoModelForImageTextToText.from_config(config)
+    template = get_template_and_fix_tokenizer(tokenizer, DataArguments(template="exaone4_5"))
+    collator = MultiModalDataCollatorForSeq2Seq(model=model, template=template, tokenizer=tokenizer)
+    batch = collator([{"input_ids": [2, 3, 2], "attention_mask": [1, 1, 1], "labels": [IGNORE_INDEX, 3, 2]}])
+
+    assert "position_ids" not in batch
+    with torch.no_grad():
+        assert model(**batch).loss.isfinite()
 
 
 @pytest.mark.runs_on(["cpu", "mps", "xpu"])
