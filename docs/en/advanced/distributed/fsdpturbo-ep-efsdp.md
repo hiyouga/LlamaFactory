@@ -45,6 +45,7 @@ The following advanced fields are optional and are therefore omitted from the mi
 - `fsdp_ignored_modules`: additional modules excluded from the outer LlamaFactory FSDP2 path. Expert parameters selected by the model spec are automatically added to the ignored set by the integration layer, so normal configurations do not need to repeat them here.
 - `hook_modules`: optional module patterns for FSDPTurbo EFSDP hooks. The default is an empty list.
 - `fsdp_implementation`: the FSDPTurbo EFSDP implementation, either `native` or `custom`. The default is `native`.
+- `efsdp_all_gather_on_compute_stream`: opt in to staging native expert parameter all-gathers on the compute stream. This can avoid allocator retries under memory pressure, at the cost of implicit overlap with compute. It requires EFSDP size > 1, an FSDP2 runtime with asynchronous unshard support, and no parameter offload. The default is `false`.
 
 The model spec determines the EFSDP targets. Non-expert parameters such as attention, embeddings, and the LM head do not enter the FSDPTurbo EFSDP plan. They remain managed by the outer LlamaFactory FSDP2 layer.
 

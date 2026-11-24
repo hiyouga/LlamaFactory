@@ -55,6 +55,22 @@ class FSDPTurboFSDP2Engine(FSDP2Engine):
         # and shared experts whose gradients must be reduced by outer FSDP.
         return list(spec.ep_modules)
 
+    def _set_expert_all_gather_stream(self, experts: list[torch.nn.Module]) -> None:
+        """Keep expert unshard staging allocations on the current stream."""
+        from torch.distributed.fsdp import FSDPModule
+
+        # This option depends on a version-specific FSDP2 method. Fail explicitly
+        # rather than silently running the default allocation path.
+        if not callable(getattr(FSDPModule, "_set_unshard_async_op", None)):
+            raise RuntimeError("`efsdp_all_gather_on_compute_stream` requires PyTorch FSDP2 asynchronous unshard.")
+        units = [
+            unit for module in experts for unit in (module if isinstance(module, torch.nn.ModuleList) else [module])
+        ]
+        if not units or any(not isinstance(unit, FSDPModule) for unit in units):
+            raise RuntimeError("`efsdp_all_gather_on_compute_stream` requires native EFSDP expert modules.")
+        for unit in units:
+            unit._set_unshard_async_op(True)
+
     def _copy_weights(self, param, loaded_tensor):
         """Copy full checkpoint tensors into mixed-mesh DTensors from the inherited loader."""
         from torch.distributed._tensor import DTensor, Shard
@@ -105,6 +121,7 @@ class FSDPTurboFSDP2Engine(FSDP2Engine):
         """Apply FSDPTurbo EP/EFSDP and return parameters excluded from outer FSDP."""
         from fsdp_turbo.distributed.expert_parallel.expert_fully_shard_parallel import (
             expert_fully_shard_modules,
+            get_efsdp_modules,
         )
         from fsdp_turbo.distributed.expert_parallel.expert_parallel import expert_parallelize_modules
         from fsdp_turbo.fsdp_turbo_config import EPPlanConfig, FSDPPlanConfig
@@ -159,6 +176,9 @@ class FSDPTurboFSDP2Engine(FSDP2Engine):
                 raise RuntimeError("FSDPTurbo EP mesh is not initialized.")
             # A unit EFSDP mesh can still provide the expert compute dtype and EP gradient divisor.
             apply_efsdp = bool(ep_plan.apply_efsdp_modules) and (self.ep_fsdp_size > 1 or spec.wrap_unit_efsdp)
+            expert_compute_stream = self.dist_config.get("efsdp_all_gather_on_compute_stream", False)
+            if expert_compute_stream and (not apply_efsdp or self.ep_fsdp_size < 2):
+                raise ValueError("`efsdp_all_gather_on_compute_stream` requires EFSDP size > 1.")
             if apply_efsdp and efsdp_mesh is None:
                 raise RuntimeError("FSDPTurbo EFSDP mesh is not initialized.")
             if self.rank == 0:
@@ -179,6 +199,8 @@ class FSDPTurboFSDP2Engine(FSDP2Engine):
                     logger.info(f"FSDPTurbo EFSDP apply patterns: {ep_plan.apply_efsdp_modules}")
                     logger.info(f"FSDPTurbo EFSDP device mesh: {efsdp_mesh}")
                 ep_target_model = expert_fully_shard_modules(ep_target_model, efsdp_mesh, ep_plan, fsdp_plan)
+                if expert_compute_stream:
+                    self._set_expert_all_gather_stream(get_efsdp_modules(ep_target_model, ep_plan))
 
         # Collect ignored params for the outer FSDP wrap
         fsdp_ignored_modules = list(self.dist_config.get("fsdp_ignored_modules", []))

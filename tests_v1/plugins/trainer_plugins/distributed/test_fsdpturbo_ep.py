@@ -80,6 +80,7 @@ def test_fsdpturbo_uses_class_plugin_and_strict_backend_params():
     params = plugin.parse_params({"name": "fsdpturbo", "ep_size": 4}, FSDPTurboParams)
 
     assert params.ep_size == 4
+    assert not params.efsdp_all_gather_on_compute_stream
     assert callable(plugin.shard_model)
     assert callable(plugin.clip_grad_norm)
     with pytest.raises(ValueError, match="Unknown params"):
@@ -87,6 +88,13 @@ def test_fsdpturbo_uses_class_plugin_and_strict_backend_params():
     for key in ("ep_modules", "ep_fsdp_modules"):
         with pytest.raises(ValueError, match="Unknown params"):
             plugin.parse_params({"name": "fsdpturbo", key: ["model.layers.*.mlp"]}, FSDPTurboParams)
+
+
+@pytest.mark.parametrize("override", [{"ep_size": 1}, {"fsdp_implementation": "custom"}, {"offload_params": True}])
+def test_expert_compute_stream_rejects_incompatible_config(override):
+    config = {"ep_size": 2, "efsdp_all_gather_on_compute_stream": True}
+    with pytest.raises(ValueError, match="requires native EFSDP"):
+        FSDPTurboParams(**(config | override))
 
 
 @pytest.mark.parametrize("precision", ["bf16", "fp32"])

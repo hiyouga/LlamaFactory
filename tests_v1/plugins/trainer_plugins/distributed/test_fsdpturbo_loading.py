@@ -22,6 +22,7 @@ import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 from torch.distributed.device_mesh import init_device_mesh
+from torch.distributed.fsdp import FSDPModule
 from torch.distributed.tensor import DTensor, distribute_tensor
 
 from llamafactory.v1.plugins.trainer_plugins.distributed.fsdp2 import _save_pretrained
@@ -85,7 +86,14 @@ def _worker(rank, rendezvous, checkpoint):
                 value.copy_(torch.arange(value.numel()).reshape(value.shape) / 1000)
         mesh = init_device_mesh("cpu", (4,), mesh_dim_names=("dp",))
         engine = _engine(rank, mesh)
+        use_compute_stream = callable(getattr(FSDPModule, "_set_unshard_async_op", None))
+        engine.dist_config["efsdp_all_gather_on_compute_stream"] = use_compute_stream
         engine.prepare_model_ep(model)
+        expert = model.model.layers[0].mlp.experts
+        assert isinstance(expert, FSDPModule)
+        group = expert._get_fsdp_state()._fsdp_param_group
+        if use_compute_stream:
+            assert group.unshard_async_op
         with torch.no_grad():
             for name, parameter in model.named_parameters():
                 engine._copy_weights(parameter, expected[name])
