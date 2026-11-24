@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING
 from ...extras import logging
 from ...extras.constants import AttentionFunction
 from ...extras.misc import is_torch_supa_available
-from ...extras.packages import is_torch_version_greater_than
+from ...extras.packages import is_torch_version_greater_than, is_transformers_version_greater_than
 
 
 if TYPE_CHECKING:
@@ -33,7 +33,10 @@ def configure_attn_implementation(config: "PretrainedConfig", model_args: "Model
     from transformers.utils import is_flash_attn_2_available
 
     if getattr(config, "model_type", None) == "gpt_oss":
-        from transformers.integrations.hub_kernels import load_and_register_kernel
+        if is_transformers_version_greater_than("5.0.0"):
+            from transformers.integrations.hub_kernels import load_and_register_attn_kernel as load_and_register_kernel
+        else:
+            from transformers.integrations.hub_kernels import load_and_register_kernel
 
         flash_attn3_kernel = "kernels-community/vllm-flash-attn3"
         load_and_register_kernel(flash_attn3_kernel)

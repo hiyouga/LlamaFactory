@@ -15,6 +15,8 @@
 import os
 
 import pytest
+from transformers import GptOssConfig
+from transformers.integrations import hub_kernels
 from transformers.utils import is_flash_attn_2_available
 
 
@@ -27,7 +29,10 @@ except ImportError:
         return True
 
 
+from llamafactory.extras.constants import AttentionFunction
 from llamafactory.extras.packages import is_transformers_version_greater_than
+from llamafactory.hparams import ModelArguments
+from llamafactory.model.model_utils.attention import configure_attn_implementation
 from llamafactory.train.test_utils import load_infer_model
 
 
@@ -58,3 +63,19 @@ def test_attention():
         for module in model.modules():
             if "Attention" in module.__class__.__name__:
                 assert module.__class__.__name__ == llama_attention_classes[requested_attention]
+
+
+@pytest.mark.skipif(not is_transformers_version_greater_than("4.56.0"), reason="Requires hub kernels.")
+def test_gpt_oss_attention(monkeypatch: pytest.MonkeyPatch):
+    registered_kernels = []
+    if hasattr(hub_kernels, "load_and_register_attn_kernel"):  # transformers v5
+        monkeypatch.setattr(hub_kernels, "load_and_register_attn_kernel", registered_kernels.append)
+    else:
+        monkeypatch.setattr(hub_kernels, "load_and_register_kernel", registered_kernels.append)
+
+    config = GptOssConfig()
+    model_args = ModelArguments(model_name_or_path=TINY_LLAMA3)
+    configure_attn_implementation(config, model_args)
+    assert registered_kernels == ["kernels-community/vllm-flash-attn3"]
+    assert config._attn_implementation == "kernels-community/vllm-flash-attn3"
+    assert model_args.flash_attn == AttentionFunction.FA3
