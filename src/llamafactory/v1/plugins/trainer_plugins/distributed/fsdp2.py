@@ -547,9 +547,16 @@ class FSDP2Engine:
         if not checkpoint_files:
             raise ValueError(f"No checkpoint files found in {hf_model_path}")
 
-        tensor_map = dict(model.named_parameters())
-        tensor_map.update(model.named_buffers())
         conversion_ctx = self._try_build_hf_weight_conversion_context(model)
+        # Meta initialization restores derived non-persistent buffers separately.
+        state = conversion_ctx["meta_state_dict"] if conversion_ctx is not None else model.state_dict()
+        persistent_buffers = {name: buf for name, buf in model.named_buffers() if name in state}
+        tensor_map = dict(model.named_parameters()) | persistent_buffers
+        missing_router_buffers = set()
+        if getattr(getattr(model, "config", None), "model_type", None) == "deepseek_v4":
+            missing_router_buffers = {
+                key for key in persistent_buffers if key.endswith((".gate.tid2eid", ".gate.e_score_correction_bias"))
+            }
         total_files = len(checkpoint_files)
 
         for i, ckpt_file in enumerate(checkpoint_files):
@@ -589,6 +596,7 @@ class FSDP2Engine:
                         elif renamed_key in tensor_map:
                             tensor = f.get_tensor(key)
                             self._copy_weights(tensor_map[renamed_key], tensor)
+                            missing_router_buffers.discard(renamed_key)
             else:
                 state_dict = torch.load(ckpt_file, map_location="cpu")
                 for key, tensor in sorted(state_dict.items(), key=lambda item: sort_key(item[0])):
@@ -613,6 +621,7 @@ class FSDP2Engine:
                         converter.add_tensor(renamed_key, key, source_pattern, tensor)
                     elif renamed_key in tensor_map:
                         self._copy_weights(tensor_map[renamed_key], tensor)
+                        missing_router_buffers.discard(renamed_key)
                 del state_dict
                 gc.collect()
 
@@ -627,8 +636,14 @@ class FSDP2Engine:
                         tensor = tensor[0]
                     if target_name in tensor_map:
                         self._copy_weights(tensor_map[target_name], tensor)
+                        missing_router_buffers.discard(target_name)
                 del realized_tensors
                 gc.collect()
+
+        if missing_router_buffers:
+            raise ValueError(
+                f"DeepSeek V4 checkpoint is missing router buffers: {', '.join(sorted(missing_router_buffers))}"
+            )
 
     def _resolve_hf_checkpoint_dir(self, hf_model_path: str) -> str:
         """Resolve a HF model identifier or local path to a local directory containing checkpoint files.

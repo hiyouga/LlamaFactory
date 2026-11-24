@@ -32,6 +32,14 @@ class SFTTrainer(BaseTrainer):
         train_dataset: TorchDataset,
         callbacks: list[TrainerCallback] | None = None,
     ) -> None:
+        if getattr(model.config, "model_type", None) == "deepseek_v4":
+            dist_name = args.dist_config.name if args.dist_config is not None else None
+            if (args.cp_size > 1 or DistributedInterface().get_world_size() > 1) and dist_name not in (
+                "fsdp2",
+                "fsdpturbo",
+            ):
+                raise ValueError("Distributed DeepSeek V4 SFT requires `dist_config.name: fsdp2` or `fsdpturbo`.")
+
         self._chunk_loss = None
         if args.chunk_loss_size is not None:
             from ..plugins.model_plugins.chunk_loss import LossPlugin

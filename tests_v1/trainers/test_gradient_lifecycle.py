@@ -119,6 +119,18 @@ def test_padding_free_batching_requires_flash_attention(monkeypatch, attention, 
         assert trainer.train_batch_generator is created[0]
 
 
+@pytest.mark.parametrize("cp_size", [1, 2])
+def test_distributed_v4_sft_requires_an_explicit_backend(monkeypatch, cp_size):
+    from llamafactory.v1.config import TrainingArguments
+    from llamafactory.v1.trainers import sft_trainer
+
+    interface = SimpleNamespace(get_world_size=lambda: 2)
+    monkeypatch.setattr(sft_trainer, "DistributedInterface", lambda: interface)
+    model = SimpleNamespace(config=SimpleNamespace(model_type="deepseek_v4"))
+    with pytest.raises(ValueError, match="Distributed DeepSeek V4 SFT requires"):
+        sft_trainer.SFTTrainer(TrainingArguments(cp_size=cp_size), model, None, [])
+
+
 @pytest.mark.parametrize("backend", ["fsdp2", "fsdpturbo"])
 def test_sft_entry_releases_completed_optimizer_state_before_export(monkeypatch, backend):
     from llamafactory.v1.trainers import sft_trainer

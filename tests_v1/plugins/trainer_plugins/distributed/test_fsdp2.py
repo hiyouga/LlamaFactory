@@ -224,6 +224,10 @@ def test_fsdp2_loads_real_v4_expert_conversion_and_buffers(tmp_path, safetensors
         checkpoint[f"{prefix}.{expert}.w2.weight"] = downs[expert].contiguous()
     # Reference checkpoints name the final norm before the base-model prefix.
     checkpoint["norm.weight"] = checkpoint.pop("model.norm.weight")
+    # Old checkpoints may still carry a derived RoPE buffer from a different model shape.
+    derived = collect_non_persistent_buffers(reference)
+    stale_key = next(key for key in derived if key.endswith("inv_freq"))
+    checkpoint[stale_key] = torch.zeros(derived[stale_key].numel() + 1)
     if safetensors:
         from safetensors.torch import save_file
 
@@ -240,6 +244,21 @@ def test_fsdp2_loads_real_v4_expert_conversion_and_buffers(tmp_path, safetensors
     engine._load_weights_from_hf_checkpoint(model, str(tmp_path))
     for name, value in model.state_dict().items():
         torch.testing.assert_close(value, expected[name], rtol=0, atol=0, msg=name)
+    for key, value in collect_non_persistent_buffers(model).items():
+        torch.testing.assert_close(value, derived[key], rtol=0, atol=0, msg=key)
+
+
+def test_fsdp2_rejects_missing_v4_router_buffer(tmp_path, tiny_v4_model):
+    from safetensors.torch import save_file
+
+    checkpoint = tiny_v4_model.state_dict()
+    router_key = next(key for key in checkpoint if key.endswith(".gate.tid2eid"))
+    del checkpoint[router_key]
+    save_file(checkpoint, str(tmp_path / "model.safetensors"))
+    engine = object.__new__(FSDP2Engine)
+    engine.rank = 1
+    with pytest.raises(ValueError, match=r"missing router buffers: .*\.gate\.tid2eid"):
+        engine._load_weights_from_hf_checkpoint(tiny_v4_model, str(tmp_path))
 
 
 def test_fsdp2_native_model_export_reloads_all_weights(tmp_path, tiny_v4_model):
