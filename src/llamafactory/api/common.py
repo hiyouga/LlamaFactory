@@ -93,6 +93,14 @@ def check_ssrf_url(url: str) -> None:
         if not hostname:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid URL hostname.")
 
+        # requests/urllib3 parse the authority differently from urlparse (e.g. a backslash ends it there),
+        # so make sure the host we validate is the host requests will actually connect to.
+        from urllib3.util import parse_url
+
+        connect_host = parse_url(url).host
+        if connect_host is None or connect_host.strip("[]").lower() != hostname.lower():
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid URL hostname.")
+
         ip_info = socket.getaddrinfo(hostname, parsed_url.port)
         # Reject if *any* resolved address is non-global (multi-A / dual-stack hosts).
         for entry in ip_info:

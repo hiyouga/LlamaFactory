@@ -192,3 +192,37 @@ def test_fetch_remote_media_returns_raw_on_2xx(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(requests_mod, "get", fake_get)
 
     assert api_common.fetch_remote_media("https://example.invalid/img.png") is sentinel
+
+
+def test_check_ssrf_url_rejects_backslash_authority_confusion(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A backslash makes urlparse see example.com while requests/urllib3 connect to 127.0.0.1."""
+    resolved_hosts = []
+
+    def fake_getaddrinfo(host, port):
+        resolved_hosts.append(host)
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 80))]
+
+    monkeypatch.setattr(api_common.socket, "getaddrinfo", fake_getaddrinfo)
+
+    with pytest.raises(HTTPException) as exc_info:
+        check_ssrf_url("http://127.0.0.1:8000\\@example.com/")
+    assert exc_info.value.status_code == 400
+    assert resolved_hosts == []
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://example.com/a.png",
+        "http://example.com:8080/x",
+        "http://EXAMPLE.COM/x",
+        "http://[2606:4700:4700::1111]/x",
+        "http://user:pw@example.com/x",
+    ],
+)
+def test_check_ssrf_url_accepts_consistent_hosts(url: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_getaddrinfo(host, port):
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("93.184.216.34", 80))]
+
+    monkeypatch.setattr(api_common.socket, "getaddrinfo", fake_getaddrinfo)
+    check_ssrf_url(url)
