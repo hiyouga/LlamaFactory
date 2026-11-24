@@ -239,14 +239,14 @@ class DefaultToolUtils(ToolUtils):
 
 
 class Ernie55ToolUtils(ToolUtils):
-    r"""ERNIE 5.5 tool using template: the tool list in the system turn and XML tool calls."""
+    r"""ERNIE 5.5 tool using template: the tool list in the system turn and XML tool calls, both sorted by key."""
 
     @override
     @staticmethod
     def tool_formatter(tools: list[dict[str, Any]]) -> str:
         # the tools are listed in the OpenAI format, as a serving stack passes them to the chat template
         tools = [tool if tool.get("type") == "function" else {"type": "function", "function": tool} for tool in tools]
-        return "\n<ernie:tool_list>\n" + json.dumps(tools, ensure_ascii=False) + "\n</ernie:tool_list>"
+        return "\n<ernie:tool_list>\n" + json.dumps(tools, ensure_ascii=False, sort_keys=True) + "\n</ernie:tool_list>"
 
     @override
     @staticmethod
@@ -254,9 +254,9 @@ class Ernie55ToolUtils(ToolUtils):
         function_text = ""
         for name, arguments in functions:
             function_text += f'<invoke name="{name}">'
-            for key, value in json.loads(arguments).items():
+            for key, value in sorted(json.loads(arguments).items()):
                 if not isinstance(value, str):
-                    value = json.dumps(value, ensure_ascii=False)
+                    value = json.dumps(value, ensure_ascii=False, sort_keys=True)
 
                 function_text += f'<parameter name="{key}">{value}</parameter>'
 

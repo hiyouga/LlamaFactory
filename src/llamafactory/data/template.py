@@ -745,7 +745,9 @@ ERNIE5_5_JINJA_TEMPLATE = (
     "{{- '\n</ernie:global_setting>' -}}"
     "{%- if tools -%}"
     "{{- '\n<ernie:tool_list>\n[' -}}"
-    "{%- for tool in tools -%}{{- tool | tojson -}}{%- if not loop.last -%}{{- ', ' -}}{%- endif -%}{%- endfor -%}"
+    "{%- for tool in tools -%}"
+    "{{- tool | tojson(sort_keys=true) -}}{%- if not loop.last -%}{{- ', ' -}}{%- endif -%}"
+    "{%- endfor -%}"
     "{{- ']\n</ernie:tool_list>' -}}"
     "{%- endif -%}"
     "{{- '<|ernie:im_end|>\n' -}}"
@@ -759,22 +761,20 @@ ERNIE5_5_JINJA_TEMPLATE = (
     "{%- if message.reasoning_content is string -%}"
     "{%- set reasoning = message.reasoning_content -%}"
     "{%- elif '</ernie:think>' in content -%}"
-    "{%- set reasoning = content.split('</ernie:think>')[0].rstrip('\n').split('<ernie:think>')[-1].lstrip('\n') -%}"
-    "{%- set content = content.split('</ernie:think>')[-1].lstrip('\n') -%}"
+    "{%- set reasoning = content.split('</ernie:think>')[0].split('<ernie:think>')[-1] -%}"
+    "{%- set content = content.split('</ernie:think>')[-1] -%}"
     "{%- endif -%}"
-    "{{- '<|ernie:im_start|>assistant\n' -}}"
-    "{%- if not thinking_off and reasoning.strip() -%}"
-    "{{- '<ernie:think>' + reasoning.strip('\n') -}}"
-    "{%- endif -%}"
-    "{{- '</ernie:think>' + content.strip('\n') -}}"
+    "{{- '<|ernie:im_start|>assistant\n<ernie:think>' -}}"
+    "{%- if not thinking_off and reasoning.strip() -%}{{- reasoning -}}{%- endif -%}"
+    "{{- '</ernie:think>' + content -}}"
     "{%- if message.tool_calls -%}"
-    "{%- if content -%}{{- '\n' -}}{%- endif -%}"
     "{{- '<ernie:tool_call>\n' -}}"
     "{%- for tool_call in message.tool_calls -%}"
     "{%- set tool_call = tool_call.function if tool_call.function else tool_call -%}"
     "{{- '<invoke name=\"' + tool_call.name + '\">' -}}"
-    "{%- for key, value in tool_call.arguments.items() -%}"
-    "{{- '<parameter name=\"' + key + '\">' + (value if value is string else value | tojson) + '</parameter>' -}}"
+    "{%- for key, value in tool_call.arguments | dictsort(true) -%}"
+    "{{- '<parameter name=\"' + key + '\">' -}}"
+    "{{- (value if value is string else value | tojson(sort_keys=true)) + '</parameter>' -}}"
     "{%- endfor -%}"
     "{{- '</invoke>\n' -}}"
     "{%- endfor -%}"
@@ -792,56 +792,38 @@ ERNIE5_5_JINJA_TEMPLATE = (
     "{%- endif -%}"
     "{%- endfor -%}"
     "{%- if add_generation_prompt -%}"
-    "{{- '\n<|ernie:im_start|>assistant\n' + ('</ernie:think>' if thinking_off else '<ernie:think>') -}}"
+    "{{- '\n<|ernie:im_start|>assistant\n<ernie:think>' + ('</ernie:think>' if thinking_off else '') -}}"
     "{%- endif -%}"
 )
 
 
 @dataclass
 class Ernie55Template(ReasoningTemplate):
-    r"""ERNIE 5.5 template, encoding a conversation as ERNIE 5.5's reference SFT chat template does.
+    r"""ERNIE 5.5 template, encoding a conversation as the official chat renderer of ERNIE 5.5 does.
 
-    The system turn holds the system prompt, the thinking setting and the tools. The opening thought tag belongs to the
-    prompt: a turn with reasoning is prompted with `<ernie:think>`, and with thinking off every turn is prompted with
-    `</ernie:think>`. In thinking mode, a turn without reasoning starts its response with `</ernie:think>`. The newline
-    after each turn is not trained. With `enable_thinking=None`, a conversation uses thinking mode if any of its turns
-    has reasoning.
+    The system turn holds the system prompt, the thinking setting and the tools. An assistant turn is
+    `<ernie:think>{reasoning}</ernie:think>{answer}`, where the reasoning is left out if it is empty or thinking is off
+    (`enable_thinking=None` means on). The text is kept as it is, and the tools and the tool call arguments are sorted
+    by key. The whole assistant turn is trained, opening thought tag included, but not the newline after it.
+    `encode_oneturn` ends the prompt with the generation prompt: `<ernie:think>`, or `<ernie:think></ernie:think>`
+    with thinking off.
     """
 
     def _split_thought(self, content: str) -> tuple[str, str]:
-        r"""Split an assistant message into its reasoning and its answer, as the reference template does."""
+        r"""Split an assistant message into its reasoning and its answer, as the official renderer does."""
         start, end = self.thought_words
         if end not in content:
             return "", content
 
-        reasoning = content.split(end)[0].rstrip("\n").split(start)[-1].lstrip("\n")
-        return reasoning, content.split(end)[-1].lstrip("\n")
+        first = content.index(end)
+        begin = content.rfind(start, 0, first)
+        reasoning = content[begin + len(start) if begin >= 0 else 0 : first]
+        return reasoning, content[content.rindex(end) + len(end) :]
 
-    def _format_function(self, content: str) -> str:
-        r"""Format a function message: optional text, then the tool calls (JSON, or wrapped in the tool call tags)."""
-        regex = re.compile(f"{re.escape(self.tool_call_words[0])}(.*?){re.escape(self.tool_call_words[1])}", re.DOTALL)
-        match = re.search(regex, content)
-        text, calls = (content[: match.start()] + content[match.end() :], match.group(1)) if match else ("", content)
-        function_text = self.format_function.apply(content=calls)[0]  # the calls and the end of turn
-        return (text.strip("\n") + "\n" if text.strip("\n") else "") + function_text
-
-    @override
-    def _encode(
-        self,
-        tokenizer: "PreTrainedTokenizer",
-        messages: list[dict[str, str]],
-        system: Optional[str],
-        tools: Optional[str],
-    ) -> list[list[int]]:
+    def _render(self, messages: list[dict[str, str]], system: Optional[str], tools: Optional[str]) -> list[str]:
+        r"""Render each message to text: a prompt ends before its assistant turn, which runs to the end of turn."""
+        thinking = self.enable_thinking is not False
         system = system or self.default_system
-        turns = [
-            self._split_thought(message["content"]) if message["role"] in (Role.ASSISTANT, Role.FUNCTION) else None
-            for message in messages
-        ]
-        thinking = self.enable_thinking
-        if thinking is None:
-            thinking = any(turn is not None and turn[0].strip() for turn in turns)
-
         tool_text = self.format_tools.apply(content=tools)[0] if tools else ""
         prefix = self.format_prefix.apply()[0]
         if system:
@@ -853,36 +835,38 @@ class Ernie55Template(ReasoningTemplate):
         prefix += f"<ernie:global_setting>{settings}\n</ernie:global_setting>{tool_text}<|ernie:im_end|>\n"
 
         texts = []
-        for i, (message, turn) in enumerate(zip(messages, turns)):
+        for i, message in enumerate(messages):
             if message["role"] in (Role.USER, Role.OBSERVATION):
                 formatter = self.format_user if message["role"] == Role.USER else self.format_observation
-                text = (prefix if i == 0 else "\n") + formatter.apply(content=message["content"])[0]
+                texts.append((prefix if i == 0 else "\n") + formatter.apply(content=message["content"])[0])
             elif message["role"] in (Role.ASSISTANT, Role.FUNCTION):
-                reasoning, answer = turn
-                if i == len(messages) - 1 and not message["content"]:  # the generation prompt
-                    texts[-1] += self.thought_words[0] if thinking else self.thought_words[1]
-                    texts.append("")
-                    continue
-
-                if thinking and reasoning.strip():
-                    texts[-1] += self.thought_words[0]
-                    text = reasoning.strip("\n") + self.thought_words[1]
-                elif thinking:
-                    text = self.thought_words[1]
-                else:
-                    texts[-1] += self.thought_words[1]
-                    text = ""
-
+                reasoning, answer = self._split_thought(message["content"])
+                text = self.thought_words[0] + (reasoning if thinking and reasoning.strip() else "")
+                text += self.thought_words[1]
                 if message["role"] == Role.ASSISTANT:
-                    text += self.format_assistant.apply(content=answer.strip("\n"))[0]
-                else:
-                    text += self._format_function(answer)
+                    text += self.format_assistant.apply(content=answer)[0]
+                else:  # optional text, then the tool calls (JSON, or JSON wrapped in the tool call tags)
+                    text += self.format_function.apply(content=answer, tool_call_words=self.tool_call_words)[0]
+
+                texts.append(text)
             else:
                 raise NotImplementedError("Unexpected role: {}".format(message["role"]))
 
-            texts.append(text)
+        return texts
 
-        return [tokenizer.encode(text, add_special_tokens=False) if text else [] for text in texts]
+    @staticmethod
+    def _tokenize(tokenizer: "PreTrainedTokenizer", text: str) -> list[int]:
+        return tokenizer.encode(text, add_special_tokens=False) if text else []
+
+    @override
+    def _encode(
+        self,
+        tokenizer: "PreTrainedTokenizer",
+        messages: list[dict[str, str]],
+        system: Optional[str],
+        tools: Optional[str],
+    ) -> list[list[int]]:
+        return [self._tokenize(tokenizer, text) for text in self._render(messages, system, tools)]
 
     @override
     def encode_oneturn(
@@ -893,12 +877,19 @@ class Ernie55Template(ReasoningTemplate):
         tools: Optional[str] = None,
     ) -> tuple[list[int], list[int]]:
         messages = deepcopy(messages)
-        if self.enable_thinking is False or not self.preserve_thinking:
-            last = len(messages) if self.enable_thinking is False else len(messages) - 1
-            for i in range(1, last, 2):
+        if not self.preserve_thinking:
+            for i in range(1, len(messages) - 1, 2):
                 messages[i]["content"] = self._split_thought(messages[i]["content"])[1]
 
-        return Template.encode_oneturn(self, tokenizer, messages, system, tools)
+        texts = self._render(messages, system, tools)
+        generation_prompt = self.thought_words[0] if self.enable_thinking is not False else "".join(self.thought_words)
+        texts[-2] += generation_prompt
+        texts[-1] = texts[-1][len(generation_prompt) :]
+        prompt_ids = []
+        for text in texts[:-1]:
+            prompt_ids += self._tokenize(tokenizer, text)
+
+        return prompt_ids, self._tokenize(tokenizer, texts[-1])
 
     @override
     def encode_multiturn(
@@ -910,9 +901,8 @@ class Ernie55Template(ReasoningTemplate):
         discarding_history_cot: bool = False,
     ) -> list[tuple[list[int], list[int]]]:
         messages = deepcopy(messages)
-        if self.enable_thinking is False or discarding_history_cot:
-            last = len(messages) if self.enable_thinking is False else len(messages) - 1
-            for i in range(1, last, 2):
+        if discarding_history_cot:
+            for i in range(1, len(messages) - 1, 2):
                 messages[i]["content"] = self._split_thought(messages[i]["content"])[1]
 
         return Template.encode_multiturn(self, tokenizer, messages, system, tools)

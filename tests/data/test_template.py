@@ -443,7 +443,9 @@ def test_qwen3_template(cot_messages: bool):
 @pytest.mark.runs_on(["cpu", "mps", "xpu"])
 @pytest.mark.parametrize("enable_thinking", [True, False])
 def test_ernie5_5_template(enable_thinking: bool):
-    assert SUPPORTED_MODELS["ERNIE-5.5-Flash-Base-BF16"][DownloadSource.DEFAULT] == "baidu/ERNIE-5.5-Flash-Base-BF16"
+    for name in ("ERNIE-5.5-Flash-Base-BF16", "ERNIE-5.5-Flash-Preview-BF16"):
+        assert SUPPORTED_MODELS[name][DownloadSource.DEFAULT] == f"baidu/{name}"
+
     tokenizer = AutoTokenizer.from_pretrained("baidu/ERNIE-5.5-Flash-Base-BF16")
     data_args = DataArguments(template="ernie5_5", enable_thinking=enable_thinking)
     template = get_template_and_fix_tokenizer(tokenizer, data_args)
@@ -461,23 +463,19 @@ def test_ernie5_5_template(enable_thinking: bool):
     first_prompt_str = (
         system_str + "<|ernie:im_start|>user\nHow are you<|ernie:im_end|>\n<|ernie:im_start|>assistant\n"
     )
-    if (
-        enable_thinking
-    ):  # the reasoning is prompted with the opening tag, a turn without it starts with the closing one
+    second_prompt_str = "\n<|ernie:im_start|>user\n你好<|ernie:im_end|>\n<|ernie:im_start|>assistant\n"
+    if enable_thinking:  # the text is kept as it is, and a turn without reasoning has an empty thought
         expected = [
-            (first_prompt_str + "<ernie:think>", "Model thought here</ernie:think>I am fine!<|ernie:im_end|>"),
             (
-                "\n<|ernie:im_start|>user\n你好<|ernie:im_end|>\n<|ernie:im_start|>assistant\n",
-                "</ernie:think>很高兴认识你！<|ernie:im_end|>",
+                first_prompt_str,
+                "<ernie:think>\nModel thought here\n</ernie:think>\n\nI am fine!<|ernie:im_end|>",
             ),
+            (second_prompt_str, "<ernie:think></ernie:think>很高兴认识你！<|ernie:im_end|>"),
         ]
-    else:  # every turn is prompted with the closing tag and the reasoning is dropped
+    else:  # the reasoning is dropped
         expected = [
-            (first_prompt_str + "</ernie:think>", "I am fine!<|ernie:im_end|>"),
-            (
-                "\n<|ernie:im_start|>user\n你好<|ernie:im_end|>\n<|ernie:im_start|>assistant\n</ernie:think>",
-                "很高兴认识你！<|ernie:im_end|>",
-            ),
+            (first_prompt_str, "<ernie:think></ernie:think>\n\nI am fine!<|ernie:im_end|>"),
+            (second_prompt_str, "<ernie:think></ernie:think>很高兴认识你！<|ernie:im_end|>"),
         ]
 
     encoded_pairs = template.encode_multiturn(tokenizer, messages, system="You are ERNIE.")
@@ -485,18 +483,25 @@ def test_ernie5_5_template(enable_thinking: bool):
     for encoded_ids, expected_str in zip(encoded_pairs, expected):
         _check_tokenization(tokenizer, encoded_ids, expected_str)
 
-    prompt_ids, answer_ids = template.encode_oneturn(
-        tokenizer, messages[:1] + [{"role": "assistant", "content": ""}], system="You are ERNIE."
-    )
-    assert tokenizer.decode(prompt_ids) == first_prompt_str + (
-        "<ernie:think>" if enable_thinking else "</ernie:think>"
-    )
-    assert answer_ids == []
-
     # the chat template written into the tokenizer renders the same text
     kwargs = {} if enable_thinking else {"enable_thinking": False}
     hf_messages = [{"role": "system", "content": "You are ERNIE."}] + messages
     assert tokenizer.apply_chat_template(hf_messages, tokenize=False, **kwargs) == "".join(sum(expected, ()))
+
+    # one turn ends the prompt with the generation prompt
+    generation_prompt = "<ernie:think>" if enable_thinking else "<ernie:think></ernie:think>"
+    prompt_ids, answer_ids = template.encode_oneturn(tokenizer, messages, system="You are ERNIE.")
+    prompt_str = "".join(expected[0]) + second_prompt_str + generation_prompt
+    _check_tokenization(tokenizer, (prompt_ids, answer_ids), (prompt_str, expected[1][1][len(generation_prompt) :]))
+    generation_str = tokenizer.apply_chat_template(
+        hf_messages[:-1], tokenize=False, add_generation_prompt=True, **kwargs
+    )
+    assert generation_str == prompt_str
+
+    prompt_ids, _ = template.encode_oneturn(
+        tokenizer, messages[:1] + [{"role": "assistant", "content": ""}], system="You are ERNIE."
+    )
+    assert tokenizer.decode(prompt_ids) == first_prompt_str + generation_prompt
 
 
 @pytest.mark.runs_on(["cpu", "mps", "xpu"])
@@ -507,28 +512,35 @@ def test_ernie5_5_tool_template():
         {
             "name": "get_weather",
             "description": "Get the weather of a city.",
-            "parameters": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+            "parameters": {
+                "type": "object",
+                "properties": {"city": {"type": "string"}, "unit": {"type": "string"}},
+                "required": ["city"],
+            },
         }
     ]
+    arguments = {"unit": "celsius", "city": "Paris"}
+    function_call = json.dumps({"name": "get_weather", "arguments": arguments})
     messages = [
         {"role": "user", "content": "Weather in Paris?"},
-        {"role": "function", "content": json.dumps({"name": "get_weather", "arguments": {"city": "Paris"}})},
+        {"role": "function", "content": f"Let me check.<ernie:tool_call>{function_call}</ernie:tool_call>"},
         {"role": "observation", "content": '{"weather": "sunny"}'},
         {"role": "assistant", "content": "<ernie:think>Got it.</ernie:think>It is sunny."},
     ]
-    tool_list = json.dumps([{"type": "function", "function": tools[0]}])
-    expected = [
+    tool_list = json.dumps([{"type": "function", "function": tools[0]}], sort_keys=True)
+    expected = [  # the tools and the arguments are sorted by key
         (
             "<|ERNIE_MASK|><|ernie:im_start|>system\n<ernie:global_setting>\nreasoning_effort=high\n"
             f"parallel_tool_calls=True\n</ernie:global_setting>\n<ernie:tool_list>\n{tool_list}\n</ernie:tool_list>"
             "<|ernie:im_end|>\n<|ernie:im_start|>user\nWeather in Paris?<|ernie:im_end|>\n<|ernie:im_start|>assistant\n",
-            '</ernie:think><ernie:tool_call>\n<invoke name="get_weather"><parameter name="city">Paris</parameter>'
-            "</invoke>\n</ernie:tool_call><|ernie:im_end|>",
+            '<ernie:think></ernie:think>Let me check.<ernie:tool_call>\n<invoke name="get_weather">'
+            '<parameter name="city">Paris</parameter><parameter name="unit">celsius</parameter></invoke>\n'
+            "</ernie:tool_call><|ernie:im_end|>",
         ),
         (
             '\n<|ernie:im_start|>tool\n<ernie:tool_output>{"weather": "sunny"}</ernie:tool_output><|ernie:im_end|>\n'
-            "<|ernie:im_start|>assistant\n<ernie:think>",
-            "Got it.</ernie:think>It is sunny.<|ernie:im_end|>",
+            "<|ernie:im_start|>assistant\n",
+            "<ernie:think>Got it.</ernie:think>It is sunny.<|ernie:im_end|>",
         ),
     ]
     encoded_pairs = template.encode_multiturn(tokenizer, messages, tools=json.dumps(tools))
@@ -537,8 +549,22 @@ def test_ernie5_5_tool_template():
         _check_tokenization(tokenizer, encoded_ids, expected_str)
 
     assert template.extract_tool(tokenizer.decode(encoded_pairs[0][1])) == [
-        ("get_weather", json.dumps({"city": "Paris"}))
+        ("get_weather", json.dumps({"city": "Paris", "unit": "celsius"}))
     ]
+
+    # the chat template written into the tokenizer renders the same text
+    hf_messages = [
+        messages[0],
+        {
+            "role": "assistant",
+            "content": "Let me check.",
+            "tool_calls": [{"type": "function", "function": {"name": "get_weather", "arguments": arguments}}],
+        },
+        {"role": "tool", "content": messages[2]["content"]},
+        messages[3],
+    ]
+    openai_tools = [{"type": "function", "function": tools[0]}]
+    assert tokenizer.apply_chat_template(hf_messages, tools=openai_tools, tokenize=False) == "".join(sum(expected, ()))
 
 
 @pytest.mark.runs_on(["cpu", "mps", "xpu"])

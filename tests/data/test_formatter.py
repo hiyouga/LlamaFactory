@@ -113,12 +113,12 @@ def test_default_multi_tool_extractor():
 @pytest.mark.runs_on(["cpu", "mps", "xpu"])
 def test_ernie5_5_function_formatter():
     formatter = FunctionFormatter(slots=["{{content}}<|ernie:im_end|>"], tool_format="ernie5_5")
-    tool_calls = json.dumps([FUNCTION, {"name": "other", "arguments": {"tags": ["a", "b"], "opts": {"k": 1}}}])
-    assert formatter.apply(content=tool_calls) == [
+    tool_calls = json.dumps([FUNCTION, {"name": "other", "arguments": {"tags": ["a", "b"], "opts": {"k": 1, "a": 2}}}])
+    assert formatter.apply(content=tool_calls) == [  # the arguments are sorted by key
         "<ernie:tool_call>\n"
         '<invoke name="tool_name"><parameter name="foo">bar</parameter><parameter name="size">10</parameter></invoke>\n'
-        '<invoke name="other"><parameter name="tags">["a", "b"]</parameter><parameter name="opts">{"k": 1}</parameter>'
-        "</invoke>\n</ernie:tool_call><|ernie:im_end|>"
+        '<invoke name="other"><parameter name="opts">{"a": 2, "k": 1}</parameter>'
+        '<parameter name="tags">["a", "b"]</parameter></invoke>\n</ernie:tool_call><|ernie:im_end|>'
     ]
 
 
@@ -126,7 +126,8 @@ def test_ernie5_5_function_formatter():
 def test_ernie5_5_tool_formatter():
     formatter = ToolFormatter(tool_format="ernie5_5")
     openai_tools = [{"type": "function", "function": TOOLS[0]}]
-    expected = "\n<ernie:tool_list>\n" + json.dumps(openai_tools, ensure_ascii=False) + "\n</ernie:tool_list>"
+    tool_list = json.dumps(openai_tools, ensure_ascii=False, sort_keys=True)
+    expected = "\n<ernie:tool_list>\n" + tool_list + "\n</ernie:tool_list>"
     assert formatter.apply(content=json.dumps(TOOLS)) == [expected]
     assert formatter.apply(content=json.dumps(openai_tools)) == [expected]
 

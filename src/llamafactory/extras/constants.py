@@ -639,6 +639,10 @@ register_model_group(
             DownloadSource.DEFAULT: "baidu/ERNIE-5.5-Flash-Base-BF16",
             DownloadSource.MODELSCOPE: "baidu/ERNIE-5.5-Flash-Base-BF16",
         },
+        "ERNIE-5.5-Flash-Preview-BF16": {
+            DownloadSource.DEFAULT: "baidu/ERNIE-5.5-Flash-Preview-BF16",
+            DownloadSource.MODELSCOPE: "baidu/ERNIE-5.5-Flash-Preview-BF16",
+        },
     },
     template="ernie5_5",
 )
