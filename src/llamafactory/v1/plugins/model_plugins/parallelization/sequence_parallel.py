@@ -44,6 +44,21 @@ def apply_sequence_parallel(model, cp_size: int):
     apply_gdn_attention(model, cp_size)
 
 
+@SequenceParallelModelPlugin("ulysses_gdn_state").register()
+def apply_state_sequence_parallel(model, cp_size: int):
+    """Use Ulysses for full attention and state routing for GDN layers."""
+    if cp_size <= 1:
+        return
+
+    from .gdn_state import apply_gdn_state_attention
+    from .hook import install_sequence_parallel_hook
+
+    group = DistributedInterface().get_group(Dim.CP)
+    boundary = install_sequence_parallel_hook(model)
+    apply_gdn_state_attention(model, cp_size, group, boundary)
+    apply_ulysses_attention(model, cp_size, group)
+
+
 @SequenceParallelLossPlugin("sequence_parallel_loss").register()
 def sequence_parallel_loss(model, model_inputs, loss_fn=None, *, uses_mrope: bool = False):
     """Prepare CP targets and aggregate weighted CE, optionally using a custom loss function.

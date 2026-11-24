@@ -1,0 +1,2 @@
+# Optional GDN state-routing CP backend, matching the torchtitan integration.
+attn_gym[linear] @ git+https://github.com/meta-pytorch/attention-gym.git@755691f3fe5da772a6e4023ea08bbb4db8173b49

@@ -88,7 +88,7 @@ class TrainingArguments:
     )
     cp_mode: str = field(
         default="ulysses",
-        metadata={"help": "Context parallel implementation."},
+        metadata={"help": "Context parallel implementation: ulysses or ulysses_gdn_state."},
     )
     mp_replicate_size: int = field(
         default=1,

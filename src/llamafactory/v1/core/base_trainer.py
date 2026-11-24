@@ -53,6 +53,11 @@ from .utils.checkpoint import TrainingCheckpointCoordinator
 logger = logging.get_logger(__name__)
 
 
+def _is_flash_attention_2(implementation: str | None) -> bool:
+    """Recognize native FA2 and the official Transformers kernel-hub fallback."""
+    return implementation in ("flash_attention_2", "kernels-community/flash-attn2")
+
+
 class BaseTrainer:
     def __init__(
         self,
@@ -149,7 +154,7 @@ class BaseTrainer:
         if self.args.cp_size > 1:
             from ..plugins.model_plugins.parallelization.sequence_parallel import SequenceParallelModelPlugin
 
-            if model.config._attn_implementation != "flash_attention_2":
+            if not _is_flash_attention_2(model.config._attn_implementation):
                 raise ValueError(
                     "Sequence parallelism requires flash attention. Please set `flash_attn: flash_attention_2`."
                 )
@@ -157,9 +162,8 @@ class BaseTrainer:
             SequenceParallelModelPlugin(self.args.cp_mode)(model, self.args.cp_size)
 
     def _create_batch_generator(self) -> None:
-        if (
-            self.args.batching_strategy == BatchingStrategy.PADDING_FREE
-            and getattr(self.model.config, "_attn_implementation", None) != "flash_attention_2"
+        if self.args.batching_strategy == BatchingStrategy.PADDING_FREE and not _is_flash_attention_2(
+            getattr(self.model.config, "_attn_implementation", None)
         ):
             raise ValueError("`padding_free` requires `flash_attn: flash_attention_2`.")
 
