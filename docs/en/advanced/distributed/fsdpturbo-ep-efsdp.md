@@ -83,7 +83,7 @@ edp_size      = dp_size / (ep_size * ep_fsdp_size)
 mesh_shape    = (edp_size, ep_fsdp_size, ep_size, cp_size)
 ```
 
-The state object retains `edp_mesh`, `efsdp_mesh`, `ep_mesh`, and `expert_cp_mesh`. Model sharding and gradient norm logic inside the plugin read expert communication domains from this state, while other LlamaFactory backends do not need to implement or know about these interfaces. Initialization validates that `ep_size` is positive and divides `dp_size`; repeated initialization also rejects topology changes.
+The state object in `fsdpturbo/parallel_state.py` retains `edp_mesh`, `efsdp_mesh`, `ep_mesh`, and `expert_cp_mesh`. Model sharding and gradient norm logic inside the plugin read expert communication domains from this state, while other LlamaFactory backends do not need to implement or know about these interfaces. Initialization validates that `ep_size` is positive and divides `dp_size`; repeated initialization also rejects topology changes.
 
 ## 3. Model Sharding Order
 
@@ -102,16 +102,16 @@ DistributedPlugin("fsdpturbo")
 
 This prevents the same expert parameter from being managed by both EFSDP and outer FSDP2. Outer FSDP2 continues to reuse LlamaFactory's model initialization, checkpoint, and save flows.
 
-The LlamaFactory integration layer accepts `eager`, `fused`, `mc2`, and `domino` and forwards the selected value unchanged to FSDPTurbo. Their implementation boundaries and current validation status differ:
+For the pinned backend, LlamaFactory maps `eager` and `fused` to `all2all` with `use_fused_ops` disabled or enabled, respectively. Other dispatcher names such as `mc2` and `domino` continue to be passed through. The table describes the device paths and their historical validation:
 
-| Dispatcher | Main path | Additional requirements | Validation in this PR |
+| Dispatcher | Main path | Additional requirements | Historical validation |
 | --- | --- | --- | --- |
 | `eager` | Uses PyTorch implementations of permute, unpermute, and grouped matmul while tensors remain on the current accelerator, with standard AllToAll for token dispatch and combine | Minimal dependencies; serves as the reference implementation | End-to-end numerical and performance validation completed on Ascend A3 |
 | `fused` | Keeps the same AllToAll topology while replacing permute, unpermute, and grouped matmul with device-fused operators | Requires matching device operators, dtypes, and layouts; local operators may fall back to eager when an expert receives no tokens | End-to-end numerical and performance validation completed on Ascend A3 |
-| `mc2` | Uses dedicated operators that fuse AllToAllV with grouped matmul to reduce intermediate communication-computation overhead | Requires the MC2 NPU operators, an HCCL communicator, and their shape and dtype constraints | Implemented by FSDPTurbo but not validated end to end in this PR |
-| `domino` | Splits the first dimension of the expert-module input into two slices and uses a separate communication stream and events to overlap AllToAll with expert computation | Requires asynchronous stream/event support and enough token work in both slices to amortize scheduling overhead | Implemented by FSDPTurbo but not validated end to end in this PR |
+| `mc2` | Uses dedicated operators that fuse AllToAllV with grouped matmul to reduce intermediate communication-computation overhead | Requires the MC2 NPU operators, an HCCL communicator, and their shape and dtype constraints | No end-to-end result in the historical matrix |
+| `domino` | Splits the first dimension of the expert-module input into two slices and uses a separate communication stream and events to overlap AllToAll with expert computation | Requires asynchronous stream/event support and enough token work in both slices to amortize scheduling overhead | No end-to-end result in the historical matrix |
 
-Only `eager` and `fused` are validated here because they cover the reference path and the commonly used A3 device-fused path, respectively, and therefore isolate and establish the correctness of the EP/EFSDP integration between LlamaFactory and FSDPTurbo. The current experiment matrix was not extended to `mc2` and `domino`: they add operator, communication-scheduling, and input-shape constraints that require separate numerical comparisons, long-run stability tests, and profiler analysis. They are accepted configuration choices, but the results in this PR should not be interpreted as evidence that they have reached the same stability, numerical, or performance level.
+Only `eager` and `fused` are validated here because they cover the reference path and the commonly used A3 device-fused path, respectively, and therefore isolate and establish the correctness of the EP/EFSDP integration between LlamaFactory and FSDPTurbo. The historical matrix does not cover `mc2` and `domino`: they add operator, communication-scheduling, and input-shape constraints that require separate numerical comparisons, long-run stability tests, and profiler analysis. They are accepted configuration choices, but the results in this PR should not be interpreted as evidence that they have reached the same stability, numerical, or performance level.
 
 ## 4. FSDPTurbo Dependency Entry Points
 
@@ -130,13 +130,15 @@ The imports occur inside `prepare_model_ep()`, so other distributed backends rem
 
 ## 5. Gradient Norms
 
-Each CP rank backpropagates the loss for the full sequence, using its local sequence shard. Before clipping and stepping the optimizer, the plugin averages corresponding gradient shards over CP for dense parameters and over expert-CP for routed experts. A missing local contribution counts as zero. If every replica has no contribution, the gradient stays unset.
+Each CP rank backpropagates the loss for the full sequence, using its local sequence shard. After all microbatch backward passes, the trainer calls the backend's `synchronize_gradients` hook. FSDPTurbo averages corresponding gradient shards over CP for dense parameters and over expert-CP for routed experts. A missing local contribution counts as zero. If every replica has no contribution, the gradient stays unset.
+
+The following clipping call uses the synchronized shards:
 
 - The dense gradient norm sums the local p-power sums over DP.
 - The expert gradient norm sums them over EFSDP and EP. Each synchronized CP replica already holds the same gradient shard.
 - After the global norm is assembled, the same clipping coefficient is applied to every local gradient.
 
-A zero-gradient warmup runs during startup so that the required collectives are initialized before training begins. This is currently a backend-specific implementation for `fsdpturbo`; other backends retain their existing gradient norm paths until the upstream distributed plugin interface is decoupled.
+FSDPTurbo runs the same synchronization and clipping sequence with zero gradients during startup to initialize the collectives. Other backends use the default no-op synchronization hook and keep their existing gradient reduction and norm paths.
 
 ## 6. Weight Loading
 

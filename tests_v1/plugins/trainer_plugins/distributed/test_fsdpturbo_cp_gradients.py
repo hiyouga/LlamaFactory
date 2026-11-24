@@ -59,7 +59,8 @@ def check_cp_gradients():
         EP="ep",
         EFSDP="efsdp",
     )
-    from llamafactory.v1.plugins.trainer_plugins.distributed import fsdpturbo as backend
+    from llamafactory.v1.plugins.trainer_plugins.distributed.fsdpturbo import gradients as backend
+    from llamafactory.v1.plugins.trainer_plugins.distributed.interface import DistributedPlugin
 
     backend.DistributedInterface = lambda: interface
     backend.get_fsdpturbo_parallel_state = lambda: state
@@ -74,7 +75,9 @@ def check_cp_gradients():
     unused = torch.nn.Parameter(DTensor.from_local(torch.ones(2), mesh["dp"], [Shard(0)], run_check=False))
     model.register_parameter("unused", unused)
     expected = math.sqrt(219.0)
-    observed = backend.clip_grad_norm_(model, 1.0)
+    plugin = DistributedPlugin("fsdpturbo")
+    plugin.synchronize_gradients(model)
+    observed = plugin.clip_grad_norm(model, 1.0)
     assert abs(observed - expected) < 1e-5
     for param, reference in zip(model.parameters(), references):
         torch.testing.assert_close(param.grad.to_local(), reference / expected, atol=1e-6, rtol=1e-5)
@@ -83,11 +86,25 @@ def check_cp_gradients():
         param.grad = (
             DTensor.from_local(2 * reference, param.device_mesh, [Shard(0)], run_check=False) if cp == 0 else None
         )
-    observed = backend.clip_grad_norm_(model, 1.0)
+    plugin.synchronize_gradients(model)
+    observed = plugin.clip_grad_norm(model, 1.0)
     assert abs(observed - expected) < 1e-5
     for param, reference in zip(model.parameters(), references):
         torch.testing.assert_close(param.grad.to_local(), reference / expected, atol=1e-6, rtol=1e-5)
     assert unused.grad is None
+
+    # Clipping works on synchronized shards and must not run the CP collectives again.
+    all_reduce = dist.all_reduce
+
+    def reduce_only_parameter_shards(tensor, *args, **kwargs):
+        assert kwargs.get("group") not in (mesh["cp"].get_group(), expert["expert_cp"].get_group())
+        return all_reduce(tensor, *args, **kwargs)
+
+    dist.all_reduce = reduce_only_parameter_shards
+    try:
+        plugin.clip_grad_norm(model, float("inf"))
+    finally:
+        dist.all_reduce = all_reduce
 
 
 def test_cp_replica_gradients_are_averaged_before_norm_and_update(tmp_path):
