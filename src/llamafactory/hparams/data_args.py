@@ -16,6 +16,7 @@
 # limitations under the License.
 
 from dataclasses import asdict, dataclass, field
+from math import isfinite
 from typing import Any, Literal
 
 
@@ -164,6 +165,9 @@ class DataArguments:
 
         if self.media_dir is None:
             self.media_dir = self.dataset_dir
+
+        if not isfinite(self.val_size) or self.val_size < 0 or (self.val_size >= 1 and self.val_size % 1 != 0):
+            raise ValueError("`val_size` must be a finite fraction in [0, 1) or a positive integer.")
 
         if self.dataset is None and self.val_size > 1e-6:
             raise ValueError("Cannot specify `val_size` if `dataset` is None.")
