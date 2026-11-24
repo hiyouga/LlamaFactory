@@ -16,7 +16,9 @@
 # limitations under the License.
 
 
+import subprocess
 from collections import OrderedDict
+from pathlib import Path
 
 
 VERSION = "0.9.6.dev0"
@@ -95,14 +97,16 @@ def print_env() -> None:
     except Exception:
         pass
 
-    try:
-        import subprocess
-
-        commit_info = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=True)
-        commit_hash = commit_info.stdout.strip()
-        info["Git commit"] = commit_hash
-    except Exception:
-        pass
+    source_dir = Path(__file__).resolve().parents[2]
+    checkout_dir = source_dir.parent
+    if source_dir.name == "src" and (checkout_dir / ".git").exists():
+        try:
+            commit_info = subprocess.run(
+                ["git", "rev-parse", "HEAD"], cwd=checkout_dir, capture_output=True, text=True, check=True
+            )
+            info["Git commit"] = commit_info.stdout.strip()
+        except (OSError, subprocess.CalledProcessError):
+            pass
 
     if os.path.exists("data"):
         info["Default data directory"] = "detected"
