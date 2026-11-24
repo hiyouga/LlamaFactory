@@ -52,8 +52,7 @@ def _get_builder_name(path: str) -> Literal["arrow", "csv", "json", "parquet", "
 @DataLoaderPlugin("local").register()
 def load_data_from_file(filepath: str, split: str, streaming: bool) -> HFDataset:
     if os.path.isdir(filepath):
-        filetype = _get_builder_name(os.listdir(filepath)[0])
-        dataset = load_dataset(filetype, data_dir=filepath, split=split)
+        dataset = load_dataset(os.path.abspath(filepath), split=split, trust_remote_code=False)
     elif os.path.isfile(filepath):
         filetype = _get_builder_name(filepath)
         dataset = load_dataset(filetype, data_files=filepath, split=split)
