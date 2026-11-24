@@ -67,7 +67,6 @@ kt_config:
 
 ```bash
 llamafactory-cli chat path/to/kt_adapter_infer.yaml
-llamafactory-cli eval path/to/kt_adapter_eval.yaml
 ```
 
 The directory must contain the standard PEFT adapter files and, when fused routed-expert LoRA is used,
