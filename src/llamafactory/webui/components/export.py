@@ -17,7 +17,7 @@ from collections.abc import Generator
 from typing import TYPE_CHECKING
 
 from ...extras.constants import PEFT_METHODS
-from ...extras.misc import torch_gc
+from ...extras.misc import is_env_enabled, torch_gc
 from ...extras.packages import is_gradio_available
 from ...train.tuner import export_model
 from ..common import get_save_dir, load_config
@@ -97,7 +97,7 @@ def save_model(
         export_quantization_dataset=export_quantization_dataset,
         export_device=export_device,
         export_legacy_format=export_legacy_format,
-        trust_remote_code=True,
+        trust_remote_code=is_env_enabled("LLAMAFACTORY_WEBUI_TRUST_REMOTE_CODE"),
     )
     args.update(json.loads(extra_args))
 
