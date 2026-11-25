@@ -14,6 +14,8 @@
 
 from typing import TYPE_CHECKING
 
+import torch
+
 from ...extras import logging
 from ...extras.constants import AttentionFunction
 from ...extras.misc import is_torch_supa_available
@@ -29,17 +31,30 @@ if TYPE_CHECKING:
 logger = logging.get_logger(__name__)
 
 
+def _validate_flash_attn_dtype(model_args: "ModelArguments") -> None:
+    if model_args.flash_attn in (AttentionFunction.FA2, AttentionFunction.FA3):
+        if model_args.compute_dtype == torch.float32:
+            raise ValueError(
+                f"flash_attn='{model_args.flash_attn}' is incompatible with float32. "
+                "FlashAttention requires float16 or bfloat16. "
+                "Please set bf16=true or fp16=true in training arguments, "
+                "or set compute_dtype to float16 or bfloat16."
+            )
+
+
 def configure_attn_implementation(config: "PretrainedConfig", model_args: "ModelArguments") -> None:
     from transformers.utils import is_flash_attn_2_available
 
     if getattr(config, "model_type", None) == "gpt_oss":
+        model_args.flash_attn = AttentionFunction.FA3
+        _validate_flash_attn_dtype(model_args)
+
         from transformers.integrations.hub_kernels import load_and_register_kernel
 
         flash_attn3_kernel = "kernels-community/vllm-flash-attn3"
         load_and_register_kernel(flash_attn3_kernel)
         setattr(config, "_attn_implementation", flash_attn3_kernel)
         setattr(config, "_attn_implementation_internal", flash_attn3_kernel)
-        model_args.flash_attn = AttentionFunction.FA3
 
         logger.info_rank0("Using FlashAttention-3 with attention sink for the gpt-oss model.")
         return
@@ -105,6 +120,9 @@ def configure_attn_implementation(config: "PretrainedConfig", model_args: "Model
         requested_attn_implementation = "flash_attention_3"
     else:
         raise NotImplementedError(f"Unknown attention type: {model_args.flash_attn}")
+
+    # Validate: FlashAttention requires half-precision dtype
+    _validate_flash_attn_dtype(model_args)
 
     if getattr(config, "model_type", None) == "internlm2":  # special case for custom models
         setattr(config, "attn_implementation", requested_attn_implementation)
