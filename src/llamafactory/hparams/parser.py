@@ -627,6 +627,8 @@ def get_train_args(args: dict[str, Any] | list[str] | None = None) -> _TRAIN_CLS
     training_args.generation_max_length = training_args.generation_max_length or data_args.cutoff_len
     training_args.generation_num_beams = data_args.eval_num_beams or training_args.generation_num_beams
     training_args.remove_unused_columns = False  # important for multimodal dataset
+    if training_args.data_seed is None:
+        training_args.data_seed = training_args.seed
 
     if finetuning_args.finetuning_type == "lora":
         # https://github.com/huggingface/transformers/blob/v4.50.0/src/transformers/trainer.py#L782
