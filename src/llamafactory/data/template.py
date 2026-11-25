@@ -846,6 +846,7 @@ def parse_template(tokenizer: "PreTrainedTokenizer") -> "Template":
         return diff
 
     prefix = tokenizer.decode(tokenizer.encode(""))
+    user_placeholder = "___USER_PLACEHOLDER___"
 
     messages = [{"role": "system", "content": "{{content}}"}]
     system_slot = tokenizer.apply_chat_template(messages, add_generation_prompt=False, tokenize=False)[len(prefix) :]
@@ -858,10 +859,31 @@ def parse_template(tokenizer: "PreTrainedTokenizer") -> "Template":
     user_slot = tokenizer.apply_chat_template(messages, add_generation_prompt=True, tokenize=False)
     user_slot = user_slot[len(prefix) :]
 
-    messages = [{"role": "user", "content": "{{content}}"}, {"role": "assistant", "content": "{{content}}"}]
-    assistant_slot = tokenizer.apply_chat_template(messages, add_generation_prompt=False, tokenize=False)
-    assistant_slot = assistant_slot[len(prefix) + len(user_slot) :]
-    template_class = ReasoningTemplate if "<think>" in assistant_slot else Template
+    messages = [{"role": "user", "content": user_placeholder}, {"role": "assistant", "content": "{{content}}"}]
+    assistant_turn_full = tokenizer.apply_chat_template(messages, add_generation_prompt=False, tokenize=False)[
+        len(prefix) :
+    ]
+
+    is_reasoning = (
+        ("<think>" in user_slot)
+        or ("<think>" in assistant_turn_full)
+        or (bool(getattr(tokenizer, "chat_template", None)) and "<think>" in tokenizer.chat_template)
+    )
+    template_class = ReasoningTemplate if is_reasoning else Template
+
+    if is_reasoning:
+        for think_tag in ["<think>\n", "<think>", "\n<think>"]:
+            if user_slot.endswith(think_tag):
+                user_slot = user_slot[: -len(think_tag)]
+            if user_slot_empty_system.endswith(think_tag):
+                user_slot_empty_system = user_slot_empty_system[: -len(think_tag)]
+
+    asst_idx = assistant_turn_full.find("{{content}}")
+    if asst_idx != -1:
+        assistant_slot = assistant_turn_full[asst_idx:]
+    else:
+        assistant_slot = assistant_turn_full[len(user_slot) :]
+
     assistant_slot = assistant_slot.replace("<think>", "").replace("</think>", "").lstrip("\n")  # remove thought tags
 
     if len(user_slot) > len(user_slot_empty_system):
