@@ -106,7 +106,7 @@ def get_dataset_list(dataset_names: list[str] | None, dataset_dir: str | dict) -
             config_path = os.path.join(dataset_dir, DATA_CONFIG)
 
         try:
-            with open(config_path) as f:
+            with open(config_path, encoding="utf-8") as f:
                 dataset_info = json.load(f)
         except Exception as err:
             if len(dataset_names) != 0:

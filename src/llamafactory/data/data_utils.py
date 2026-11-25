@@ -173,7 +173,7 @@ def setup_fs(path: str, anon: bool = False) -> "fsspec.AbstractFileSystem":
 
 def _read_json_with_fs(fs: "fsspec.AbstractFileSystem", path: str) -> list[Any]:
     r"""Helper function to read JSON/JSONL files using fsspec."""
-    with fs.open(path, "r") as f:
+    with fs.open(path, "r", encoding="utf-8") as f:
         if path.endswith(".jsonl"):
             return [json.loads(line) for line in f if line.strip()]
         else:
