@@ -1104,8 +1104,77 @@ class LFM2ToolUtils(ToolUtils):
         return results if results else content
 
 
+def _exaone45_tool_dict(tool: dict[str, Any]) -> dict[str, Any]:
+    r"""Normalize wrapped and bare function declarations for the EXAONE template."""
+    wrapped = isinstance(tool.get("function"), dict)
+    function = tool["function"] if wrapped else tool
+    defer_loading = function.get("defer_loading")
+    if wrapped and defer_loading is None:
+        defer_loading = tool.get("defer_loading")
+
+    function_dict = {
+        "name": function["name"],
+        "description": function.get("description"),
+        "parameters": function.get("parameters"),
+    }
+    if function.get("strict") is not None:
+        function_dict["strict"] = function["strict"]
+
+    if defer_loading is not None:
+        function_dict["defer_loading"] = defer_loading
+
+    result = {"type": "function", "function": function_dict}
+    if wrapped and tool.get("defer_loading") is not None:
+        result["defer_loading"] = tool["defer_loading"]
+
+    return result
+
+
+class Exaone45ToolUtils(ToolUtils):
+    r"""Format EXAONE-4.5 tool declarations and calls."""
+
+    @override
+    @staticmethod
+    def tool_formatter(tools: list[dict[str, Any]]) -> str:
+        tool_text = "".join(
+            "<tool>" + json.dumps(_exaone45_tool_dict(tool), ensure_ascii=False) + "</tool>\n" for tool in tools
+        )
+        return "<|tool_declare|>\n# Tools\n" + tool_text + "<|endofturn|>\n"
+
+    @override
+    @staticmethod
+    def function_formatter(functions: list["FunctionCall"]) -> str:
+        return "\n".join(
+            f'<tool_call>{{"name": {json.dumps(name, ensure_ascii=False)}, "arguments": {arguments}}}</tool_call>'
+            for name, arguments in functions
+        )
+
+    @override
+    @staticmethod
+    def tool_extractor(content: str) -> Union[str, list["FunctionCall"]]:
+        regex = re.compile(r"<tool_call>(.+?)</tool_call>(?=\s*<tool_call>|\s*$)", re.DOTALL)
+        tool_match: list[str] = re.findall(regex, content)
+        if not tool_match:
+            return content
+
+        results = []
+        for tool in tool_match:
+            try:
+                tool = json.loads(tool.strip())
+            except json.JSONDecodeError:
+                return content
+
+            if not isinstance(tool, dict) or not isinstance(tool.get("name"), str) or "arguments" not in tool:
+                return content
+
+            results.append(FunctionCall(tool["name"], json.dumps(tool["arguments"], ensure_ascii=False)))
+
+        return results
+
+
 TOOLS = {
     "default": DefaultToolUtils(),
+    "exaone4_5": Exaone45ToolUtils(),
     "gemma4": Gemma4ToolUtils(),
     "glm4": GLM4ToolUtils(),
     "llama3": Llama3ToolUtils(),
