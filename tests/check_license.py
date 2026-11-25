@@ -44,3 +44,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# ci: gpu-runner diagnostic touch 20261125T113130Z (comment only, no functional change)
