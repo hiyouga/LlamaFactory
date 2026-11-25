@@ -50,7 +50,7 @@ def is_torch_supa_available() -> bool:
         return False
 
 
-_is_fp16_available = is_torch_npu_available() or is_torch_supa_available() or is_torch_cuda_available()
+_is_fp16_available = is_torch_npu_available() or is_torch_supa_available() or is_torch_cuda_available() or is_torch_xpu_available()
 try:
     if is_torch_supa_available():
         _is_bf16_available = torch.supa.is_bf16_supported()
