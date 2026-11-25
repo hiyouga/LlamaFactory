@@ -36,6 +36,7 @@ from ...model.loader import _get_init_kwargs, load_config
 from ...model.model_utils.liger_kernel import apply_liger_kernel
 from ...model.model_utils.misc import register_autoclass
 from ...model.patcher import patch_config, patch_model
+from .model_registry import apply_replicated_vision_plan
 
 
 if TYPE_CHECKING:
@@ -129,13 +130,12 @@ def load_hyper_parallel_model(
 
         model = apply_v1_kernels(model, use_v1_kernels=model_args.use_v1_kernels)
 
-    activation_mode = hp_args.activation_mode
+    apply_replicated_vision_plan(model, distributed_setup)
     model = parallelize_model(
         model,
         distributed_setup,
         pretrained_path=None if model_args.train_from_scratch else model_args.model_name_or_path,
-        activation_checkpoint="full" if activation_mode in {"recompute", "swap"} else None,
-        swap_inputs=activation_mode == "swap" and hp_args.activation_swap_inputs,
+        activation_checkpoint=hp_args.activation_checkpoint,
     )
 
     _validate_conv3d_compatibility(model, model_args)

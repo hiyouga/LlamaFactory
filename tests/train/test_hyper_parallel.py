@@ -27,7 +27,11 @@ else:
     from hyper_parallel.core.optimizer import ChainedOptimizer
 
     from llamafactory.train.hyper_parallel.loader import load_hyper_parallel_model
-    from llamafactory.train.hyper_parallel.model_registry import apply_model_parallel_plan
+    from llamafactory.train.hyper_parallel.model_registry import (
+        apply_model_parallel_plan,
+        apply_replicated_vision_plan,
+        build_model_distributed_setup,
+    )
     from llamafactory.train.hyper_parallel.trainer import (
         HyperParallelTrainer,
         _build_cp_shift_labels,
@@ -205,7 +209,8 @@ def test_training_step_compensates_accelerate_gradient_accumulation_scaling():
         torch.testing.assert_close(model.weight.grad, torch.full_like(model.weight, expected_loss))
 
 
-def test_hyper_model_loader_uses_meta_then_parallelize_path():
+@pytest.mark.parametrize("activation_checkpoint", [None, SimpleNamespace(mode="full")])
+def test_hyper_model_loader_uses_meta_then_parallelize_path(activation_checkpoint):
     config = SimpleNamespace(model_type="test")
     model = torch.nn.Linear(2, 2, device="meta")
     model.config = config
@@ -240,7 +245,7 @@ def test_hyper_model_loader_uses_meta_then_parallelize_path():
         compute_dtype=torch.bfloat16,
     )
     finetuning_args = SimpleNamespace(stage="sft")
-    hp_args = SimpleNamespace(activation_mode="none", activation_swap_inputs=True)
+    hp_args = SimpleNamespace(activation_checkpoint=activation_checkpoint)
     distributed_setup = object()
 
     with (
@@ -280,8 +285,7 @@ def test_hyper_model_loader_uses_meta_then_parallelize_path():
         model,
         distributed_setup,
         pretrained_path="checkpoint",
-        activation_checkpoint=None,
-        swap_inputs=False,
+        activation_checkpoint=activation_checkpoint,
     )
 
 
@@ -337,25 +341,25 @@ def test_qwen3_moe_parallel_plan_resolves_through_hyper_builder():
         device_type="npu",
         plan_overrides=[{"match": "*.mlp", "region_dispatch": True}],
     )
-    apply_model_parallel_plan(hp_args, "qwen3_moe")
-
     with (
         patch("hyper_parallel.integration.llamafactory.utils.dist.get_world_size", return_value=8),
         patch("hyper_parallel.integration.llamafactory.utils.MeshContext.build_meshs"),
     ):
-        setup = hp_args.build_distributed_setup()
+        setup = build_model_distributed_setup(hp_args, "qwen3_moe")
 
     cp_spec = setup.plan_overrides["*.self_attn"]
     ep_spec = setup.plan_overrides["*.mlp"]
-    assert cp_spec.inner_wrapper.callable.__name__ == "qwen3_moe_async_ulysses_cp_wrapper"
+    assert cp_spec.inner_wrapper is None
+    assert cp_spec.inner_target is None
+    assert cp_spec.region_dispatch is None
     assert ep_spec.local_compute_fn.callable.__name__ == "qwen3moe_ep_compute_fn"
     assert ep_spec.local_compute_fn.use_grouped_gemm is True
     assert ep_spec.region_dispatch is True
-    assert not setup.module_replacements
+    assert setup.module_replacements[0].replacement_target == "hyper_parallel.components.modules.GroupedQueryAttention"
 
 
 def test_qwen3_vl_moe_parallel_plan_only_uses_its_model_adapter():
-    hp_args = SimpleNamespace(plan_overrides=None)
+    hp_args = SimpleNamespace(plan_overrides=None, cp_size=1)
 
     apply_model_parallel_plan(hp_args, "qwen3_vl_moe")
 
@@ -375,36 +379,133 @@ def test_qwen3_vl_moe_parallel_plan_only_uses_its_model_adapter():
             assert entry["params"] == {}
 
 
+def test_qwen3_cp_family_reaches_real_sharding_planner_without_legacy_hooks():
+    from hyper_parallel.core.dtensor.device_mesh import init_device_mesh
+    from hyper_parallel.distributed import ShardingPlanner
+    from hyper_parallel.integration.llamafactory import HyperParallelArguments
+    from hyper_parallel.models.module_build import build_module_context, prepare_model_components
+    from transformers import Qwen3MoeConfig, Qwen3MoeForCausalLM
+
+    hp_args = HyperParallelArguments(cp_size=2, device_type="cpu")
+    with (
+        patch("hyper_parallel.integration.llamafactory.utils.dist.get_world_size", return_value=4),
+        patch("hyper_parallel.integration.llamafactory.utils.MeshContext.build_meshs"),
+    ):
+        legacy_setup = hp_args.build_distributed_setup()
+        setup = build_model_distributed_setup(hp_args, "qwen3_moe")
+
+    mesh = init_device_mesh(
+        "cpu", (2, 2, 1), mesh_dim_names=("dp", "cp", "tp"), rank_list=(0, 1, 2, 3), init_backend=False
+    )
+    setup.mesh_context.device_mesh = mesh
+    config = Qwen3MoeConfig(
+        vocab_size=64,
+        hidden_size=32,
+        intermediate_size=64,
+        moe_intermediate_size=16,
+        num_hidden_layers=2,
+        num_attention_heads=4,
+        num_key_value_heads=2,
+        head_dim=8,
+        num_experts=4,
+        num_experts_per_tok=2,
+    )
+    with torch.device("meta"):
+        model = Qwen3MoeForCausalLM(config)
+        model, _ = prepare_model_components(model, build_module_context(setup))
+
+    with pytest.raises(ValueError, match="module-owned layouts cannot install legacy compute injection"):
+        ShardingPlanner(legacy_setup.plan_overrides).plan(model, mesh, cp_size=2)
+    plan = ShardingPlanner(setup.plan_overrides).plan(model, mesh, cp_size=2)
+    assert "model.layers.0.self_attn" in plan.parallel_modules
+    assert model.model.layers[0].self_attn.q_proj.weight.is_meta
+
+
+def test_qwen3_cp_preserves_explicit_attention_hook_for_planner_validation():
+    from hyper_parallel.distributed.context_parallel.wrappers import sdpa_hf_cp_wrapper
+    from hyper_parallel.integration.llamafactory import HyperParallelArguments
+
+    hp_args = HyperParallelArguments(
+        cp_size=2,
+        plan_overrides=[
+            {
+                "match": "*.self_attn.forward",
+                "when": "cp",
+                "replace": {
+                    "kind": "method",
+                    "implementation": ("hyper_parallel.distributed.context_parallel.wrappers.sdpa_hf_cp_wrapper"),
+                },
+            }
+        ],
+    )
+    with (
+        patch("hyper_parallel.integration.llamafactory.utils.dist.get_world_size", return_value=4),
+        patch("hyper_parallel.integration.llamafactory.utils.MeshContext.build_meshs"),
+    ):
+        setup = build_model_distributed_setup(hp_args, "qwen3_moe")
+    assert setup.plan_overrides["*.self_attn"].inner_wrapper.callable is sdpa_hf_cp_wrapper
+
+
+def test_qwen3_cp_keeps_user_layout_fields_without_the_fallback_hook():
+    from hyper_parallel.integration.llamafactory import HyperParallelArguments
+
+    hp_args = HyperParallelArguments(
+        cp_size=2, plan_overrides=[{"match": "*.self_attn", "params": {}, "region_dispatch": None}]
+    )
+    with (
+        patch("hyper_parallel.integration.llamafactory.utils.dist.get_world_size", return_value=4),
+        patch("hyper_parallel.integration.llamafactory.utils.MeshContext.build_meshs"),
+    ):
+        setup = build_model_distributed_setup(hp_args, "qwen3_moe")
+    spec = setup.plan_overrides["*.self_attn"]
+    assert spec.params == {}
+    assert spec.inner_wrapper is None
+    assert spec.inner_target is None
+    assert spec.region_dispatch is None
+
+
 @pytest.mark.parametrize("model_type", ["qwen3_moe", "qwen3_vl_moe"])
-@pytest.mark.parametrize("cp_size,ep_size,world_size", [(1, 1, 2), (2, 4, 8)])
+@pytest.mark.parametrize("cp_size,ep_size,world_size", [(1, 1, 2), (1, 4, 8), (2, 1, 8), (2, 4, 8)])
 def test_model_parallel_plans_resolve_with_current_hyper_schema(model_type, cp_size, ep_size, world_size):
     """Validate inactive as well as active CP/EP rules through the real Hyper resolver."""
     from hyper_parallel.integration.llamafactory import HyperParallelArguments
 
     hp_args = HyperParallelArguments(cp_size=cp_size, ep_size=ep_size, device_type="npu")
-    apply_model_parallel_plan(hp_args, model_type)
-
     with (
         patch("hyper_parallel.integration.llamafactory.utils.dist.get_world_size", return_value=world_size),
         patch("hyper_parallel.integration.llamafactory.utils.MeshContext.build_meshs"),
     ):
-        setup = hp_args.build_distributed_setup()
+        setup = build_model_distributed_setup(hp_args, model_type)
 
-    assert not setup.module_replacements
+    if model_type == "qwen3_moe" and cp_size > 1:
+        replacement = setup.module_replacements[0]
+        assert replacement.replacement_target == "hyper_parallel.components.modules.GroupedQueryAttention"
+        assert replacement.static_arguments["fuse_qkv"] is False
+        assert replacement.static_arguments["overlap"] is True
+        assert replacement.static_arguments["ulysses_degree"] is None
+    else:
+        assert not setup.module_replacements
     if cp_size == ep_size == 1:
         assert not setup.plan_overrides
         return
 
     prefix = "*" if model_type == "qwen3_moe" else "model.language_model.layers.*"
-    cp_spec = setup.plan_overrides[f"{prefix}.self_attn"]
-    ep_spec = setup.plan_overrides[f"{prefix}.mlp"]
-    assert cp_spec.inner_target == "self"
-    assert cp_spec.inner_wrapper.callable.__name__ == f"{model_type}_async_ulysses_cp_wrapper"
-    expected_ep = "qwen3moe_ep_compute_fn" if model_type == "qwen3_moe" else "qwen3_vl_moe_ep_compute_fn"
-    assert ep_spec.local_compute_fn.callable.__name__ == expected_ep
-    assert ep_spec.local_compute_fn.use_grouped_gemm is True
-    assert ep_spec.region_dispatch is False
-    if model_type == "qwen3_vl_moe":
+    if cp_size > 1:
+        cp_spec = setup.plan_overrides[f"{prefix}.self_attn"]
+        if model_type == "qwen3_moe":
+            assert cp_spec.inner_target is None
+            assert cp_spec.inner_wrapper is None
+            assert cp_spec.region_dispatch is None
+        else:
+            assert cp_spec.inner_target == "self"
+            assert cp_spec.inner_wrapper.callable.__name__ == "qwen3_vl_moe_async_ulysses_cp_wrapper"
+    if ep_size > 1:
+        ep_spec = setup.plan_overrides[f"{prefix}.mlp"]
+        expected_ep = "qwen3moe_ep_compute_fn" if model_type == "qwen3_moe" else "qwen3_vl_moe_ep_compute_fn"
+        assert ep_spec.local_compute_fn.callable.__name__ == expected_ep
+        assert ep_spec.local_compute_fn.use_grouped_gemm is True
+        assert ep_spec.region_dispatch is False
+    if model_type == "qwen3_vl_moe" and cp_size > 1:
         for match in ("model.visual.blocks.*.attn", "model.visual.merger", "model.visual.deepstack_merger_list"):
             spec = setup.plan_overrides[match]
             assert spec.params == {}
@@ -412,3 +513,103 @@ def test_model_parallel_plans_resolve_with_current_hyper_schema(model_type, cp_s
         language_spec = setup.plan_overrides["model.language_model"]
         assert language_spec.params == {}
         assert language_spec.inner_wrapper.callable.__name__ == "qwen3_vl_moe_text_input_cp_wrapper"
+
+
+@pytest.mark.parametrize("mode", ["off", "full"])
+def test_prepare_hp_args_uses_structured_activation_checkpoint(mode):
+    finetuning_args, model_args = _make_hyper_workflow_args()
+    checkpoint = {"mode": mode}
+    if mode == "full":
+        checkpoint["full"] = {"recompute_layer": [0]}
+    finetuning_args.hyper_parallel_args = {"activation_checkpoint": checkpoint}
+    model_args.disable_gradient_checkpointing = False
+
+    with patch("hyper_parallel.integration.llamafactory.utils.dist.get_world_size", return_value=1):
+        hp_args = _prepare_hp_args(finetuning_args, model_args, SimpleNamespace(bf16=True, fp16=False))
+
+    assert hp_args.activation_checkpoint.mode == mode
+    assert model_args.disable_gradient_checkpointing is (mode == "full")
+
+
+@pytest.mark.parametrize("cp_size,ep_size", [(2, 1), (1, 2), (2, 2)])
+def test_vl_moe_parallel_plan_covers_trainable_vision(cp_size, ep_size):
+    from hyper_parallel.core.dtensor.device_mesh import init_device_mesh
+    from hyper_parallel.distributed import ShardingPlanner
+    from hyper_parallel.integration.llamafactory import HyperParallelArguments
+    from hyper_parallel.models.module_build import build_module_context, prepare_model_components
+    from transformers import Qwen3VLMoeConfig, Qwen3VLMoeForConditionalGeneration
+
+    hp_args = HyperParallelArguments(cp_size=cp_size, ep_size=ep_size, device_type="cpu")
+    world_size = 2 * cp_size * ep_size
+    with (
+        patch("hyper_parallel.integration.llamafactory.utils.dist.get_world_size", return_value=world_size),
+        patch("hyper_parallel.integration.llamafactory.utils.MeshContext.build_meshs"),
+    ):
+        setup = build_model_distributed_setup(hp_args, "qwen3_vl_moe")
+    mesh = init_device_mesh(
+        "cpu",
+        (2, cp_size, 1, ep_size),
+        mesh_dim_names=("dp", "cp", "tp", "ep"),
+        rank_list=tuple(range(world_size)),
+        init_backend=False,
+    )
+    setup.mesh_context.device_mesh = mesh
+    config = Qwen3VLMoeConfig(
+        text_config={
+            "vocab_size": 64,
+            "hidden_size": 32,
+            "intermediate_size": 64,
+            "moe_intermediate_size": 16,
+            "num_hidden_layers": 2,
+            "num_attention_heads": 4,
+            "num_key_value_heads": 2,
+            "head_dim": 8,
+            "num_experts": 4,
+            "num_experts_per_tok": 2,
+        },
+        vision_config={
+            "depth": 2,
+            "hidden_size": 32,
+            "intermediate_size": 64,
+            "num_heads": 4,
+            "out_hidden_size": 32,
+            "patch_size": 2,
+            "temporal_patch_size": 2,
+            "spatial_merge_size": 2,
+            "num_position_embeddings": 16,
+            "deepstack_visual_indexes": [0, 1],
+        },
+        image_token_id=3,
+        video_token_id=4,
+    )
+    with torch.device("meta"):
+        model = Qwen3VLMoeForConditionalGeneration(config)
+        model, _ = prepare_model_components(model, build_module_context(setup))
+    with pytest.raises(ValueError, match="plan-time coverage check failed"):
+        ShardingPlanner(setup.plan_overrides).plan(model, mesh, cp_size=cp_size, ep_size=ep_size)
+    apply_replicated_vision_plan(model, setup)
+    plan = ShardingPlanner(setup.plan_overrides).plan(model, mesh, cp_size=cp_size, ep_size=ep_size)
+    covered = {f"{name}.{parameter}" for name, spec in plan.modules.items() for parameter in spec.params}
+    vision = {
+        name
+        for name, parameter in model.named_parameters()
+        if name.startswith("model.visual.") and parameter.requires_grad
+    }
+    assert vision
+    assert vision <= covered
+
+
+def test_vl_vision_replication_defaults_preserve_explicit_override():
+    from hyper_parallel.distributed.recipe_spec import ModuleShardingSpec
+
+    model = torch.nn.Module()
+    model.config = SimpleNamespace(model_type="qwen3_vl_moe")
+    model.model = torch.nn.Module()
+    model.model.visual = torch.nn.Linear(4, 4)
+    explicit = ModuleShardingSpec(params={})
+    setup = SimpleNamespace(
+        mesh_context=SimpleNamespace(cp_size=2, ep_size=1),
+        plan_overrides={"model.visual": explicit},
+    )
+    apply_replicated_vision_plan(model, setup)
+    assert setup.plan_overrides["model.visual"] is explicit
