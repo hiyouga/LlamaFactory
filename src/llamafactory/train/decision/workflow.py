@@ -77,7 +77,10 @@ def validate_decision_args(model_args, data_args, training_args, finetuning_args
             "quantization_bit adapter_name_or_path resize_vocab use_unsloth use_kt enable_liger_kernel "
             "use_unsloth_gc shift_attn mixture_of_depths rope_scaling",
         ),
-        (finetuning_args, "pure_bf16 use_hyper_parallel use_mca use_dft_loss use_asft_loss use_eaft_loss"),
+        (
+            finetuning_args,
+            "pure_bf16 use_hyper_parallel use_mca use_dft_loss use_asft_loss use_eaft_loss use_ambient_loss",
+        ),
     ):
         unsupported.update({name: getattr(args, name) for name in names.split()})
     enabled = [name for name, value in unsupported.items() if value]

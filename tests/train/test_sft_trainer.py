@@ -12,17 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import math
 import os
 from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
+import torch
 from transformers import DataCollatorWithPadding
 
-from llamafactory.data import get_dataset, get_template_and_fix_tokenizer
+from llamafactory.data import SFTDataCollatorWith4DAttentionMask, get_dataset, get_template_and_fix_tokenizer
 from llamafactory.hparams import get_train_args
 from llamafactory.model import load_model, load_tokenizer
 from llamafactory.train.sft.trainer import CustomSeq2SeqTrainer
+from llamafactory.train.trainer_utils import create_ref_model
 
 
 DEMO_DATA = os.getenv("DEMO_DATA", "llamafactory/demo_data")
@@ -87,3 +90,56 @@ def test_shuffle(disable_shuffling: bool):
         assert data_collator.verbose_list[0]["input_ids"] == dataset_module["train_dataset"][0]["input_ids"]
     else:
         assert data_collator.verbose_list[0]["input_ids"] != dataset_module["train_dataset"][0]["input_ids"]
+
+
+def test_ambient_loss_func_at_initialization():
+    # at initialization the model equals the initial model, so the matching loss is the scaled tempered entropy
+    from llamafactory.train.trainer_utils import ambient_loss_func
+
+    torch.manual_seed(0)
+    logits = torch.randn(2, 6, 11)
+    labels = torch.tensor([[-100, -100, 3, 4, 5, 6], [-100, 1, 2, -100, -100, -100]])
+    loss = ambient_loss_func(logits, logits, labels, temperature=2.5)
+
+    def entropy(temperature):
+        log_probs = torch.log_softmax(logits[:, :-1] / temperature, dim=-1)
+        return -(log_probs.exp() * log_probs).sum(-1)[labels[:, 1:] != -100]
+
+    expected = entropy(2.5).sum() / entropy(1.0).sum() * entropy(2.5).mean()
+    assert entropy(2.5).sum() > entropy(1.0).sum()  # a hotter distribution has more entropy
+    assert torch.allclose(loss, expected, rtol=1e-5)
+
+
+@pytest.mark.parametrize("finetuning_type", ["lora", "full"])
+def test_ambient_sft(finetuning_type: str):
+    model_args, data_args, training_args, finetuning_args, _ = get_train_args(
+        {
+            **TRAIN_ARGS,
+            "output_dir": os.path.join("output", f"ambient_{finetuning_type}"),
+            "finetuning_type": finetuning_type,
+            "use_ambient_loss": True,
+            "ambient_clean_probability": 0.5,
+            "max_steps": 4,
+            "gradient_accumulation_steps": 2,
+            "logging_steps": 1,
+        }
+    )
+    tokenizer_module = load_tokenizer(model_args)
+    tokenizer = tokenizer_module["tokenizer"]
+    template = get_template_and_fix_tokenizer(tokenizer, data_args)
+    dataset_module = get_dataset(template, model_args, data_args, training_args, stage="sft", **tokenizer_module)
+    model = load_model(tokenizer, model_args, finetuning_args, training_args.do_train)
+    ref_model = create_ref_model(model_args, finetuning_args)
+    assert (ref_model is None) == (finetuning_type == "lora")  # LoRA disables its adapters instead
+    trainer = CustomSeq2SeqTrainer(
+        model=model,
+        args=training_args,
+        finetuning_args=finetuning_args,
+        data_collator=SFTDataCollatorWith4DAttentionMask(template=template, model=model, **tokenizer_module),
+        ref_model=ref_model,
+        **dataset_module,
+        **tokenizer_module,
+    )
+    trainer.train()
+    losses = [log["loss"] for log in trainer.state.log_history if "loss" in log]
+    assert losses and all(math.isfinite(loss) for loss in losses)

@@ -53,7 +53,7 @@ def run_sft(
     model = load_model(tokenizer, model_args, finetuning_args, training_args.do_train)
 
     ref_model = None
-    if finetuning_args.use_asft_loss:
+    if finetuning_args.use_asft_loss or finetuning_args.use_ambient_loss:
         ref_model = create_ref_model(model_args, finetuning_args)
 
     if getattr(model, "is_quantized", False) and not training_args.do_train:

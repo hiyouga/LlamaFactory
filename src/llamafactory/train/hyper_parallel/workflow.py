@@ -60,8 +60,8 @@ def _prepare_hp_args(
         raise ValueError("HyperParallel meta initialization does not support quantized LlamaFactory models yet.")
     if model_args.use_unsloth or model_args.mixture_of_depths is not None:
         raise ValueError("HyperParallel meta initialization is incompatible with Unsloth and mixture-of-depths.")
-    if finetuning_args.use_asft_loss:
-        raise ValueError("HyperParallel does not yet support the additional ASFT reference model.")
+    if finetuning_args.use_asft_loss or finetuning_args.use_ambient_loss:
+        raise ValueError("HyperParallel does not yet support the additional ASFT or Ambient reference model.")
 
     from hyper_parallel.integration.llamafactory import HyperParallelArguments  # pylint: disable=C0415
 
