@@ -24,7 +24,11 @@ from tokenizers.models import WordLevel
 from transformers import AutoConfig, AutoModelForImageTextToText, PreTrainedTokenizerFast
 
 from llamafactory.data import get_template_and_fix_tokenizer
-from llamafactory.data.collator import MultiModalDataCollatorForSeq2Seq, prepare_4d_attention_mask
+from llamafactory.data.collator import (
+    MultiModalDataCollatorForSeq2Seq,
+    SFTDataCollatorWith4DAttentionMask,
+    prepare_4d_attention_mask,
+)
 from llamafactory.extras.constants import IGNORE_INDEX
 from llamafactory.extras.packages import is_transformers_version_greater_than
 from llamafactory.hparams import DataArguments, get_infer_args
@@ -401,6 +405,50 @@ def test_4d_attention_mask():
     )
     assert list(attention_mask_computed.size()) == [2, 1, 6, 6]
     assert torch.all(attention_mask_computed == attention_mask_expected)
+
+
+@pytest.mark.runs_on(["cpu", "xpu"])
+def test_neat_packing_seq_idx():
+    model_args, data_args, *_ = get_infer_args({"model_name_or_path": TINY_LLAMA3, "template": "default"})
+    tokenizer_module = load_tokenizer(model_args)
+    template = get_template_and_fix_tokenizer(tokenizer_module["tokenizer"], data_args)
+
+    collator = SFTDataCollatorWith4DAttentionMask(
+        template=template,
+        neat_packing=True,
+        attn_implementation="flash_attention_2",
+        label_pad_token_id=IGNORE_INDEX,
+        **tokenizer_module,
+    )
+
+    # Packed row with multiple sub-sequences (resets to 0 at index 3)
+    packed_features = [
+        {
+            "input_ids": [10, 20, 30, 40, 50, 60, 70],
+            "attention_mask": [1, 1, 1, 1, 1, 1, 1],
+            "position_ids": [0, 1, 2, 0, 1, 2, 3],
+            "labels": [IGNORE_INDEX, 20, 30, IGNORE_INDEX, 50, 60, 70],
+        }
+    ]
+
+    batch = collator(packed_features)
+    assert batch["attention_mask"] is None
+    assert "seq_idx" in batch
+    assert batch["seq_idx"].dtype == torch.int32
+    assert batch["seq_idx"].tolist() == [[0, 0, 0, 1, 1, 1, 1]]
+
+    # Single sequence without boundary reset: seq_idx should NOT be generated
+    single_features = [
+        {
+            "input_ids": [10, 20, 30, 40],
+            "attention_mask": [1, 1, 1, 1],
+            "position_ids": [0, 1, 2, 3],
+            "labels": [IGNORE_INDEX, 20, 30, 40],
+        }
+    ]
+    single_batch = collator(single_features)
+    assert single_batch["attention_mask"] is None
+    assert "seq_idx" not in single_batch
 
 
 if __name__ == "__main__":
