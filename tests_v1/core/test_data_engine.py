@@ -30,3 +30,17 @@ def test_map_dataset(num_samples: int):
     for index in indexes:
         print(data_engine[index])
         assert data_engine[index] == {"_dataset_name": "default", **original_data[index]}
+
+
+@pytest.mark.parametrize("setting", ["size: 0", "weight: 0.0"])
+def test_zero_size_or_weight_drops_dataset(tmp_path, setting: str):
+    data_file = tmp_path / "data.jsonl"
+    data_file.write_text('{"text": "a"}\n{"text": "b"}\n', encoding="utf-8")
+    dataset_info = tmp_path / "dataset_info.yaml"
+    dataset_info.write_text(
+        f"keep:\n  path: {data_file}\n  source: local\noff:\n  path: {data_file}\n  source: local\n  {setting}\n",
+        encoding="utf-8",
+    )
+    data_engine = DataEngine(str(dataset_info))
+    assert len(data_engine) == 2
+    assert all(data_engine[i]["_dataset_name"] == "keep" for i in range(len(data_engine)))
