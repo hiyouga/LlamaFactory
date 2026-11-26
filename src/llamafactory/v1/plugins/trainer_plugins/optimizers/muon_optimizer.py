@@ -138,9 +138,9 @@ class Muon(torch.optim.Optimizer):
             adamw_eps=adamw_eps,
         )
 
-        params = list(muon_params)
+        muon_params = list(muon_params)
         adamw_params = list(adamw_params) if adamw_params is not None else []
-        params.extend(adamw_params)
+        params = muon_params + adamw_params
         super().__init__(params, defaults)
         # Sort parameters into those for which we will use Muon, and those for which we will not
         for p in muon_params:
