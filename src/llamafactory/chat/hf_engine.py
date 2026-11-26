@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import asyncio
+import inspect
 import os
 from collections.abc import AsyncGenerator, Callable
 from threading import Thread
@@ -199,6 +200,25 @@ class HuggingfaceEngine(BaseEngine):
                 gen_kwargs[key] = value.tolist()
             else:
                 gen_kwargs[key] = value.to(model.device)
+
+        if "mm_token_type_ids" not in gen_kwargs and (
+            "image_grid_thw" in gen_kwargs or "video_grid_thw" in gen_kwargs
+        ):
+            # mrope models need modality ids in generate() since transformers 5.3.0,
+            # otherwise image/video tokens silently get text positions
+            base_model = model.get_base_model() if hasattr(model, "get_base_model") else model
+            image_token_id = getattr(model.config, "image_token_id", None)
+            video_token_id = getattr(model.config, "video_token_id", None)
+            if "mm_token_type_ids" in inspect.signature(base_model.forward).parameters and (
+                image_token_id is not None or video_token_id is not None
+            ):
+                mm_token_type_ids = torch.zeros_like(inputs)
+                if image_token_id is not None:
+                    mm_token_type_ids[inputs == image_token_id] = 1
+                if video_token_id is not None:
+                    mm_token_type_ids[inputs == video_token_id] = 2
+
+                gen_kwargs["mm_token_type_ids"] = mm_token_type_ids
 
         if getattr(model.config, "model_type", None) in ["minicpmv", "minicpmo"]:
             gen_kwargs["input_ids"] = inputs
