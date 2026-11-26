@@ -14,13 +14,22 @@
 
 import os
 import random
+from dataclasses import replace
+from string import printable
 
 import pytest
 from datasets import load_dataset
-from transformers import AutoTokenizer
+from tokenizers import Tokenizer
+from tokenizers.models import BPE
+from tokenizers.pre_tokenizers import ByteLevel
+from transformers import AutoTokenizer, PreTrainedTokenizerFast
 
+from llamafactory.data.formatter import StringFormatter
+from llamafactory.data.processor import SupervisedDatasetProcessor
+from llamafactory.data.template import TEMPLATES
 from llamafactory.extras.constants import IGNORE_INDEX
 from llamafactory.extras.packages import is_transformers_version_greater_than
+from llamafactory.hparams import DataArguments
 from llamafactory.train.test_utils import load_dataset_module
 
 
@@ -41,6 +50,120 @@ TRAIN_ARGS = {
     "overwrite_output_dir": True,
     "fp16": True,
 }
+
+
+@pytest.fixture
+def role_tokenizer():
+    special = ["<|im_start|>", "<|im_end|>", "<reserved_102>", "<reserved_103>"]
+    vocab = {token: i for i, token in enumerate([*printable, "问", "答", "：", "x\n", *special])}
+    backend = Tokenizer(BPE(vocab, [("x", "\n")]))
+    backend.add_special_tokens(special)
+    return PreTrainedTokenizerFast(tokenizer_object=backend)
+
+
+@pytest.mark.parametrize(
+    "slots",
+    [
+        TEMPLATES["qwen"].format_user.slots,
+        ["[Round {{idx}}]\n\n问：{{content}}\n\n答："],
+        [{"token": "<reserved_102>"}, "{{content}}", {"token": "<reserved_103>"}],
+    ],
+    ids=["qwen", "chatglm2-format", "baichuan-format"],
+)
+@pytest.mark.parametrize("mask_history", [False, True])
+def test_truncated_user_prompt_retains_role_markers(role_tokenizer, slots, mask_history):
+    template = replace(TEMPLATES["qwen"], format_user=StringFormatter(slots=slots))
+    messages = [
+        {"role": "user", "content": "old"},
+        {"role": "assistant", "content": "one"},
+        {"role": "user", "content": "x" * 100},
+        {"role": "assistant", "content": "two"},
+    ]
+    short_messages = [*messages[:2], {"role": "user", "content": "xxxxx"}, messages[-1]]
+    expected = template.encode_multiturn(role_tokenizer, short_messages, system="sys")
+    if mask_history:
+        expected = expected[-1:]
+    ids = [token for source, target in expected for token in source + target]
+    labels = [token for source, target in expected for token in [IGNORE_INDEX] * len(source) + target]
+    processor = SupervisedDatasetProcessor(
+        template, role_tokenizer, None, DataArguments(cutoff_len=len(ids), mask_history=mask_history)
+    )
+    result = processor._encode_data_example(messages[:-1], messages[-1:], "sys", None, [], [], [])
+    assert result == (ids, labels)
+
+
+@pytest.mark.parametrize("budget_delta", [-1, 0, 1, 2])
+def test_truncated_user_prompt_budget(role_tokenizer, budget_delta):
+    template = TEMPLATES["qwen"]
+    messages = [{"role": "user", "content": "x" * 200}, {"role": "assistant", "content": "yes"}]
+    source, target = template.encode_oneturn(role_tokenizer, messages, system="keep this")
+    empty, _ = template.encode_oneturn(
+        role_tokenizer, [dict(messages[0], content=""), messages[1]], system="keep this"
+    )
+    budget = len(empty) + budget_delta
+    processor = SupervisedDatasetProcessor(
+        template, role_tokenizer, None, DataArguments(cutoff_len=budget + len(target), train_on_prompt=True)
+    )
+    ids, labels = processor._encode_data_example(messages[:-1], messages[-1:], "keep this", None, [], [], [])
+    if budget_delta < 0:
+        assert ids == source[:budget] + target
+    else:
+        expected, _ = template.encode_oneturn(
+            role_tokenizer, [dict(messages[0], content="x" * budget_delta), messages[1]], system="keep this"
+        )
+        assert ids == expected + target
+    assert labels == ids
+
+
+def test_truncated_user_prompt_preserves_multibyte_character_boundaries():
+    backend = Tokenizer(BPE({byte: i for i, byte in enumerate(ByteLevel.alphabet())}, []))
+    backend.pre_tokenizer = ByteLevel(add_prefix_space=False, use_regex=False)
+    backend.add_special_tokens(["<|im_start|>", "<|im_end|>"])
+    tokenizer = PreTrainedTokenizerFast(tokenizer_object=backend)
+    template = TEMPLATES["qwen"]
+    messages = [{"role": "user", "content": "🌙" * 20}, {"role": "assistant", "content": "yes"}]
+    short_messages = [dict(messages[0], content="🌙"), messages[1]]
+    expected, target = template.encode_oneturn(tokenizer, short_messages, system="sys")
+    processor = SupervisedDatasetProcessor(
+        template, tokenizer, None, DataArguments(cutoff_len=len(expected) + len(target) + 1)
+    )
+    ids, labels = processor._encode_data_example(messages[:1], messages[1:], "sys", None, [], [], [])
+    assert ids == expected + target
+    assert labels == [IGNORE_INDEX] * len(expected) + target
+
+
+def test_truncated_user_prompt_with_reasoning_template(role_tokenizer):
+    template = replace(TEMPLATES["qwen3"], enable_thinking=False)
+    messages = [{"role": "user", "content": "x" * 100}, {"role": "assistant", "content": "two"}]
+    [(source, target)] = template.encode_multiturn(role_tokenizer, messages, system="sys")
+    budget = len(source) - 30
+    processor = SupervisedDatasetProcessor(
+        template, role_tokenizer, None, DataArguments(cutoff_len=budget + len(target))
+    )
+    ids, labels = processor._encode_data_example(messages[:1], messages[1:], "sys", None, [], [], [])
+    assert ids == source[:budget] + target
+    assert labels == [IGNORE_INDEX] * budget + target
+
+
+def test_truncated_user_prompt_when_content_shortens_encoding():
+    backend = Tokenizer(
+        BPE({s: i for i, s in enumerate(["A", "B", "C", "x", "Y", "Ax", "AxB"])}, [("A", "x"), ("Ax", "B")])
+    )
+    tokenizer = PreTrainedTokenizerFast(tokenizer_object=backend)
+    template = replace(
+        TEMPLATES["qwen"],
+        default_system="",
+        format_user=StringFormatter(slots=["A{{content}}BC"]),
+        format_assistant=StringFormatter(slots=["{{content}}"]),
+    )
+    messages = [{"role": "user", "content": "x"}, {"role": "assistant", "content": "YY"}]
+    source, target = template.encode_oneturn(tokenizer, messages)
+    empty, _ = template.encode_oneturn(tokenizer, [dict(messages[0], content=""), messages[1]])
+    assert len(source) == 2 < len(empty)
+    processor = SupervisedDatasetProcessor(template, tokenizer, None, DataArguments(cutoff_len=2))
+    ids, labels = processor._encode_data_example(messages[:1], messages[1:], None, None, [], [], [])
+    assert ids == source[:1] + target[:1]
+    assert labels == [IGNORE_INDEX] + target[:1]
 
 
 @pytest.mark.runs_on(["cpu", "mps", "xpu"])
