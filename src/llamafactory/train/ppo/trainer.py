@@ -30,7 +30,7 @@ from transformers.optimization import get_scheduler
 from transformers.trainer import DEFAULT_CALLBACKS
 from transformers.trainer_callback import CallbackHandler
 from transformers.trainer_pt_utils import remove_dummy_checkpoint
-from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR
+from transformers.trainer_utils import PREFIX_CHECKPOINT_DIR, has_length
 from transformers.utils import SAFE_WEIGHTS_NAME, WEIGHTS_NAME
 from trl import PPOConfig, PPOTrainer
 from trl import __version__ as trl_version
@@ -212,7 +212,7 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
             num_examples = total_train_batch_size * self.args.max_steps
             num_train_epochs = sys.maxsize
             max_steps = self.args.max_steps
-            steps_in_epoch = self.args.max_steps
+            steps_in_epoch = len(self.dataloader) if has_length(self.dataloader) else max_steps
         else:
             len_dataloader = len(self.dataloader)
             num_examples = len(self.dataset)
@@ -222,6 +222,7 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
 
         self.state.max_steps = max_steps
         self.state.num_train_epochs = num_train_epochs
+        self.state.compute_steps(self.args, max_steps)
         self.state.is_local_process_zero = self.is_local_process_zero()
         self.state.is_world_process_zero = self.is_world_process_zero()
 
@@ -280,7 +281,10 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
                     logger.warning_rank0("Failed to save stats due to unknown errors.")
 
             self.state.global_step += 1
-            self.callback_handler.on_step_end(self.args, self.state, self.control)
+            self.state.epoch = self.state.global_step / steps_in_epoch
+            self.control = self.callback_handler.on_step_end(self.args, self.state, self.control)
+            if self.state.global_step % steps_in_epoch == 0 or self.state.global_step == max_steps:
+                self.control = self.callback_handler.on_epoch_end(self.args, self.state, self.control)
 
             if self.is_local_process_zero() and (step + 1) % self.args.logging_steps == 0:
                 logs = dict(
@@ -296,11 +300,18 @@ class CustomPPOTrainer(PPOTrainer, Trainer):
                 loss_meter.reset()
                 reward_meter.reset()
 
-            if (step + 1) % self.args.save_steps == 0:  # save checkpoint
+            if self.control.should_save:
                 self.save_model(
                     os.path.join(self.args.output_dir, f"{PREFIX_CHECKPOINT_DIR}-{self.state.global_step}")
                 )
-                self.callback_handler.on_save(self.args, self.state, self.control)
+                self.control = self.callback_handler.on_save(self.args, self.state, self.control)
+                if self.args.should_save:
+                    if hasattr(self, "_rotate_checkpoints"):
+                        self._rotate_checkpoints(output_dir=self.args.output_dir)
+                    else:
+                        from transformers.trainer_utils import rotate_checkpoints
+
+                        rotate_checkpoints(self.args.output_dir, self.args.save_total_limit)
 
             if self.control.should_epoch_stop or self.control.should_training_stop:
                 break
