@@ -653,10 +653,10 @@ def test_neat_packing_lfm2_seq_idx_prevents_contamination():
         use_cache=False,
     )
     config._attn_implementation = "flash_attention_2"
-    model = lfm2.Lfm2ForCausalLM(config).cuda().to(torch.bfloat16).train()
     original_conv = lfm2.causal_conv1d_fn
-    lfm2.causal_conv1d_fn = causal_conv1d.causal_conv1d_fn
     try:
+        model = lfm2.Lfm2ForCausalLM(config).cuda().to(torch.bfloat16).train()
+        lfm2.causal_conv1d_fn = causal_conv1d.causal_conv1d_fn
 
         def run(doc_a: torch.Tensor, doc_b: torch.Tensor, add_seq_idx: bool):
             input_ids = torch.cat([doc_a, doc_b])[None].cuda()
