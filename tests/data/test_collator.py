@@ -24,7 +24,11 @@ from tokenizers.models import WordLevel
 from transformers import AutoConfig, AutoModelForImageTextToText, PreTrainedTokenizerFast
 
 from llamafactory.data import get_template_and_fix_tokenizer
-from llamafactory.data.collator import MultiModalDataCollatorForSeq2Seq, prepare_4d_attention_mask
+from llamafactory.data.collator import (
+    MultiModalDataCollatorForSeq2Seq,
+    SFTDataCollatorWith4DAttentionMask,
+    prepare_4d_attention_mask,
+)
 from llamafactory.extras.constants import IGNORE_INDEX
 from llamafactory.extras.packages import is_transformers_version_greater_than
 from llamafactory.hparams import DataArguments, get_infer_args
@@ -401,6 +405,292 @@ def test_4d_attention_mask():
     )
     assert list(attention_mask_computed.size()) == [2, 1, 6, 6]
     assert torch.all(attention_mask_computed == attention_mask_expected)
+
+
+def _make_local_tokenizer_and_template():
+    tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=Tokenizer(WordLevel({"[PAD]": 0, "[UNK]": 1, "hello": 2, "world": 3}, unk_token="[UNK]")),
+        pad_token="[PAD]",
+        unk_token="[UNK]",
+    )
+    tokenizer.padding_side = "right"
+    template = get_template_and_fix_tokenizer(tokenizer, DataArguments(template="lfm2"))
+    return tokenizer, template
+
+
+def _make_lfm2_collator(
+    *, neat_packing: bool = True, attn_implementation: str = "flash_attention_2"
+) -> SFTDataCollatorWith4DAttentionMask:
+    lfm2 = pytest.importorskip("transformers.models.lfm2")
+    tokenizer, template = _make_local_tokenizer_and_template()
+    config = lfm2.Lfm2Config(
+        vocab_size=128,
+        hidden_size=32,
+        intermediate_size=64,
+        num_hidden_layers=2,
+        num_attention_heads=4,
+        num_key_value_heads=2,
+        layer_types=["conv", "full_attention"],
+        use_cache=False,
+    )
+    return SFTDataCollatorWith4DAttentionMask(
+        model=lfm2.Lfm2ForCausalLM(config),
+        template=template,
+        tokenizer=tokenizer,
+        neat_packing=neat_packing,
+        attn_implementation=attn_implementation,
+    )
+
+
+def _packed_feature(input_ids: list[int], attention_mask: list[int], position_ids: list[int]) -> dict[str, list[int]]:
+    return {
+        "input_ids": input_ids,
+        "attention_mask": attention_mask,
+        "labels": [IGNORE_INDEX] * len(input_ids),
+        "position_ids": position_ids,
+    }
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
+def test_neat_packing_seq_idx_values():
+    collator = _make_lfm2_collator()
+    feature = _packed_feature([11, 12, 13, 14, 15, 16], [1, 1, 2, 3, 4, 4], [0, 1, 0, 0, 0, 1])
+    batch = collator([feature])
+    assert batch["seq_idx"].dtype == torch.int32
+    assert batch["seq_idx"].shape == batch["input_ids"].shape
+    assert batch["seq_idx"].tolist() == [[0, 0, 1, 2, 3, 3]]
+
+    feature = _packed_feature([11, 12], [1, 2], [0, 0])
+    batch = collator([feature])
+    assert batch["seq_idx"].shape == batch["input_ids"].shape
+    assert batch["seq_idx"].tolist() == [[0, 1]]
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
+def test_neat_packing_seq_idx_matches_unpadded_input_ids():
+    collator = _make_lfm2_collator()
+    feature = _packed_feature(
+        [11, 12, 13, 14, 15, 16, 0, 0],
+        [1, 1, 2, 3, 4, 4, 0, 0],
+        [0, 1, 0, 0, 0, 1, 0, 0],
+    )
+    batch = collator([feature])
+    assert batch["attention_mask"] is None
+    assert batch["input_ids"].tolist() == [[11, 12, 13, 14, 15, 16]]
+    assert batch["seq_idx"].shape == batch["input_ids"].shape
+    assert batch["seq_idx"].tolist() == [[0, 0, 1, 2, 3, 3]]
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
+def test_neat_packing_seq_idx_not_added_for_single_row_or_3d():
+    collator = _make_lfm2_collator()
+    batch = collator([_packed_feature([11, 12, 13], [1, 1, 1], [0, 1, 2])])
+    assert "seq_idx" not in batch
+
+    assert SFTDataCollatorWith4DAttentionMask._compute_seq_idx(torch.tensor([[0, 1, 2]])) is None
+    assert SFTDataCollatorWith4DAttentionMask._compute_seq_idx(torch.zeros(3, 1, 6, dtype=torch.long)) is None
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
+def test_seq_idx_not_added_outside_neat_packing_fa2():
+    feature = _packed_feature([11, 12, 13, 14, 15, 16], [1, 1, 2, 3, 4, 4], [0, 1, 0, 0, 0, 1])
+    collators = [
+        _make_lfm2_collator(neat_packing=False),
+        _make_lfm2_collator(attn_implementation="eager"),
+    ]
+    for collator in collators:
+        batch = collator([dict(feature)])
+        assert "seq_idx" not in batch
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
+@pytest.mark.parametrize("model_type", ["gemma4", "gpt_oss"])
+def test_neat_packing_still_rejects_unsupported_models(model_type):
+    from types import SimpleNamespace
+
+    tokenizer, template = _make_local_tokenizer_and_template()
+    model = SimpleNamespace(config=SimpleNamespace(model_type=model_type))
+    with pytest.raises(ValueError, match="Neat packing is not supported"):
+        SFTDataCollatorWith4DAttentionMask(
+            model=model,
+            template=template,
+            tokenizer=tokenizer,
+            neat_packing=True,
+            attn_implementation="flash_attention_2",
+        )
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
+def test_neat_packing_seq_idx_ignored_by_llama():
+    from transformers import LlamaConfig, LlamaForCausalLM
+
+    tokenizer, template = _make_local_tokenizer_and_template()
+    config = LlamaConfig(
+        vocab_size=128,
+        hidden_size=32,
+        intermediate_size=64,
+        num_hidden_layers=2,
+        num_attention_heads=4,
+        num_key_value_heads=2,
+    )
+    model = LlamaForCausalLM(config)
+    collator = SFTDataCollatorWith4DAttentionMask(
+        model=model,
+        template=template,
+        tokenizer=tokenizer,
+        neat_packing=True,
+        attn_implementation="flash_attention_2",
+    )
+    feature = _packed_feature([11, 12, 13, 14, 15, 16], [1, 1, 2, 3, 4, 4], [0, 1, 0, 0, 0, 1])
+    batch = collator([feature])
+    assert "seq_idx" in batch
+    batch["labels"] = batch["input_ids"].clone()
+    outputs = model(**batch)
+    assert outputs.logits.shape == (1, 6, config.vocab_size)
+    outputs.loss.backward()
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
+def test_neat_packing_trainer_forwards_seq_idx(tmp_path):
+    from datasets import Dataset
+    from transformers import LlamaConfig, LlamaForCausalLM, Trainer, TrainingArguments
+
+    tokenizer, template = _make_local_tokenizer_and_template()
+    model = LlamaForCausalLM(
+        LlamaConfig(
+            vocab_size=128,
+            hidden_size=32,
+            intermediate_size=64,
+            num_hidden_layers=2,
+            num_attention_heads=4,
+            num_key_value_heads=2,
+        )
+    )
+    collator = SFTDataCollatorWith4DAttentionMask(
+        model=model,
+        template=template,
+        tokenizer=tokenizer,
+        neat_packing=True,
+        attn_implementation="flash_attention_2",
+    )
+    row = _packed_feature([11, 12, 13, 14, 15, 16], [1, 1, 2, 3, 4, 4], [0, 1, 0, 0, 0, 1])
+    row["labels"] = [IGNORE_INDEX] * 3 + [14, 15, 16]
+    dataset = Dataset.from_dict({key: [value] for key, value in row.items()})
+    args = TrainingArguments(
+        output_dir=str(tmp_path),
+        use_cpu=True,
+        report_to=[],
+        per_device_train_batch_size=1,
+        per_device_eval_batch_size=1,
+        save_strategy="no",
+        eval_strategy="no",
+    )
+    trainer = Trainer(model=model, args=args, train_dataset=dataset, data_collator=collator)
+
+    batch = collator([dict(row)])
+    assert "seq_idx" in batch
+    loss = trainer.compute_loss(model, dict(batch))
+    assert loss.isfinite()
+    loss.backward()
+
+    with torch.no_grad():
+        eval_loss, logits, labels = trainer.prediction_step(model, dict(batch), prediction_loss_only=False)
+    assert eval_loss.isfinite()
+    assert logits.shape == (1, 6, model.config.vocab_size)
+    assert labels.shape == (1, 6)
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
+def test_neat_packing_lfm2_accepts_seq_idx():
+    lfm2 = pytest.importorskip("transformers.models.lfm2")
+    tokenizer, template = _make_local_tokenizer_and_template()
+    config = lfm2.Lfm2Config(
+        vocab_size=128,
+        hidden_size=32,
+        intermediate_size=64,
+        num_hidden_layers=2,
+        num_attention_heads=4,
+        num_key_value_heads=2,
+        layer_types=["conv", "full_attention"],
+        use_cache=False,
+    )
+    model = lfm2.Lfm2ForCausalLM(config)
+    collator = SFTDataCollatorWith4DAttentionMask(
+        model=model,
+        template=template,
+        tokenizer=tokenizer,
+        neat_packing=True,
+        attn_implementation="flash_attention_2",
+    )
+    feature = _packed_feature([11, 12, 13, 14, 15, 16], [1, 1, 2, 3, 4, 4], [0, 1, 0, 0, 0, 1])
+    batch = collator([feature])
+    batch["labels"] = batch["input_ids"].clone()
+    with torch.no_grad():
+        outputs = model(**batch)
+    assert outputs.logits.shape == (1, 6, config.vocab_size)
+    assert outputs.loss.isfinite()
+
+
+@pytest.mark.runs_on(["cuda"])
+def test_neat_packing_lfm2_seq_idx_prevents_contamination():
+    pytest.importorskip("flash_attn")
+    causal_conv1d = pytest.importorskip("causal_conv1d")
+    lfm2 = pytest.importorskip("transformers.models.lfm2")
+    if not is_transformers_version_greater_than("5.15.0"):
+        pytest.skip("LFM2 consumes `seq_idx` only since transformers 5.15.0")
+
+    previous_deterministic = torch.are_deterministic_algorithms_enabled()
+    torch.manual_seed(0)
+    torch.use_deterministic_algorithms(True)
+    config = lfm2.Lfm2Config(
+        vocab_size=128,
+        hidden_size=64,
+        intermediate_size=128,
+        num_hidden_layers=2,
+        num_attention_heads=4,
+        num_key_value_heads=2,
+        layer_types=["conv", "full_attention"],
+        use_cache=False,
+    )
+    config._attn_implementation = "flash_attention_2"
+    model = lfm2.Lfm2ForCausalLM(config).cuda().to(torch.bfloat16).train()
+    original_conv = lfm2.causal_conv1d_fn
+    lfm2.causal_conv1d_fn = causal_conv1d.causal_conv1d_fn
+    try:
+
+        def run(doc_a: torch.Tensor, doc_b: torch.Tensor, add_seq_idx: bool):
+            input_ids = torch.cat([doc_a, doc_b])[None].cuda()
+            position_ids = torch.cat([torch.arange(len(doc_a)), torch.arange(len(doc_b))])[None].cuda()
+            kwargs = {}
+            if add_seq_idx:
+                seq_idx = SFTDataCollatorWith4DAttentionMask._compute_seq_idx(position_ids)
+                assert seq_idx is not None
+                kwargs["seq_idx"] = seq_idx
+
+            model.zero_grad(set_to_none=True)
+            logits = model(
+                input_ids=input_ids, position_ids=position_ids, attention_mask=None, use_cache=False, **kwargs
+            ).logits
+            logits_b = logits[0, len(doc_a) :].float()
+            logits_b.square().sum().backward()
+            grads = torch.cat([p.grad.flatten().float() for p in model.parameters() if p.grad is not None])
+            return logits_b.detach(), grads.detach()
+
+        doc_b = torch.randint(0, 128, (4,))
+        doc_a1, doc_a2 = torch.randint(0, 128, (4,)), torch.randint(0, 128, (4,))
+
+        logits_b1, grads1 = run(doc_a1, doc_b, add_seq_idx=True)
+        logits_b2, grads2 = run(doc_a2, doc_b, add_seq_idx=True)
+        assert (logits_b1 - logits_b2).abs().max().item() == 0
+        assert (grads1 - grads2).abs().max().item() == 0
+
+        logits_b1, grads1 = run(doc_a1, doc_b, add_seq_idx=False)
+        logits_b2, grads2 = run(doc_a2, doc_b, add_seq_idx=False)
+        assert (logits_b1 - logits_b2).abs().max().item() > 0
+        assert (grads1 - grads2).abs().max().item() > 0
+    finally:
+        lfm2.causal_conv1d_fn = original_conv
+        torch.use_deterministic_algorithms(previous_deterministic)
 
 
 if __name__ == "__main__":
