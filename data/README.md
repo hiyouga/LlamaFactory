@@ -14,6 +14,7 @@ Currently we support datasets in **alpaca** and **sharegpt** format. Allowed fil
   "formatting": "the format of the dataset. (optional, default: alpaca, can be chosen from {alpaca, sharegpt})",
   "ranking": "whether the dataset is a preference dataset or not. (default: False)",
   "subset": "the name of the subset. (optional, default: None)",
+  "revision": "the branch, tag or commit SHA of the dataset repository on the Hugging Face hub. (optional, default: main)",
   "split": "the name of dataset split to be used. (optional, default: train)",
   "folder": "the name of the folder of the dataset repository on the Hugging Face hub. (optional, default: None)",
   "num_samples": "the number of samples in the dataset to be used. (optional, default: None)",

@@ -13,6 +13,7 @@
   "formatting": "数据集格式（可选，默认：alpaca，可以为 alpaca 或 sharegpt）",
   "ranking": "是否为偏好数据集（可选，默认：False）",
   "subset": "数据集子集的名称（可选，默认：None）",
+  "revision": "Hugging Face 数据集仓库的分支、标签或提交 SHA（可选，默认：main）",
   "split": "所使用的数据集切分（可选，默认：train）",
   "folder": "Hugging Face 仓库的文件夹名称（可选，默认：None）",
   "num_samples": "该数据集所使用的样本数量。（可选，默认：None）",
