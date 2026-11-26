@@ -12,19 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import itertools
 import json
 from enum import StrEnum, unique
 from typing import TYPE_CHECKING, Any, Optional, TypedDict, Union
 
 import fsspec
-from datasets import DatasetDict, concatenate_datasets, interleave_datasets
+from datasets import Dataset, DatasetDict, IterableDataset, concatenate_datasets, interleave_datasets
 
 from ..extras import logging
 
 
 if TYPE_CHECKING:
-    from datasets import Dataset, IterableDataset
-
     from ..hparams import DataArguments
 
 
@@ -103,20 +102,10 @@ def split_dataset(
     train_dict, eval_dict = {}, {}
 
     if dataset is not None:
-        if data_args.streaming:
-            dataset = dataset.shuffle(buffer_size=data_args.buffer_size, seed=seed)
-
-        if data_args.val_size > 1e-6:
-            if data_args.streaming:
-                eval_dict["validation"] = dataset.take(int(data_args.val_size))
-                train_dict["train"] = dataset.skip(int(data_args.val_size))
-            else:
-                val_size = int(data_args.val_size) if data_args.val_size > 1 else data_args.val_size
-                split_result = dataset.train_test_split(test_size=val_size, seed=seed)
-                train_dict["train"] = split_result["train"]
-                eval_dict["validation"] = split_result["test"]
-        else:
-            train_dict["train"] = dataset
+        train, validation = _split_dataset(dataset, data_args, seed)
+        train_dict["train"] = train
+        if validation is not None:
+            eval_dict["validation"] = validation
 
     if eval_dataset is not None:
         if isinstance(eval_dataset, dict):
@@ -129,6 +118,45 @@ def split_dataset(
             eval_dict["validation"] = eval_dataset
 
     return train_dict, eval_dict
+
+
+def _split_dataset(
+    dataset: Union["Dataset", "IterableDataset"], data_args: "DataArguments", seed: int
+) -> tuple[Union["Dataset", "IterableDataset"], Optional[Union["Dataset", "IterableDataset"]]]:
+    r"""Dispatch the split by streaming mode and val_size; returns (train, validation)."""
+    if data_args.streaming and data_args.val_size > 1e-6:
+        return _split_streaming(dataset, int(data_args.val_size), data_args, seed)
+    if data_args.streaming:
+        return dataset.shuffle(buffer_size=data_args.buffer_size, seed=seed), None
+    if data_args.val_size > 1e-6:
+        val_size = int(data_args.val_size) if data_args.val_size > 1 else data_args.val_size
+        split_result = dataset.train_test_split(test_size=val_size, seed=seed)
+        return split_result["train"], split_result["test"]
+    return dataset, None
+
+
+def _split_streaming(
+    dataset: Union["Dataset", "IterableDataset"], val_size: int, data_args: "DataArguments", seed: int
+) -> tuple["IterableDataset", "Dataset"]:
+    r"""Split a streaming dataset into a train stream and a fixed validation set.
+
+    Materializes the first ``val_size`` samples as the validation set and drops
+    them from the train stream by content. ``take``/``skip`` on a shuffled parent
+    cannot be re-shuffled per epoch in ``datasets`` >= 4 and leaks held-out rows
+    back into training; the filter keeps the two disjoint on every epoch.
+    """
+    held = list(itertools.islice(iter(dataset), val_size))
+    held_keys = {_row_key(row) for row in held}
+    validation = Dataset.from_list(held)
+    train = dataset.shuffle(buffer_size=data_args.buffer_size, seed=seed).filter(
+        lambda row: _row_key(row) not in held_keys
+    )
+    return train, validation
+
+
+def _row_key(row: Any) -> str:
+    r"""Stable dedupe key for a dataset row."""
+    return json.dumps(row, sort_keys=True, default=repr, ensure_ascii=False)
 
 
 def get_dataset_module(dataset: Union["Dataset", "DatasetDict"]) -> "DatasetModule":
