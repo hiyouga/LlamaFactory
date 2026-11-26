@@ -689,6 +689,7 @@ def asft_loss_func(
     ref_logits: torch.Tensor,
     asft_alpha: float = 0.1,
     ignore_index: int = -100,
+    num_items_in_batch: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
     logits = outputs.get("logits")
     if logits is None:
@@ -714,6 +715,7 @@ def asft_loss_func(
         ref_logits=shift_ref_logits,
         asft_alpha=asft_alpha,
         ignore_index=ignore_index,
+        num_items_in_batch=num_items_in_batch,
     )
 
 
@@ -723,11 +725,13 @@ def _asft_cross_entropy(
     ref_logits: torch.Tensor,
     asft_alpha: float = 0.1,
     ignore_index: int = -100,
+    num_items_in_batch: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
     dft_loss = _dft_cross_entropy(
         policy_logits,
         policy_labels,
         ignore_index=ignore_index,
+        num_items_in_batch=num_items_in_batch,
     )
 
     kl_loss = _kl_divergence(
@@ -735,6 +739,7 @@ def _asft_cross_entropy(
         ref_logits,
         policy_labels,
         ignore_index=ignore_index,
+        num_items_in_batch=num_items_in_batch,
     )
 
     return dft_loss + asft_alpha * kl_loss
@@ -745,6 +750,7 @@ def _kl_divergence(
     ref_logits: torch.Tensor,
     labels: torch.Tensor,
     ignore_index: int = -100,
+    num_items_in_batch: Optional[torch.Tensor] = None,
 ) -> torch.Tensor:
     # log p(y|x)
     log_p = F.log_softmax(policy_logits, dim=-1)
@@ -762,7 +768,10 @@ def _kl_divergence(
     # mask padding tokens
     mask = (labels != ignore_index).float()
 
-    return (kl * mask).sum() / mask.sum()
+    normalizer = mask.sum() if num_items_in_batch is None else num_items_in_batch
+    if torch.is_tensor(normalizer):
+        normalizer = normalizer.to(kl.device)
+    return (kl * mask).sum() / normalizer
 
 
 def eaft_loss_func(
