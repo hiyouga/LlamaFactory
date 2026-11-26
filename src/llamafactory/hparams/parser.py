@@ -737,6 +737,14 @@ def get_infer_args(args: dict[str, Any] | list[str] | None = None) -> _INFER_CLS
         model_args.device_map = {"": torch.device("cpu")}
         if data_args.cutoff_len != DataArguments().cutoff_len:  # override cutoff_len if it is not default
             model_args.model_max_length = data_args.cutoff_len
+    elif model_args.adapter_name_or_path is not None and get_current_device().type == "cpu":
+        # On CPU-only hosts, device_map="auto" lets accelerate disk-offload parts of the base model,
+        # and PeftModel.from_pretrained then crashes in _update_offload with
+        # KeyError: 'base_model.model.model.model.model.embed_tokens' (peft<=0.18.1 duplicates the
+        # "model." prefix when resolving offloaded modules). Pinning the whole model to CPU keeps
+        # hf_device_map free of disk-offloaded modules, so the adapter loads the same way as a
+        # plain from_pretrained call. See #10957.
+        model_args.device_map = {"": torch.device("cpu")}
     else:
         model_args.device_map = "auto"
 
