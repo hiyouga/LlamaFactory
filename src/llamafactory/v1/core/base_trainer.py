@@ -27,6 +27,8 @@ Train Phase:
 
 """
 
+import json
+import os
 from abc import abstractmethod
 
 import torch
@@ -48,6 +50,7 @@ from ..utils.types import BatchInput, HFModel, ModelOutput, Tensor, TorchDataset
 from .rendering import Renderer
 from .utils.batching import BatchGenerator
 from .utils.checkpoint import TrainingCheckpointCoordinator
+from .utils.train_timer import TrainTimer
 
 
 logger = logging.get_logger(__name__)
@@ -250,6 +253,7 @@ class BaseTrainer:
     def fit(self) -> None:
         """Train the model."""
         self.model.train()
+        self._timer = TrainTimer(start_step=self.global_step, total_steps=self.num_training_steps)
         self.callback_handler.on_train_begin(self.args, self.state)
 
         epoch = self._resume_epoch
@@ -333,6 +337,7 @@ class BaseTrainer:
                 self.state.loss = step_loss
                 self.state.grad_norm = grad_norm
                 self.state.learning_rate = current_lr
+                self._timer.update(step_valid_tokens, step_loss)
 
                 self.callback_handler.on_step_end(self.args, self.state)
 
@@ -344,6 +349,7 @@ class BaseTrainer:
                         "loss": step_loss,
                         "grad_norm": grad_norm,
                         "learning_rate": current_lr,
+                        **self._timer.log_metrics(self.global_step),
                     }
                     # Merge per-step trainer metrics (e.g. DPO rewards/logps/logits)
                     step_metrics = getattr(self, "_step_metrics", None)
@@ -358,11 +364,28 @@ class BaseTrainer:
                 if self.global_step >= self.num_training_steps:
                     logger.info_rank0(f"Reached max_steps ({self.num_training_steps}), stopping training.")
                     self.callback_handler.on_epoch_end(self.args, self.state)
-                    self.callback_handler.on_train_end(self.args, self.state)
+                    self._finish_training(epoch)
                     return
 
             self.callback_handler.on_epoch_end(self.args, self.state)
             epoch += 1
+
+        self._finish_training(epoch)
+
+    def _finish_training(self, epoch: int) -> None:
+        """Report the run's final metrics, then fire ``on_train_end``.
+
+        The metrics are printed and, on rank 0, written to ``<output_dir>/train_results.json``.
+        """
+        metrics = self._timer.summary(epoch=epoch, global_step=self.global_step)
+        if DistributedInterface().get_rank() == 0:
+            logger.info_rank0("***** train metrics *****")
+            for key, value in metrics.items():
+                logger.info_rank0(f"  {key:<24} = {value}")
+
+            os.makedirs(self.args.output_dir, exist_ok=True)
+            with open(os.path.join(self.args.output_dir, "train_results.json"), "w", encoding="utf-8") as f:
+                json.dump(metrics, f, indent=2)
 
         self.callback_handler.on_train_end(self.args, self.state)
 

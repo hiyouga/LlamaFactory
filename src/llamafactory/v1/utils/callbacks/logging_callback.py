@@ -62,6 +62,8 @@ class LoggingCallback(TrainerCallback):
             # Use :.4g so small values show as "1e-05" while 1e-4 still shows "0.0001".
             if k == "learning_rate":
                 return f"{k}: {v:.4g}"
+            if k == "tokens_per_second":
+                return f"{k}: {v:.1f}"
             return f"{k}: {v:.4f}"
 
         parts = ", ".join(_fmt(k, v) for k, v in display_logs.items())
