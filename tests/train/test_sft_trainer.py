@@ -12,15 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import os
 from dataclasses import dataclass, field
 from typing import Any
 
+import numpy as np
 import pytest
-from transformers import DataCollatorWithPadding
+from datasets import Dataset
+from tokenizers import Tokenizer
+from tokenizers.models import WordLevel
+from transformers import DataCollatorWithPadding, GPT2Config, GPT2LMHeadModel, PreTrainedTokenizerFast
+from transformers.trainer_utils import PredictionOutput
 
 from llamafactory.data import get_dataset, get_template_and_fix_tokenizer
-from llamafactory.hparams import get_train_args
+from llamafactory.hparams import FinetuningArguments, TrainingArguments, get_train_args
 from llamafactory.model import load_model, load_tokenizer
 from llamafactory.train.sft.trainer import CustomSeq2SeqTrainer
 
@@ -87,3 +93,29 @@ def test_shuffle(disable_shuffling: bool):
         assert data_collator.verbose_list[0]["input_ids"] == dataset_module["train_dataset"][0]["input_ids"]
     else:
         assert data_collator.verbose_list[0]["input_ids"] != dataset_module["train_dataset"][0]["input_ids"]
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+def test_save_predictions(tmp_path, streaming):
+    tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=Tokenizer(WordLevel({"<pad>": 0, "hello": 1, "world": 2})), pad_token="<pad>"
+    )
+    trainer = CustomSeq2SeqTrainer(
+        model=GPT2LMHeadModel(GPT2Config(vocab_size=3, n_layer=1, n_head=1, n_embd=8)),
+        args=TrainingArguments(output_dir=str(tmp_path), report_to="none", use_cpu=True),
+        tokenizer=tokenizer,
+        finetuning_args=FinetuningArguments(),
+        processor=None,
+    )
+    dataset = Dataset.from_dict({"input_ids": [[1], [2]]})
+    if streaming:
+        dataset = dataset.to_iterable_dataset()
+
+    results = PredictionOutput(predictions=np.array([[0, 2], [0, 1]]), label_ids=np.array([[1], [2]]), metrics={})
+    trainer.save_predictions(dataset, results)
+
+    rows = [json.loads(line) for line in (tmp_path / "generated_predictions.jsonl").read_text().splitlines()]
+    assert rows == [
+        {"prompt": "hello", "predict": "world", "label": "hello"},
+        {"prompt": "world", "predict": "hello", "label": "world"},
+    ]
