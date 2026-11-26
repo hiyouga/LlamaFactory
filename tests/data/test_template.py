@@ -196,6 +196,20 @@ def test_qwen38_registration():
     assert {"qwen3_5_moe_text", "qwen3_5_text"} <= MCA_SUPPORTED_MODELS
 
 
+@pytest.mark.parametrize(
+    ("model_name", "default_path", "modelscope_path"),
+    [
+        ("Gemma-2B", "google/gemma-2b", "AI-ModelScope/gemma-2b"),
+        ("Gemma-7B", "google/gemma-7b", "AI-ModelScope/gemma-7b"),
+        ("Gemma-2B-Instruct", "google/gemma-2b-it", "AI-ModelScope/gemma-2b-it"),
+        ("Gemma-7B-Instruct", "google/gemma-7b-it", "AI-ModelScope/gemma-7b-it"),
+    ],
+)
+def test_gemma_registration(model_name: str, default_path: str, modelscope_path: str):
+    assert SUPPORTED_MODELS[model_name][DownloadSource.DEFAULT] == default_path
+    assert SUPPORTED_MODELS[model_name][DownloadSource.MODELSCOPE] == modelscope_path
+
+
 @pytest.mark.runs_on(["cpu", "mps", "xpu"])
 def test_encode_oneturn():
     tokenizer = AutoTokenizer.from_pretrained(TINY_LLAMA3)
