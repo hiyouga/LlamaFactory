@@ -64,6 +64,7 @@ class DatasetConverter:
             elif isinstance(medias[0], list):  # for processed video frames
                 # medias is a list of lists, e.g., [[frame1.jpg, frame2.jpg], [frame3.jpg, frame4.jpg]]
                 for i in range(len(medias)):
+                    medias[i] = medias[i][:]
                     for j in range(len(medias[i])):
                         media_path = os.path.join(self.data_args.media_dir, medias[i][j])
                         if os.path.isfile(media_path):
