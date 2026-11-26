@@ -289,7 +289,7 @@ def get_dataset(
             logger.warning_rank0("Loading dataset from disk will ignore other data arguments.")
             tokenized_data = load_from_disk(data_args.tokenized_path)
             dataset_module = get_dataset_module(tokenized_data)
-            if data_args.streaming:
+            if data_args.streaming and "train_dataset" in dataset_module:
                 dataset_module["train_dataset"] = dataset_module["train_dataset"].to_iterable_dataset()
 
             logger.info_rank0(f"Loaded tokenized dataset from {data_args.tokenized_path}.")
