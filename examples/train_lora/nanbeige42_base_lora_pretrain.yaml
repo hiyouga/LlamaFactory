@@ -1,0 +1,48 @@
+### model
+# Nanbeige4.2-Base: Looped Transformer. Use for continued pre-training (stage: pt).
+# Do NOT set template=nanbeige here — Base tokenizer has no ChatML/thinking specials.
+model_name_or_path: Nanbeige/Nanbeige4.2-3B-Base
+trust_remote_code: true
+use_fast_tokenizer: false
+
+### method
+stage: pt
+do_train: true
+finetuning_type: lora
+lora_rank: 8
+lora_target: all
+
+### dataset
+dataset: c4_demo
+cutoff_len: 2048
+max_samples: 1000
+preprocessing_num_workers: 16
+dataloader_num_workers: 4
+
+### output
+output_dir: saves/nanbeige42-3b-base/lora/pretrain
+logging_steps: 10
+save_steps: 500
+plot_loss: true
+overwrite_output_dir: true
+save_only_model: false
+report_to: none  # choices: [none, wandb, tensorboard, swanlab, mlflow]
+
+### train
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 8
+learning_rate: 1.0e-4
+num_train_epochs: 3.0
+lr_scheduler_type: cosine
+warmup_ratio: 0.1
+bf16: true
+ddp_timeout: 180000000
+resume_from_checkpoint: null
+# Note: num_loops=2 roughly doubles forward compute vs a 22-layer non-loop model.
+
+### eval
+# eval_dataset: c4_demo
+# val_size: 0.1
+# per_device_eval_batch_size: 1
+# eval_strategy: steps
+# eval_steps: 500

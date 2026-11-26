@@ -1,0 +1,55 @@
+### model
+# Nanbeige4.2-Base → chat SFT.
+# Base lacks ChatML/thinking tokens; add the same specials as Instruct so template=nanbeige works.
+# Prefer starting from Nanbeige/Nanbeige4.2-3B (Instruct) when possible — tokenizer already aligned.
+model_name_or_path: Nanbeige/Nanbeige4.2-3B-Base
+trust_remote_code: true
+use_fast_tokenizer: false
+# Order matches Instruct ids starting at 166100 when Base tokenizer size is 166100.
+add_special_tokens: <|im_start|>,<|im_end|>,<|endoftext|>,<think>,</think>
+# resize_vocab is auto-enabled when new tokens are added
+
+### method
+stage: sft
+do_train: true
+finetuning_type: lora
+lora_rank: 8
+lora_target: all
+# Keep new-token embeddings trainable when using LoRA.
+additional_target: embed_tokens,lm_head
+
+### dataset
+dataset: identity,alpaca_en_demo
+template: nanbeige_nothink  # use `nanbeige` for thinking-style SFT
+cutoff_len: 2048
+max_samples: 1000
+preprocessing_num_workers: 16
+dataloader_num_workers: 4
+
+### output
+output_dir: saves/nanbeige42-3b-base/lora/sft
+logging_steps: 10
+save_steps: 500
+plot_loss: true
+overwrite_output_dir: true
+save_only_model: false
+report_to: none  # choices: [none, wandb, tensorboard, swanlab, mlflow]
+
+### train
+per_device_train_batch_size: 1
+gradient_accumulation_steps: 8
+learning_rate: 1.0e-4
+num_train_epochs: 3.0
+lr_scheduler_type: cosine
+warmup_ratio: 0.1
+bf16: true
+ddp_timeout: 180000000
+resume_from_checkpoint: null
+# Note: num_loops=2 roughly doubles forward compute vs a 22-layer non-loop model.
+
+### eval
+# eval_dataset: alpaca_en_demo
+# val_size: 0.1
+# per_device_eval_batch_size: 1
+# eval_strategy: steps
+# eval_steps: 500
