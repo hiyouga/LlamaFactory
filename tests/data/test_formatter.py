@@ -51,6 +51,33 @@ def test_string_formatter():
 
 
 @pytest.mark.runs_on(["cpu", "mps", "xpu"])
+@pytest.mark.parametrize("content_first", [True, False])
+@pytest.mark.parametrize(
+    ("slot", "expected"),
+    [
+        ("{{content}}", "Use {{idx}} literally"),
+        ("{{content}} / {{idx}}", "Use {{idx}} literally / 2"),
+        ("{{idx}} / {{content}}", "2 / Use {{idx}} literally"),
+    ],
+)
+def test_string_formatter_preserves_literal_placeholders(slot, expected, content_first):
+    formatter = StringFormatter(slots=[slot])
+    values = {"content": "Use {{idx}} literally", "idx": "2"}
+    if not content_first:
+        values = dict(reversed(values.items()))
+    assert formatter.apply(**values) == [expected]
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
+def test_string_formatter_preserves_existing_slot_behavior():
+    formatter = StringFormatter(slots=["{{content}} {{content}}", "{{unknown}}", {"eos_token"}])
+    assert formatter.apply(content="Hi") == ["Hi {{content}}", "{{unknown}}", {"eos_token"}]
+    assert formatter.apply() == formatter.slots
+    with pytest.raises(RuntimeError, match="Expected a string"):
+        formatter.apply(content=1)
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
 def test_function_formatter():
     formatter = FunctionFormatter(slots=["{{content}}", "</s>"], tool_format="default")
     tool_calls = json.dumps(FUNCTION)
