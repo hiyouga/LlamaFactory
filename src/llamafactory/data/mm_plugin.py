@@ -138,6 +138,19 @@ def _check_video_is_nested_images(video: "VideoInput") -> bool:
     return isinstance(video, list) and all(isinstance(frame, (str, BinaryIO, dict, ImageObject)) for frame in video)
 
 
+def to_rgb(image: "ImageObject") -> "ImageObject":
+    r"""Converts an image to RGB, replacing transparent areas with white."""
+    if image.mode in ("RGBA", "LA", "PA") or "transparency" in image.info:
+        image = image.convert("RGBA")
+        background = Image.new("RGB", image.size, (255, 255, 255))
+        background.paste(image, mask=image.getchannel("A"))
+        return background
+    elif image.mode != "RGB":
+        return image.convert("RGB")
+
+    return image
+
+
 @dataclass
 class MMPluginMixin:
     image_token: str | None
@@ -230,10 +243,7 @@ class MMPluginMixin:
             width, height = int(image.width * resize_factor), int(image.height * resize_factor)
             image = image.resize((width, height))
 
-        if image.mode != "RGB":
-            image = image.convert("RGB")
-
-        return image
+        return to_rgb(image)
 
     def _get_video_sample_indices(
         self, video_stream: "Stream", video_fps: float, video_maxlen: int, **kwargs
