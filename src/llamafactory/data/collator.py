@@ -16,6 +16,7 @@
 # limitations under the License.
 
 import copy
+import importlib.util
 import inspect
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, Optional
@@ -26,8 +27,9 @@ import torch.nn.functional as F
 from peft import PeftModel
 from transformers import DataCollatorForSeq2Seq
 
+from ..extras import logging
 from ..extras.constants import AUDIO_PLACEHOLDER, IGNORE_INDEX, IMAGE_PLACEHOLDER, MROPE_MODELS
-from ..extras.packages import is_pillow_available
+from ..extras.packages import is_pillow_available, is_transformers_version_greater_than
 
 
 if is_pillow_available():
@@ -38,6 +40,17 @@ if TYPE_CHECKING:
     from transformers import ProcessorMixin
 
     from .template import Template
+
+
+logger = logging.get_logger(__name__)
+
+
+def _is_causal_conv1d_installed() -> bool:
+    r"""Check whether the fused `causal-conv1d` kernel is importable."""
+    try:
+        return importlib.util.find_spec("causal_conv1d") is not None
+    except (ImportError, ValueError):
+        return False
 
 
 def _slice_mm_inputs_for_sample(
@@ -514,8 +527,21 @@ class SFTDataCollatorWith4DAttentionMask(MultiModalDataCollatorForSeq2Seq):
     def __post_init__(self):
         super().__post_init__()
         if self.neat_packing and self.attn_implementation == "flash_attention_2":
-            if self.model is not None and getattr(self.model.config, "model_type", None) in ["gemma4", "gpt_oss"]:
+            model_type = getattr(getattr(self.model, "config", None), "model_type", None)
+            if model_type in ["gemma4", "gpt_oss"]:
                 raise ValueError("Neat packing is not supported for gemma4, gpt_oss models for now.")
+            if model_type == "lfm2":
+                if not is_transformers_version_greater_than("5.15.0"):
+                    logger.warning_rank0(
+                        "LFM2 only consumes `seq_idx` in transformers>=5.15.0. With the installed version the "
+                        "short-convolution state may still leak across neat-packed samples."
+                    )
+                elif not _is_causal_conv1d_installed():
+                    logger.warning_rank0(
+                        "`causal-conv1d` is not installed, so LFM2 will use the PyTorch reference short-convolution "
+                        "implementation that ignores `seq_idx`. Short-convolution states may still leak across packed "
+                        "samples; install `causal-conv1d` for contamination-free neat packing."
+                    )
 
     @staticmethod
     def _unpad_packed_features(features: dict[str, Any]) -> None:
@@ -543,6 +569,19 @@ class SFTDataCollatorWith4DAttentionMask(MultiModalDataCollatorForSeq2Seq):
             elif key in keys_on_seq_dim_1 and value.dim() == 2 and value.size(0) == 1 and value.size(1) == seq_len:
                 features[key] = value.index_select(1, non_padding_indices)
 
+    @staticmethod
+    def _compute_seq_idx(position_ids: Any) -> Optional["torch.Tensor"]:
+        r"""Build the packed sample index used by hybrid models to reset convolution/recurrent state.
+
+        LFM2's short convolution consumes `seq_idx` (transformers >= 5.15) so that state does not leak between
+        packed samples. Only 2D position ids with more than one sample boundary produce a `seq_idx`; 3D mrope
+        position ids and single-sample rows are left unchanged.
+        """
+        if torch.is_tensor(position_ids) and position_ids.dim() == 2 and int((position_ids == 0).sum().item()) > 1:
+            return ((position_ids == 0).cumsum(-1) - 1).to(torch.int32)
+
+        return None
+
     def __call__(self, features: list[dict[str, Any]]) -> dict[str, "torch.Tensor"]:
         features = super().__call__(features)
         has_dummy_image = features.pop("has_dummy_image", False)
@@ -553,6 +592,11 @@ class SFTDataCollatorWith4DAttentionMask(MultiModalDataCollatorForSeq2Seq):
             assert features["input_ids"].shape[0] == 1, "bsz should be 1 for neat packing"
             if not has_dummy_image:
                 self._unpad_packed_features(features)
+
+            # Compute `seq_idx` after unpadding so its length matches the trimmed `input_ids`.
+            seq_idx = self._compute_seq_idx(features.get("position_ids"))
+            if seq_idx is not None:
+                features["seq_idx"] = seq_idx
 
             features["attention_mask"] = None  # let transformers handle causal packed mask.
         else:
