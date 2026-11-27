@@ -13,11 +13,11 @@
 # limitations under the License.
 
 import os
-from types import SimpleNamespace
 
 import pytest
 import torch
-from transformers import AutoConfig, AutoModelForCausalLM
+from peft import LoraConfig, inject_adapter_in_model
+from transformers import AutoConfig, AutoModelForCausalLM, PretrainedConfig
 
 from llamafactory.model.model_utils.misc import find_all_linear_modules, find_expanded_modules
 
@@ -44,17 +44,33 @@ def test_expanded_modules():
     ]
 
 
-@pytest.mark.parametrize("kt_wrapped", [False, True])
-def test_deepseek_v3_auto_lora_targets(kt_wrapped):
+@pytest.mark.parametrize("ownership", [("unwrapped",), ("peft",), ("forced",), ("packed",), ("forced", "peft")])
+def test_deepseek_v3_auto_lora_targets(ownership):
     model = torch.nn.Module()
-    model.config = SimpleNamespace(model_type="deepseek_v3")
-    model.mlp = torch.nn.Module()
-    model.mlp.experts = torch.nn.ModuleList([torch.nn.ModuleDict({"gate_proj": torch.nn.Linear(4, 4)})])
-    model.mlp.shared_experts = torch.nn.ModuleDict({"gate_proj": torch.nn.Linear(4, 4)})
+    model.config = PretrainedConfig()
+    model.config.model_type = "deepseek_v3"
+    model.layers = torch.nn.ModuleList()
     model.lm_head = torch.nn.Linear(4, 4)
-    if kt_wrapped:
-        model._kt_wrappers = [object()]
+    projections = ("gate_proj", "up_proj", "down_proj")
+    for owner in ownership:
+        layer = torch.nn.Module()
+        layer.experts = torch.nn.ModuleList(
+            [torch.nn.ModuleDict({name: torch.nn.Linear(4, 4) for name in projections}) for _ in range(2)]
+        )
+        layer.shared_experts = torch.nn.ModuleDict({name: torch.nn.Linear(4, 4) for name in projections})
+        layer._use_fused_expert_lora = owner == "forced"
+        layer._fused_experts = owner == "packed"
+        model.layers.append(layer)
 
-    targets = find_all_linear_modules(model, freeze_vision_tower=False, for_kt_lora=True)
-    assert set(targets) == ({"mlp.shared_experts.gate_proj"} if kt_wrapped else {"gate_proj"})
-    assert set(find_all_linear_modules(model, freeze_vision_tower=False)) == {"gate_proj"}
+    if "unwrapped" not in ownership:
+        model._kt_wrappers = list(model.layers)
+
+    assert set(find_all_linear_modules(model, False)) == set(projections)
+    targets = find_all_linear_modules(model, False, for_kt_lora=True)
+    inject_adapter_in_model(LoraConfig(r=2, target_modules=targets), model)
+    for layer, owner in zip(model.layers, ownership):
+        for expert in layer.experts:
+            assert all(hasattr(proj, "lora_A") == (owner in ("peft", "unwrapped")) for proj in expert.values())
+        assert all(hasattr(proj, "lora_A") for proj in layer.shared_experts.values())
+
+    assert not hasattr(model.lm_head, "lora_A")

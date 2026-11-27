@@ -42,18 +42,24 @@ def find_all_linear_modules(
     if freeze_vision_tower and model_type in COMPOSITE_MODELS:
         forbidden_modules.update(COMPOSITE_MODELS[model_type].vision_model_keys)
 
-    # Suffix targets can also match routed experts whose LoRA weights are owned by KT.
-    exact_targets = for_kt_lora and model_type == "deepseek_v3" and bool(getattr(model, "_kt_wrappers", None))
+    kt_managed_modules = set()
+    if for_kt_lora and model_type == "deepseek_v3":
+        for wrapper in getattr(model, "_kt_wrappers", ()) or ():
+            if getattr(wrapper, "_use_fused_expert_lora", False) or getattr(wrapper, "_fused_experts", False):
+                experts = getattr(wrapper, getattr(wrapper, "_experts_attr", "experts"), None)
+                if experts is not None:
+                    kt_managed_modules.update(experts.modules())
     module_names = set()
     for name, module in model.named_modules():
-        if exact_targets and "experts" in name.split("."):
+        if module in kt_managed_modules:
             continue
 
         if any(forbidden_module in name for forbidden_module in forbidden_modules):
             continue
 
         if "Linear" in module.__class__.__name__ and "Embedding" not in module.__class__.__name__:
-            module_names.add(name if exact_targets else name.split(".")[-1])
+            # A suffix could also match one of the excluded expert projections.
+            module_names.add(name if kt_managed_modules else name.split(".")[-1])
 
     logger.info_rank0("Found linear modules: {}".format(",".join(module_names)))
     return list(module_names)
