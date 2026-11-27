@@ -16,6 +16,8 @@ import json
 from pathlib import Path
 
 import pytest
+from tokenizers import Tokenizer, models, pre_tokenizers
+from transformers import PreTrainedTokenizerFast
 
 from llamafactory.train.megatron_bridge.dataset_export import (
     _example_to_record,
@@ -36,6 +38,34 @@ def test_inject_generation_block_into_llama_factory_template():
     assert "{% generation %}" in patched
     assert "{% endgeneration %}" in patched
     assert _inject_generation_block(patched) == patched
+
+
+@pytest.mark.parametrize(
+    ("assistant_body", "next_branch"),
+    [
+        ("{% if message.content %}{{ message.content }}{% endif %}", ""),
+        ("{{ message.content }}", "{% else %} system"),
+        ("{% if message.content %}{{ message.content }}{% endif %}", "{% elif message.role == 'system' %} system"),
+    ],
+    ids=["nested-if", "sibling-else", "nested-if-and-sibling-elif"],
+)
+def test_inject_generation_block_preserves_assistant_branch(assistant_body, next_branch):
+    template = (
+        "{% for message in messages %}{% if message['role'] == 'user' %}user "
+        "{% elif message['role'] == 'assistant' %}" + assistant_body + next_branch + "{% endif %}{% endfor %}"
+    )
+    raw = Tokenizer(models.WordLevel({"user": 0, "reply": 1, "system": 2}))
+    raw.pre_tokenizer = pre_tokenizers.WhitespaceSplit()
+    tokenizer = PreTrainedTokenizerFast(tokenizer_object=raw)
+    messages = [{"role": role, "content": "reply"} for role in ("user", "assistant", "system")]
+
+    patched = _inject_generation_block(template)
+    original = tokenizer.apply_chat_template(messages, chat_template=template, tokenize=False)
+    assert tokenizer.apply_chat_template(messages, chat_template=patched, tokenize=False) == original
+    encoded = tokenizer.apply_chat_template(
+        messages, chat_template=patched, tokenize=True, return_dict=True, return_assistant_tokens_mask=True
+    )
+    assert encoded["assistant_masks"] == ([0, 1, 0] if next_branch else [0, 1])
 
 
 def test_example_to_record_messages_format():
