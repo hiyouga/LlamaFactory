@@ -13,12 +13,13 @@
 # limitations under the License.
 
 import os
+from types import SimpleNamespace
 
 import pytest
 import torch
 from transformers import AutoConfig, AutoModelForCausalLM
 
-from llamafactory.model.model_utils.misc import find_expanded_modules
+from llamafactory.model.model_utils.misc import find_all_linear_modules, find_expanded_modules
 
 
 HF_TOKEN = os.getenv("HF_TOKEN")
@@ -41,3 +42,19 @@ def test_expanded_modules():
         "model.layers.31.self_attn.q_proj",
         "model.layers.31.self_attn.v_proj",
     ]
+
+
+@pytest.mark.parametrize("kt_wrapped", [False, True])
+def test_deepseek_v3_auto_lora_targets(kt_wrapped):
+    model = torch.nn.Module()
+    model.config = SimpleNamespace(model_type="deepseek_v3")
+    model.mlp = torch.nn.Module()
+    model.mlp.experts = torch.nn.ModuleList([torch.nn.ModuleDict({"gate_proj": torch.nn.Linear(4, 4)})])
+    model.mlp.shared_experts = torch.nn.ModuleDict({"gate_proj": torch.nn.Linear(4, 4)})
+    model.lm_head = torch.nn.Linear(4, 4)
+    if kt_wrapped:
+        model._kt_wrappers = [object()]
+
+    targets = find_all_linear_modules(model, freeze_vision_tower=False, for_kt_lora=True)
+    assert set(targets) == ({"mlp.shared_experts.gate_proj"} if kt_wrapped else {"gate_proj"})
+    assert set(find_all_linear_modules(model, freeze_vision_tower=False)) == {"gate_proj"}
