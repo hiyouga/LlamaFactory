@@ -17,7 +17,7 @@ import os
 import pytest
 import torch.multiprocessing as mp
 
-from llamafactory.v1.accelerator.helper import ReduceOp
+from llamafactory.v1.accelerator.helper import ReduceOp, synchronize
 from llamafactory.v1.accelerator.interface import DistributedInterface
 from llamafactory.v1.utils.env import find_available_port
 from llamafactory.v1.utils.pytest import dist_env
@@ -43,6 +43,11 @@ def _all_reduce_tests(local_rank: int, world_size: int, master_port: int):
 
         z = DistributedInterface().broadcast(rank + 1.0)
         assert z == pytest.approx(1.0)
+
+
+@pytest.mark.runs_on(["cpu"])
+def test_synchronize_cpu():
+    synchronize()
 
 
 def test_all_device():
