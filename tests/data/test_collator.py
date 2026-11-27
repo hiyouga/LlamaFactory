@@ -403,5 +403,214 @@ def test_4d_attention_mask():
     assert torch.all(attention_mask_computed == attention_mask_expected)
 
 
+def _make_qwen3_vl_processor(padding_side: str = "left"):
+    from transformers.models.qwen2_vl.image_processing_qwen2_vl import Qwen2VLImageProcessor
+    from transformers.models.qwen3_vl.processing_qwen3_vl import Qwen3VLProcessor
+    from transformers.models.qwen3_vl.video_processing_qwen3_vl import Qwen3VLVideoProcessor
+
+    vocab = {
+        "<|endoftext|>": 0,
+        "<|im_start|>": 1,
+        "<|im_end|>": 2,
+        "<|vision_start|>": 3,
+        "<|vision_end|>": 4,
+        "<|image_pad|>": 5,
+        "<|video_pad|>": 6,
+        "hello": 7,
+        "world": 8,
+    }
+    tokenizer = PreTrainedTokenizerFast(
+        tokenizer_object=Tokenizer(WordLevel(vocab, unk_token="<|endoftext|>")),
+        pad_token="<|endoftext|>",
+        eos_token="<|im_end|>",
+        unk_token="<|endoftext|>",
+    )
+    tokenizer.padding_side = padding_side
+    image_processor = Qwen2VLImageProcessor(patch_size=16, merge_size=2, min_pixels=32 * 32, max_pixels=128 * 128)
+    video_processor = Qwen3VLVideoProcessor(patch_size=16, merge_size=2, temporal_patch_size=2)
+    processor = Qwen3VLProcessor(image_processor=image_processor, tokenizer=tokenizer, video_processor=video_processor)
+    return tokenizer, processor
+
+
+@pytest.mark.parametrize("padding_side", ["left", "right"])
+@pytest.mark.skipif(
+    not is_transformers_version_greater_than("5.0.0"),
+    reason="Qwen3-VL mm_token_type_ids requires Transformers >= 5.0.0",
+)
+def test_qwen3_vl_do_predict_preserves_mm_token_type_ids_and_mrope(padding_side: str):
+    tokenizer, processor = _make_qwen3_vl_processor(padding_side=padding_side)
+    template = get_template_and_fix_tokenizer(tokenizer, DataArguments(template="qwen3_vl_nothink"))
+    collator = MultiModalDataCollatorForSeq2Seq(
+        template=template,
+        model=None,  # mirrors do_predict with predict_with_generate=True
+        tokenizer=tokenizer,
+        processor=processor,
+        pad_to_multiple_of=8,
+        label_pad_token_id=IGNORE_INDEX,
+    )
+
+    img = Image.new("RGB", (64, 64), (120, 180, 200))  # grid (1, 4, 4) -> 4 image tokens
+    features = [
+        {
+            "input_ids": [1, 7, 3, 5, 5, 5, 5, 4, 8, 2],
+            "attention_mask": [1] * 10,
+            "labels": [IGNORE_INDEX] * 10,
+            "images": [img],
+            "videos": [],
+            "audios": [],
+        },
+        {
+            "input_ids": [1, 3, 5, 5, 5, 5, 4, 2],
+            "attention_mask": [1] * 8,
+            "labels": [IGNORE_INDEX] * 8,
+            "images": [img],
+            "videos": [],
+            "audios": [],
+        },
+    ]
+    batch = collator(features)
+
+    assert "mm_token_type_ids" in batch
+    assert batch["mm_token_type_ids"].shape == batch["input_ids"].shape == (2, 16)
+    # Every <|image_pad|> token (id=5) must have mm_token_type_ids == 1; all other positions (incl. pads) == 0.
+    expected_types = (batch["input_ids"] == 5).long()
+    assert torch.equal(batch["mm_token_type_ids"], expected_types)
+
+    q3_cfg = AutoConfig.for_model(
+        "qwen3_vl",
+        text_config={
+            "vocab_size": 32,
+            "hidden_size": 32,
+            "intermediate_size": 64,
+            "num_hidden_layers": 1,
+            "num_attention_heads": 2,
+            "num_key_value_heads": 2,
+            "rope_parameters": {"rope_type": "default", "rope_theta": 10000.0, "mrope_section": [4, 2, 2]},
+        },
+        vision_config={
+            "depth": 1,
+            "hidden_size": 32,
+            "intermediate_size": 64,
+            "num_heads": 2,
+            "out_hidden_size": 32,
+            "patch_size": 16,
+            "spatial_merge_size": 2,
+            "temporal_patch_size": 2,
+            "deepstack_visual_indexes": [0],
+        },
+        image_token_id=5,
+        video_token_id=6,
+        vision_start_token_id=3,
+        vision_end_token_id=4,
+    )
+    model = AutoModelForImageTextToText.from_config(q3_cfg).eval()
+    with torch.no_grad():
+        pos_ids = model.model.compute_3d_position_ids(
+            input_ids=batch["input_ids"],
+            inputs_embeds=torch.zeros(2, 16, 32),
+            image_grid_thw=batch["image_grid_thw"],
+            attention_mask=batch["attention_mask"],
+            mm_token_type_ids=batch["mm_token_type_ids"],
+        )
+        assert pos_ids is not None and pos_ids.shape == (3, 2, 16)
+        # 2D image tokens must carry distinct spatial H/W coordinates rather than 1D text positions.
+        assert not torch.equal(pos_ids[1], pos_ids[2])
+
+        gen_inputs = {k: v for k, v in batch.items() if k != "labels"}
+        generated = model.generate(**gen_inputs, max_new_tokens=2, do_sample=False)
+        assert generated.shape[1] == 16 + 2
+
+    # Text-only batch through collator gets a dummy image -> mm_token_type_ids stays aligned and valid.
+    text_batch = collator([{"input_ids": [1, 7, 8, 2], "attention_mask": [1] * 4, "labels": [IGNORE_INDEX] * 4}])
+    assert "mm_token_type_ids" in text_batch
+    assert text_batch["mm_token_type_ids"].shape == text_batch["input_ids"].shape
+    assert torch.equal(text_batch["mm_token_type_ids"], (text_batch["input_ids"] == 5).long())
+
+    # Direct plugin call with no media stays empty for backward compatibility.
+    assert template.mm_plugin.get_mm_inputs([], [], [], [0], [0], [0], [[1, 7, 8, 2]], processor) == {}
+
+
+@pytest.mark.skipif(
+    not is_transformers_version_greater_than("5.2.0"),
+    reason="Qwen3.5 requires Transformers >= 5.2.0",
+)
+def test_qwen3_5_predict_and_train_collator_mm_token_type_ids():
+    tokenizer, processor = _make_qwen3_vl_processor(padding_side="left")
+    template = get_template_and_fix_tokenizer(tokenizer, DataArguments(template="qwen3_5_nothink"))
+    q35_cfg = AutoConfig.for_model(
+        "qwen3_5",
+        text_config={
+            "vocab_size": 32,
+            "hidden_size": 32,
+            "intermediate_size": 64,
+            "num_hidden_layers": 1,
+            "num_attention_heads": 2,
+            "num_key_value_heads": 2,
+            "head_dim": 16,
+            "layer_types": ["full_attention"],
+            "rope_parameters": {
+                "rope_type": "default",
+                "rope_theta": 10000.0,
+                "partial_rotary_factor": 1.0,
+                "mrope_section": [4, 2, 2],
+            },
+        },
+        vision_config={
+            "depth": 1,
+            "hidden_size": 32,
+            "intermediate_size": 64,
+            "num_heads": 2,
+            "out_hidden_size": 32,
+            "patch_size": 16,
+            "spatial_merge_size": 2,
+            "temporal_patch_size": 2,
+        },
+        image_token_id=5,
+        video_token_id=6,
+        vision_start_token_id=3,
+        vision_end_token_id=4,
+    )
+    model = AutoModelForImageTextToText.from_config(q35_cfg).eval()
+    img = Image.new("RGB", (64, 64), (120, 180, 200))
+    feat = {
+        "input_ids": [1, 7, 3, 5, 5, 5, 5, 4, 8, 2],
+        "attention_mask": [1] * 10,
+        "labels": [IGNORE_INDEX] * 8 + [8, 2],
+        "images": [img],
+        "videos": [],
+        "audios": [],
+    }
+
+    # 1. Predict path (model=None): no ValueError about missing mm_token_type_ids
+    pred_collator = MultiModalDataCollatorForSeq2Seq(
+        template=template,
+        model=None,
+        tokenizer=tokenizer,
+        processor=processor,
+        pad_to_multiple_of=8,
+        label_pad_token_id=IGNORE_INDEX,
+    )
+    pred_batch = pred_collator([feat])
+    assert "mm_token_type_ids" in pred_batch
+    with torch.no_grad():
+        gen_inputs = {k: v for k, v in pred_batch.items() if k != "labels"}
+        out = model.generate(**gen_inputs, max_new_tokens=2, do_sample=False)
+        assert out.shape[1] == pred_batch["input_ids"].shape[1] + 2
+
+    # 2. Train path (model=model): forward loss stays finite with 3D position_ids + mm_token_type_ids
+    tokenizer.padding_side = "right"
+    train_collator = MultiModalDataCollatorForSeq2Seq(
+        template=template,
+        model=model,
+        tokenizer=tokenizer,
+        processor=processor,
+        pad_to_multiple_of=8,
+        label_pad_token_id=IGNORE_INDEX,
+    )
+    train_batch = train_collator([feat])
+    with torch.no_grad():
+        assert model(**train_batch).loss.isfinite()
+
+
 if __name__ == "__main__":
     test_multimodal_collator()

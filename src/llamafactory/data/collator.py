@@ -180,15 +180,22 @@ class MultiModalDataCollatorForSeq2Seq(DataCollatorForSeq2Seq):
             return
 
         if "mm_token_type_ids" in inspect.signature(self.get_rope_func).parameters:
-            image_token_id = getattr(self.model.config, "image_token_id", None)
-            video_token_id = getattr(self.model.config, "video_token_id", None)
-            if image_token_id is not None or video_token_id is not None:
-                mm_token_type_ids = torch.zeros_like(features["input_ids"])
-                if image_token_id is not None:
-                    mm_token_type_ids[features["input_ids"] == image_token_id] = 1
-                if video_token_id is not None:
-                    mm_token_type_ids[features["input_ids"] == video_token_id] = 2
-                rope_index_kwargs["mm_token_type_ids"] = mm_token_type_ids
+            if (
+                "mm_token_type_ids" in mm_inputs
+                and torch.is_tensor(mm_inputs["mm_token_type_ids"])
+                and mm_inputs["mm_token_type_ids"].shape == features["input_ids"].shape
+            ):
+                rope_index_kwargs["mm_token_type_ids"] = mm_inputs["mm_token_type_ids"]
+            else:
+                image_token_id = getattr(self.model.config, "image_token_id", None)
+                video_token_id = getattr(self.model.config, "video_token_id", None)
+                if image_token_id is not None or video_token_id is not None:
+                    mm_token_type_ids = torch.zeros_like(features["input_ids"])
+                    if image_token_id is not None:
+                        mm_token_type_ids[features["input_ids"] == image_token_id] = 1
+                    if video_token_id is not None:
+                        mm_token_type_ids[features["input_ids"] == video_token_id] = 2
+                    rope_index_kwargs["mm_token_type_ids"] = mm_token_type_ids
 
         if "second_per_grid_ts" in mm_inputs:  # for qwen2vl
             rope_index_kwargs["second_per_grid_ts"] = mm_inputs.get("second_per_grid_ts")
@@ -421,22 +428,25 @@ class MultiModalDataCollatorForSeq2Seq(DataCollatorForSeq2Seq):
             for i, feature in enumerate(features):
                 feature["token_type_ids"] = token_type_ids[i]
 
-        if "mm_token_type_ids" in mm_inputs:  # need tensor-like for gemma4
-            mm_token_type_ids = mm_inputs.pop("mm_token_type_ids")
-            max_len = max(len(ids) for ids in mm_token_type_ids)
-            padded = []
-            for ids in mm_token_type_ids:
-                pad_len = max_len - len(ids)
-                if self.tokenizer.padding_side == "right":
-                    padded.append(ids + [0] * pad_len)
-                else:
-                    padded.append([0] * pad_len + ids)
-
-            mm_inputs["mm_token_type_ids"] = torch.tensor(padded, dtype=torch.long)
+        raw_mm_token_type_ids = mm_inputs.pop("mm_token_type_ids", None)
 
         features: dict[str, torch.Tensor] = super().__call__(features)
 
         bsz, seq_len = features["input_ids"].shape[:2]
+        if raw_mm_token_type_ids is not None:  # align padding with input_ids (incl. pad_to_multiple_of)
+            padded = []
+            for ids in raw_mm_token_type_ids:
+                ids_list = ids.tolist() if hasattr(ids, "tolist") else list(ids)
+                pad_len = seq_len - len(ids_list)
+                if pad_len > 0:
+                    if self.tokenizer.padding_side == "right":
+                        padded.append(ids_list + [0] * pad_len)
+                    else:
+                        padded.append([0] * pad_len + ids_list)
+                else:
+                    padded.append(ids_list[:seq_len])
+
+            mm_inputs["mm_token_type_ids"] = torch.tensor(padded, dtype=torch.long)
         is_omni = model_type in [
             "qwen2_5_omni_thinker",
             "qwen3_omni_moe_thinker",
@@ -529,7 +539,7 @@ class SFTDataCollatorWith4DAttentionMask(MultiModalDataCollatorForSeq2Seq):
         if non_padding_indices.numel() == seq_len:
             return
 
-        keys_on_seq_dim_1 = {"input_ids", "labels", "attention_mask", "token_type_ids"}
+        keys_on_seq_dim_1 = {"input_ids", "labels", "attention_mask", "token_type_ids", "mm_token_type_ids"}
         for key, value in list(features.items()):
             if not torch.is_tensor(value):
                 continue
@@ -639,6 +649,9 @@ class KTODataCollatorWithPadding(MultiModalDataCollatorForSeq2Seq):
 
         if "token_type_ids" in kl_batch:
             batch["kl_token_type_ids"] = kl_batch["token_type_ids"]
+
+        if "mm_token_type_ids" in kl_batch:
+            batch["kl_mm_token_type_ids"] = kl_batch["mm_token_type_ids"]
 
         batch["kto_tags"] = torch.tensor(kto_tags)
         return batch
