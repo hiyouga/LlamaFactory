@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import platform
 from typing import TYPE_CHECKING
 
 from ...extras import logging
@@ -43,7 +44,7 @@ def find_all_linear_modules(
         forbidden_modules.update(COMPOSITE_MODELS[model_type].vision_model_keys)
 
     kt_managed_modules = set()
-    if for_kt_lora and model_type == "deepseek_v3":
+    if for_kt_lora and model_type == "deepseek_v3" and platform.machine().lower() == "aarch64":
         for wrapper in getattr(model, "_kt_wrappers", ()) or ():
             if getattr(wrapper, "_use_fused_expert_lora", False) or getattr(wrapper, "_fused_experts", False):
                 experts = getattr(wrapper, getattr(wrapper, "_experts_attr", "experts"), None)
@@ -51,7 +52,7 @@ def find_all_linear_modules(
                     kt_managed_modules.update(experts.modules())
     module_names = set()
     for name, module in model.named_modules():
-        if module in kt_managed_modules:
+        if kt_managed_modules and module in kt_managed_modules:
             continue
 
         if any(forbidden_module in name for forbidden_module in forbidden_modules):

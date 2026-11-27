@@ -13,6 +13,7 @@
 # limitations under the License.
 
 import os
+import platform
 
 import pytest
 import torch
@@ -44,8 +45,10 @@ def test_expanded_modules():
     ]
 
 
+@pytest.mark.parametrize("machine", ["x86_64", "aarch64"])
 @pytest.mark.parametrize("ownership", [("unwrapped",), ("peft",), ("forced",), ("packed",), ("forced", "peft")])
-def test_deepseek_v3_auto_lora_targets(ownership):
+def test_deepseek_v3_auto_lora_targets(ownership, machine, monkeypatch):
+    monkeypatch.setattr(platform, "machine", lambda: machine)
     model = torch.nn.Module()
     model.config = PretrainedConfig()
     model.config.model_type = "deepseek_v3"
@@ -67,10 +70,14 @@ def test_deepseek_v3_auto_lora_targets(ownership):
 
     assert set(find_all_linear_modules(model, False)) == set(projections)
     targets = find_all_linear_modules(model, False, for_kt_lora=True)
+    if machine == "x86_64":
+        assert set(targets) == set(projections)
+
     inject_adapter_in_model(LoraConfig(r=2, target_modules=targets), model)
     for layer, owner in zip(model.layers, ownership):
+        peft_managed = machine == "x86_64" or owner in ("peft", "unwrapped")
         for expert in layer.experts:
-            assert all(hasattr(proj, "lora_A") == (owner in ("peft", "unwrapped")) for proj in expert.values())
+            assert all(hasattr(proj, "lora_A") == peft_managed for proj in expert.values())
         assert all(hasattr(proj, "lora_A") for proj in layer.shared_experts.values())
 
     assert not hasattr(model.lm_head, "lora_A")
