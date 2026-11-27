@@ -13,6 +13,7 @@
 # limitations under the License.
 
 
+from ..accelerator.helper import ReduceOp
 from ..accelerator.interface import DistributedInterface
 from ..config import InputArgument, TrainingArguments, get_args
 from ..core.base_trainer import BaseTrainer
@@ -39,6 +40,13 @@ class SFTTrainer(BaseTrainer):
             self._chunk_loss = LossPlugin("chunk_loss")(model, args.chunk_loss_size)
 
         super().__init__(args, model, renderer, train_dataset, callbacks)
+
+    def _get_micro_batch_loss_scales(self, micro_batches: list[BatchInput]) -> list[float]:
+        weights = [batch["loss_weights"][..., 1:].sum().item() for batch in micro_batches]
+        total = DistributedInterface().all_reduce(sum(weights), op=ReduceOp.SUM)
+        # Undo each local weighted mean, including its epsilon, before applying the global denominator.
+        # Data parallelism averages the resulting gradients across ranks.
+        return [(weight + 1e-6) * self.dp_size / (total + 1e-6) for weight in weights]
 
     def compute_loss(self, batch: BatchInput) -> Tensor:
         if self.cp_size > 1:
