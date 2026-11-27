@@ -115,8 +115,9 @@ def get_device_count() -> int:
 
 @requires_accelerator
 def synchronize() -> None:
-    """Synchronize all processes."""
-    torch.accelerator.synchronize()
+    """Wait for pending work on the current accelerator."""
+    if get_current_accelerator().type != DeviceType.CPU:
+        torch.accelerator.synchronize()
 
 
 @requires_accelerator
