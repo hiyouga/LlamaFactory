@@ -20,8 +20,12 @@ import numpy as np
 import pytest
 import torch
 from PIL import Image
+from tokenizers import Tokenizer, models, pre_tokenizers
+from transformers import GemmaTokenizerFast, PaliGemmaProcessor, SiglipImageProcessor
 
+from llamafactory.data.collator import MultiModalDataCollatorForSeq2Seq
 from llamafactory.data.mm_plugin import get_mm_plugin
+from llamafactory.extras.constants import IGNORE_INDEX
 from llamafactory.extras.packages import is_pyav_available, is_transformers_version_greater_than
 from llamafactory.hparams import get_infer_args
 from llamafactory.model import load_tokenizer
@@ -325,6 +329,65 @@ def test_llava_next_video_plugin():
     ]
     check_inputs["expected_mm_inputs"] = _get_mm_inputs(tokenizer_module["processor"])
     _check_plugin(**check_inputs)
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
+@pytest.mark.parametrize(
+    ("padding_side", "expected_second"),
+    [("right", [0, 0, 0, 1, 0]), ("left", [0, 0, 0, 0, 1])],
+)
+def test_paligemma_token_type_ids_follow_labels(padding_side: str, expected_second: list[int]):
+    vocab = {
+        "<pad>": 0,
+        "<bos>": 1,
+        "<eos>": 2,
+        "<image>": 3,
+        "<unk>": 4,
+        "hello": 5,
+        "world": 6,
+    }
+    backend = Tokenizer(models.WordLevel(vocab, unk_token="<unk>"))
+    backend.pre_tokenizer = pre_tokenizers.Whitespace()
+    tokenizer = GemmaTokenizerFast(
+        tokenizer_object=backend,
+        pad_token="<pad>",
+        bos_token="<bos>",
+        eos_token="<eos>",
+        unk_token="<unk>",
+        additional_special_tokens=["<image>"],
+        padding_side=padding_side,
+    )
+    image_processor = SiglipImageProcessor(size={"height": 8, "width": 8})
+    image_processor.image_seq_length = 2
+    processor = PaliGemmaProcessor(image_processor=image_processor, tokenizer=tokenizer)
+    plugin = get_mm_plugin("paligemma", image_token="<image>")
+    collator = MultiModalDataCollatorForSeq2Seq(
+        model=SimpleNamespace(config=SimpleNamespace(model_type="paligemma")),
+        template=SimpleNamespace(mm_plugin=plugin),
+        tokenizer=tokenizer,
+        processor=processor,
+    )
+    features = [
+        {
+            "input_ids": [3, 3, 5, 6, 2],
+            "attention_mask": [1, 1, 1, 1, 1],
+            "labels": [IGNORE_INDEX, IGNORE_INDEX, IGNORE_INDEX, 6, 2],
+            "images": [Image.new("RGB", (8, 8))],
+        },
+        {
+            "input_ids": [3, 3, 5, 2],
+            "attention_mask": [1, 1, 1, 1],
+            "labels": [IGNORE_INDEX, IGNORE_INDEX, IGNORE_INDEX, 2],
+            "images": [Image.new("RGB", (8, 8))],
+        },
+    ]
+
+    batch = collator(features)
+
+    assert batch["token_type_ids"].tolist() == [
+        [0, 0, 0, 1, 1],
+        expected_second,
+    ]
 
 
 @pytest.mark.runs_on(["cpu", "mps", "xpu"])
