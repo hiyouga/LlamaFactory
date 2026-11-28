@@ -45,6 +45,15 @@ if is_gradio_available():
     import gradio as gr
 
 
+def get_config_file_path(config_path: str) -> str:
+    r"""Get the real path of a LlamaBoard config file, refusing paths outside the config directory."""
+    config_dir = os.path.realpath(DEFAULT_CONFIG_DIR)
+    config_file = os.path.realpath(os.path.join(DEFAULT_CONFIG_DIR, config_path))
+    if config_file != config_dir and not config_file.startswith(config_dir + os.sep):
+        raise gr.Error(f"Invalid config path: {config_path} must stay inside {DEFAULT_CONFIG_DIR}.")
+    return config_file
+
+
 if TYPE_CHECKING:
     from gradio.components import Component
 
@@ -498,7 +507,7 @@ class Runner:
         lang = data[self.manager.get_elem_by_id("top.lang")]
         config_path = data[self.manager.get_elem_by_id("train.config_path")]
         os.makedirs(DEFAULT_CONFIG_DIR, exist_ok=True)
-        save_path = os.path.join(DEFAULT_CONFIG_DIR, config_path)
+        save_path = get_config_file_path(config_path)
 
         save_args(save_path, self._build_config_dict(data))
         return {output_box: ALERTS["info_config_saved"][lang] + save_path}
@@ -506,7 +515,7 @@ class Runner:
     def load_args(self, lang: str, config_path: str):
         r"""Load the training configuration from config path."""
         output_box = self.manager.get_elem_by_id("train.output_box")
-        config_dict = load_args(os.path.join(DEFAULT_CONFIG_DIR, config_path))
+        config_dict = load_args(get_config_file_path(config_path))
         if config_dict is None:
             gr.Warning(ALERTS["err_config_not_found"][lang])
             return {output_box: ALERTS["err_config_not_found"][lang]}
