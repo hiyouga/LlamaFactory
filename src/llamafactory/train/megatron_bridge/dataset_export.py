@@ -29,12 +29,8 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 _GENERATION_REGEX = re.compile(r"\{%-?\s+generation\s+-?%\}")
 _END_GENERATION_REGEX = re.compile(r"\{%-?\s+endgeneration\s+-?%\}")
-_ASSISTANT_ELIF_REGEX = re.compile(
-    r"(\{%\s*elif\s+message\['role'\]\s*==\s*'assistant'\s*%\})"
-    r"(.*?)"
-    r"(\{%\s*endif\s*%\})",
-    flags=re.DOTALL,
-)
+_ASSISTANT_ELIF_REGEX = re.compile(r"\{%\s*elif\s+message\['role'\]\s*==\s*'assistant'\s*%\}")
+_BRANCH_END_REGEX = re.compile(r"\{%([-+]?)\s*(?:elif|else|endif)\b")
 
 
 def supports_hf_chat_template() -> bool:
@@ -59,22 +55,29 @@ def _inject_generation_block(chat_template: str) -> str:
             "no `{% elif message['role'] == 'assistant' %}` block found."
         )
 
-    body = match.group(2)
-    if _END_GENERATION_REGEX.search(body):
-        return chat_template
+    from jinja2 import Environment, TemplateSyntaxError
 
-    patched = (
-        chat_template[: match.start()]
-        + match.group(1)
-        + "{% generation %}"
-        + body
-        + "{% endgeneration %}"
-        + match.group(3)
-        + chat_template[match.end() :]
-    )
-    if not _GENERATION_REGEX.search(patched):
-        raise ValueError("Failed to inject {% generation %} into chat template.")
-    return patched
+    env = Environment(extensions=["jinja2.ext.loopcontrols"])
+    for boundary in _BRANCH_END_REGEX.finditer(chat_template, match.end()):
+        body = chat_template[match.end() : boundary.start()]
+        if _END_GENERATION_REGEX.search(body):
+            return chat_template
+        # A sibling tag follows a complete body. At a nested tag, a block is still open.
+        try:
+            env.parse(body)
+        except TemplateSyntaxError:
+            continue
+
+        end_generation = "{%" + boundary.group(1) + " endgeneration %}"
+        return (
+            chat_template[: match.end()]
+            + "{% generation %}"
+            + body
+            + end_generation
+            + chat_template[boundary.start() :]
+        )
+
+    raise ValueError("Cannot find the end of the assistant branch in chat template.")
 
 
 def build_chat_template_with_generation(
