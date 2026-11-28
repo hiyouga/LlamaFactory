@@ -147,7 +147,16 @@ class TrainingArguments(ProfilerArguments, Fp8Arguments, RayArguments, BaseTrain
         default=False,
         metadata={"help": "deprecated"},
     )
+    warmup_ratio: float = field(
+        default=0.0,
+        metadata={"help": "Ratio of total training steps used for a linear warmup from 0 to learning_rate."},
+    )
 
     def __post_init__(self):
         RayArguments.__post_init__(self)
         BaseTrainingArguments.__post_init__(self)
+        if not hasattr(BaseTrainingArguments, "warmup_ratio"):
+            if self.warmup_ratio > 0 and self.warmup_steps == 0:
+                self.warmup_steps = self.warmup_ratio
+            elif 0.0 < self.warmup_steps < 1.0 and self.warmup_ratio == 0:
+                self.warmup_ratio = self.warmup_steps
