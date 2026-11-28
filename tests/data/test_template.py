@@ -534,3 +534,50 @@ def test_parse_qwen3_template():
     assert template.format_system.slots == ["<|im_start|>system\n{{content}}<|im_end|>\n"]
     assert template.format_prefix.slots == []
     assert template.default_system == ""
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
+def test_parse_spark_template():
+    from jinja2 import Template
+
+    spark_chat_template = (
+        "{%- for message in messages %}"
+        "{%- if message.role == 'system' %}"
+        "{{ '<|System|>' + message.content + '<|end_system|>' }}"
+        "{%- elif message.role == 'user' %}"
+        "{{ '<|User|>' + message.content + '<|end_user|>' }}"
+        "{%- elif message.role == 'assistant' %}"
+        "{{ '<|Bot|>' }}"
+        "{%- if message.reasoning_content is defined and message.reasoning_content %}"
+        "{{ '<think>' + message.reasoning_content + '</think>' }}"
+        "{%- else %}"
+        "{{ '</think>' }}"
+        "{%- endif %}"
+        "{{ message.content + '<|end_bot|>' }}"
+        "{%- endif %}"
+        "{%- endfor %}"
+        "{%- if add_generation_prompt %}"
+        "{{ '<|Bot|><think>' }}"
+        "{%- endif %}"
+    )
+
+    class MockSparkTokenizer:
+        chat_template = spark_chat_template
+        j_tmpl = Template(spark_chat_template)
+
+        def decode(self, ids):
+            return ""
+
+        def encode(self, text):
+            return []
+
+        def apply_chat_template(self, messages, add_generation_prompt=False, tokenize=False):
+            return self.j_tmpl.render(messages=messages, add_generation_prompt=add_generation_prompt)
+
+    tokenizer = MockSparkTokenizer()
+    template = parse_template(tokenizer)
+    assert template.__class__.__name__ == "ReasoningTemplate"
+    assert template.format_user.slots == ["<|User|>{{content}}<|end_user|><|Bot|>"]
+    assert template.format_assistant.slots == ["{{content}}<|end_bot|>"]
+    assert not template.format_assistant.slots[0].startswith(">")
+
