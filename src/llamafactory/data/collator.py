@@ -435,6 +435,9 @@ class MultiModalDataCollatorForSeq2Seq(DataCollatorForSeq2Seq):
             mm_inputs["mm_token_type_ids"] = torch.tensor(padded, dtype=torch.long)
 
         features: dict[str, torch.Tensor] = super().__call__(features)
+        if model_type == "paligemma" and "labels" in features:
+            # PaliGemma attends bidirectionally within text segments, so only supervised text should have type 1.
+            features["token_type_ids"] = features["labels"].ne(IGNORE_INDEX).long()
 
         bsz, seq_len = features["input_ids"].shape[:2]
         is_omni = model_type in [
