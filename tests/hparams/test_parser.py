@@ -14,8 +14,10 @@
 
 from dataclasses import dataclass
 
+import pytest
 from transformers import HfArgumentParser
 
+from llamafactory.hparams import DataArguments
 from llamafactory.hparams.parser import _parse_args
 
 
@@ -44,3 +46,44 @@ def test_warmup_ratio_kept_when_supported():
     (args,) = _parse_args(HfArgumentParser(V4Args), {"warmup_ratio": 0.1})
     assert args.warmup_ratio == 0.1
     assert args.warmup_steps == 0
+
+
+@pytest.mark.parametrize(
+    ("dataset", "eval_dataset", "eval_on_each_dataset"),
+    [
+        ("wind,solar", None, False),
+        ("wind,solar", "holdout", False),
+        ("wind,solar", "holdout", True),
+        ("wind,solar", "dev_a,dev_b,dev_c", True),
+        ("wind,solar", "dev_a,dev_b", False),
+        ("wind", "dev_a,dev_b", False),
+    ],
+)
+def test_interleave_probs_for_merged_datasets(dataset, eval_dataset, eval_on_each_dataset):
+    args = DataArguments(
+        dataset=dataset,
+        eval_dataset=eval_dataset,
+        eval_on_each_dataset=eval_on_each_dataset,
+        mix_strategy="interleave_under",
+        interleave_probs="0.7,0.3",
+    )
+    assert args.interleave_probs == [0.7, 0.3]
+
+
+@pytest.mark.parametrize(
+    ("dataset", "eval_dataset", "eval_on_each_dataset", "mix_strategy", "error"),
+    [
+        ("wind,solar,tidal", "holdout", True, "interleave_under", "length of dataset"),
+        ("wind,solar", "dev_a,dev_b,dev_c", False, "interleave_under", "length of eval dataset"),
+        ("wind,solar", "holdout", True, "concat", "only valid for interleaved mixing"),
+    ],
+)
+def test_invalid_interleave_probs(dataset, eval_dataset, eval_on_each_dataset, mix_strategy, error):
+    with pytest.raises(ValueError, match=error):
+        DataArguments(
+            dataset=dataset,
+            eval_dataset=eval_dataset,
+            eval_on_each_dataset=eval_on_each_dataset,
+            mix_strategy=mix_strategy,
+            interleave_probs="0.7,0.3",
+        )
