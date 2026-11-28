@@ -82,8 +82,9 @@ class HuggingfaceEngine(BaseEngine):
         images: Optional[list["ImageInput"]] = None,
         videos: Optional[list["VideoInput"]] = None,
         audios: Optional[list["AudioInput"]] = None,
-        input_kwargs: Optional[dict[str, Any]] = {},
+        input_kwargs: Optional[dict[str, Any]] = None,
     ) -> tuple[dict[str, Any], int]:
+        input_kwargs = input_kwargs or {}
         mm_input_dict = {"images": [], "videos": [], "audios": [], "imglens": [0], "vidlens": [0], "audlens": [0]}
         if images is not None:
             mm_input_dict.update({"images": images, "imglens": [len(images)]})
@@ -224,7 +225,7 @@ class HuggingfaceEngine(BaseEngine):
         images: Optional[list["ImageInput"]] = None,
         videos: Optional[list["VideoInput"]] = None,
         audios: Optional[list["AudioInput"]] = None,
-        input_kwargs: Optional[dict[str, Any]] = {},
+        input_kwargs: Optional[dict[str, Any]] = None,
     ) -> list["Response"]:
         gen_kwargs, prompt_length = HuggingfaceEngine._process_args(
             model,
@@ -283,7 +284,7 @@ class HuggingfaceEngine(BaseEngine):
         images: Optional[list["ImageInput"]] = None,
         videos: Optional[list["VideoInput"]] = None,
         audios: Optional[list["AudioInput"]] = None,
-        input_kwargs: Optional[dict[str, Any]] = {},
+        input_kwargs: Optional[dict[str, Any]] = None,
     ) -> Callable[[], str]:
         gen_kwargs, _ = HuggingfaceEngine._process_args(
             model,
@@ -326,8 +327,9 @@ class HuggingfaceEngine(BaseEngine):
         model: "PreTrainedModelWrapper",
         tokenizer: "PreTrainedTokenizer",
         batch_input: list[str],
-        input_kwargs: Optional[dict[str, Any]] = {},
+        input_kwargs: Optional[dict[str, Any]] = None,
     ) -> list[float]:
+        input_kwargs = input_kwargs or {}
         max_length: Optional[int] = input_kwargs.pop("max_length", None)
         device = getattr(model.pretrained_model, "device", "cuda")
         inputs: dict[str, torch.Tensor] = tokenizer(
