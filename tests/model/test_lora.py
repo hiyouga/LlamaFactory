@@ -17,6 +17,7 @@ import os
 import pytest
 import torch
 
+from llamafactory.hparams import get_infer_args
 from llamafactory.train.test_utils import (
     check_lora_model,
     compare_model,
@@ -101,3 +102,27 @@ def test_lora_inference():
     model = load_infer_model(**INFER_ARGS)
     ref_model = load_reference_model(TINY_LLAMA3, TINY_LLAMA_ADAPTER, use_lora=True).merge_and_unload()
     compare_model(model, ref_model)
+
+
+@pytest.mark.runs_on(["cpu"])
+def test_lora_inference_cpu_no_keyerror():
+    """Regression test for #10957: on CPU-only hosts, `llamafactory-cli chat` crashed with
+    KeyError: 'base_model.model.model.model.model.embed_tokens' when loading a LoRA adapter,
+    because device_map="auto" let accelerate disk-offload parts of the base model and
+    peft<=0.18.1 mis-resolves the offloaded module prefix in _update_offload.
+
+    The chat inference path must pin the model to CPU so the adapter loads the same way as a
+    plain from_pretrained call. Qwen2.5 is the model reported in the issue; the repo has no tiny
+    Qwen fixture, so this uses the tiny Llama-3 fixtures, which share the same "model."-prefixed
+    checkpoint keys and exercise the identical load path.
+    """
+    model_args, _, _, _ = get_infer_args({**INFER_ARGS})
+    assert model_args.device_map == {"": torch.device("cpu")}
+
+    model_args_no_adapter, _, _, _ = get_infer_args(
+        {key: value for key, value in INFER_ARGS.items() if key != "adapter_name_or_path"}
+    )
+    assert model_args_no_adapter.device_map == "auto"
+
+    model = load_infer_model(**INFER_ARGS)  # must not raise KeyError
+    assert any("lora_A" in name for name, _ in model.named_parameters())
