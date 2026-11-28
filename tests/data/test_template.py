@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import json
 import os
 from copy import deepcopy
 from typing import TYPE_CHECKING
@@ -58,6 +59,8 @@ MESSAGES_WITH_THOUGHT = [
 
 class CharTokenizer:
     r"""Minimal reversible tokenizer for testing rendered template text."""
+
+    eos_token_id = ord("~")
 
     def encode(self, text: str, add_special_tokens: bool = False) -> list[int]:
         return [ord(char) for char in text]
@@ -107,6 +110,60 @@ def _check_template(
     assert content_str == prompt_str + answer_str
     assert content_ids == prompt_ids + answer_ids
     _check_tokenization(tokenizer, (prompt_ids, answer_ids), (prompt_str, answer_str))
+
+
+def test_exaone45_registration():
+    model_name = "EXAONE-4.5-33B-Instruct"
+
+    assert SUPPORTED_MODELS[model_name][DownloadSource.DEFAULT] == "LGAI-EXAONE/EXAONE-4.5-33B"
+    assert DEFAULT_TEMPLATE[model_name] == "exaone4_5"
+    assert DEFAULT_TEMPLATE["EXAONE-3.0-7.8B-Instruct"] == "exaone"
+
+
+def test_exaone45_reasoning():
+    tokenizer = CharTokenizer()
+    template = deepcopy(TEMPLATES["exaone4_5"])
+    prompt_ids, answer_ids = template.encode_oneturn(tokenizer, MESSAGES_WITH_THOUGHT[:2], system="Be concise.")
+
+    assert tokenizer.decode(prompt_ids) == (
+        "<|system|>\nBe concise.<|endofturn|>\n<|user|>\nHow are you<|endofturn|>\n<|assistant|>\n"
+    )
+    assert tokenizer.decode(answer_ids) == "<think>\nModel thought here\n</think>\n\nI am fine!~\n"
+    assert template.get_stop_token_ids(tokenizer) == [tokenizer.eos_token_id]
+
+
+def test_exaone45_tool_round_trip():
+    tokenizer = CharTokenizer()
+    template = deepcopy(TEMPLATES["exaone4_5"])
+    tools = json.dumps([{"name": "lookup", "description": "Search records", "parameters": {"type": "object"}}])
+    messages = [
+        {"role": "user", "content": "Look up a record."},
+        {"role": "function", "content": '{"name": "lookup", "arguments": {"query": "서울"}}'},
+        {"role": "observation", "content": "Found it."},
+        {"role": "assistant", "content": "Here is the record."},
+    ]
+    (user, call), (observation, answer) = template.encode_multiturn(
+        tokenizer, messages, system="Use tools.", tools=tools
+    )
+
+    assert tokenizer.decode(user) == (
+        '<|tool_declare|>\n# Tools\n<tool>{"type": "function", "function": {"name": "lookup", '
+        '"description": "Search records", "parameters": {"type": "object"}}}</tool>\n<|endofturn|>\n'
+        "<|system|>\nUse tools.<|endofturn|>\n<|user|>\nLook up a record.<|endofturn|>\n<|assistant|>\n"
+    )
+    calls = '<tool_call>{"name": "lookup", "arguments": {"query": "서울"}}</tool_call>'
+    assert tokenizer.decode(call) == f"<think>\n\n</think>\n\n{calls}~\n"
+    assert template.extract_tool(calls) == [("lookup", '{"query": "서울"}')]
+    assert (
+        tokenizer.decode(observation) == "<|tool|>\n<tool_result>Found it.</tool_result><|endofturn|>\n<|assistant|>\n"
+    )
+    assert tokenizer.decode(answer) == "<think>\n\n</think>\n\nHere is the record.~\n"
+
+
+@pytest.mark.parametrize("payload", ["null", "true", "[]", '{"name": [], "arguments": {}}'])
+def test_exaone45_ignores_malformed_tool_call(payload: str):
+    content = f"<tool_call>{payload}</tool_call>"
+    assert TEMPLATES["exaone4_5"].extract_tool(content) == content
 
 
 def test_moss_vl_registration():
