@@ -555,6 +555,9 @@ class SFTDataCollatorWith4DAttentionMask(MultiModalDataCollatorForSeq2Seq):
                 self._unpad_packed_features(features)
 
             features["attention_mask"] = None  # let transformers handle causal packed mask.
+            position_ids = features.get("position_ids")
+            if torch.is_tensor(position_ids) and position_ids.ndim == 2 and (position_ids == 0).sum() > 1:
+                features["seq_idx"] = ((position_ids == 0).cumsum(-1) - 1).to(torch.int32)
         else:
             # `DataCollatorForSeq2Seq(pad_to_multiple_of=...)` pads `input_ids`/`attention_mask`
             # but leaves `position_ids` untouched (it is not in `model_input_names`). On the
