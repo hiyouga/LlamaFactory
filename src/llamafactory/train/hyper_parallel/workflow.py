@@ -28,7 +28,7 @@ from ...model.loader import load_config
 from ..sft.metric import ComputeAccuracy, ComputeSimilarity, eval_logit_processor
 from ..trainer_utils import create_modelcard_and_push
 from .loader import load_hyper_parallel_model
-from .model_registry import apply_model_parallel_plan
+from .model_registry import build_model_distributed_setup
 from .trainer import HyperParallelTrainer
 
 
@@ -87,7 +87,7 @@ def _prepare_hp_args(
 
     hp_args.validate()
 
-    if hp_args.activation_mode != "none":
+    if hp_args.activation_checkpoint is not None and hp_args.activation_checkpoint.mode != "off":
         model_args.disable_gradient_checkpointing = True
     return hp_args
 
@@ -101,8 +101,7 @@ def run_pt(
 ):
     hp_args = _prepare_hp_args(finetuning_args, model_args, training_args)
     model_type = getattr(load_config(model_args), "model_type", None)
-    apply_model_parallel_plan(hp_args, model_type)
-    distributed_setup = hp_args.build_distributed_setup()
+    distributed_setup = build_model_distributed_setup(hp_args, model_type)
 
     tokenizer_module = load_tokenizer(model_args)
     tokenizer = tokenizer_module["tokenizer"]
@@ -180,8 +179,7 @@ def run_sft(
 ):
     hp_args = _prepare_hp_args(finetuning_args, model_args, training_args)
     model_type = getattr(load_config(model_args), "model_type", None)
-    apply_model_parallel_plan(hp_args, model_type)
-    distributed_setup = hp_args.build_distributed_setup()
+    distributed_setup = build_model_distributed_setup(hp_args, model_type)
 
     tokenizer_module = load_tokenizer(model_args)
     tokenizer = tokenizer_module["tokenizer"]
