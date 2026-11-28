@@ -244,6 +244,77 @@ def test_gemma4_plugin():
     _check_plugin(**check_inputs)
 
 
+@pytest.mark.parametrize("extractor_source", ["feature", "audio_missing_feature", "audio_none_feature", "both"])
+@pytest.mark.parametrize("expand_mm_tokens", [True, False])
+def test_gemma4_plugin_uses_audio_processor_fallback(monkeypatch, extractor_source, expand_mm_tokens):
+    extractor_calls, sampling_rates = [], []
+
+    class AudioProcessor:
+        def __init__(self, name, sampling_rate):
+            self.name = name
+            self.sampling_rate = sampling_rate
+
+        def __call__(self, audios, **kwargs):
+            extractor_calls.append(self.name)
+            return {}
+
+    class Processor:
+        image_token = "<|image|>"
+        video_token = "<|video|>"
+        audio_token = "<|audio|>"
+        boi_token = "<start_of_image>"
+        eoi_token = "<end_of_image>"
+        boa_token = "<start_of_audio>"
+        eoa_token = "<end_of_audio>"
+        audio_processor = AudioProcessor("audio", 16000)
+
+        @staticmethod
+        def _compute_audio_num_tokens(audio, sampling_rate):
+            sampling_rates.append(sampling_rate)
+            return 2
+
+    if extractor_source in {"feature", "both"}:
+        Processor.feature_extractor = AudioProcessor("feature", 22050)
+    elif extractor_source == "audio_none_feature":
+        Processor.feature_extractor = None
+
+    if extractor_source == "feature":
+        Processor.audio_processor = None
+
+    gemma4_plugin = get_mm_plugin(name="gemma4", audio_token="<|audio|>")
+    gemma4_plugin.expand_mm_tokens = expand_mm_tokens
+    monkeypatch.setattr(
+        gemma4_plugin,
+        "_regularize_audios",
+        lambda audios, **kwargs: {"audios": audios},
+    )
+    messages = [{"role": "user", "content": "<audio>"}]
+
+    processed = gemma4_plugin.process_messages(messages, NO_IMAGES, NO_VIDEOS, AUDIOS, Processor())
+
+    expected_audio_tokens = "<|audio|>" * (2 if expand_mm_tokens else 1)
+    assert processed == [
+        {
+            "role": "user",
+            "content": f"<start_of_audio>{expected_audio_tokens}<end_of_audio>",
+        }
+    ]
+    expected_source = "feature" if extractor_source in {"feature", "both"} else "audio"
+    assert extractor_calls == ([expected_source] if expand_mm_tokens else [])
+    assert sampling_rates == ([22050 if expected_source == "feature" else 16000] if expand_mm_tokens else [])
+    assert messages == [{"role": "user", "content": "<audio>"}]
+
+
+@pytest.mark.parametrize("extractors", [{}, {"feature_extractor": None, "audio_processor": None}])
+def test_gemma4_plugin_rejects_missing_audio_extractor(extractors):
+    plugin = get_mm_plugin(name="gemma4", audio_token="<|audio|>")
+
+    with pytest.raises(ValueError, match="Audio feature extractor was not found"):
+        plugin.process_messages(
+            [{"role": "user", "content": "<audio>"}], NO_IMAGES, NO_VIDEOS, AUDIOS, SimpleNamespace(**extractors)
+        )
+
+
 @pytest.mark.runs_on(["cpu", "mps", "xpu"])
 @pytest.mark.skipif(not is_transformers_version_greater_than("4.52.0"), reason="Requires transformers>=4.52.0")
 def test_internvl_plugin():
