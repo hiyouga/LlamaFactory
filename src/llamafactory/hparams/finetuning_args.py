@@ -570,6 +570,21 @@ class FinetuningArguments(
         default=False,
         metadata={"help": "Whether to use the EAFT loss."},
     )
+    use_ambient_loss: bool = field(
+        default=False,
+        metadata={
+            "help": "Whether to use Ambient SFT (https://huggingface.co/papers/2611.23229): on a random fraction of "
+            "micro-batches, match the initial model at a high temperature instead of the SFT targets."
+        },
+    )
+    ambient_clean_probability: float = field(
+        default=0.75,
+        metadata={"help": "The probability that a micro-batch uses the standard SFT loss in Ambient SFT."},
+    )
+    ambient_temperature: float = field(
+        default=2.5,
+        metadata={"help": "The temperature at which the model matches the initial model in Ambient SFT."},
+    )
     eaft_alpha: float = field(
         default=1.0,
         metadata={"help": "The alpha parameter for EAFT loss to control the power of adaptive weight."},
@@ -628,6 +643,12 @@ class FinetuningArguments(
         assert self.reward_model_quantization_bit in [None, 8, 4], "We only accept 4-bit or 8-bit quantization."
         assert self.hyper_parallel_cp_size > 0, "`hyper_parallel_cp_size` must be greater than 0."
         assert self.hyper_parallel_ep_size > 0, "`hyper_parallel_ep_size` must be greater than 0."
+
+        if self.use_ambient_loss and self.stage != "sft":
+            raise ValueError("`use_ambient_loss` is only valid for the sft stage.")
+
+        if self.use_ambient_loss and (self.use_dft_loss or self.use_asft_loss or self.use_eaft_loss):
+            raise ValueError("`use_ambient_loss` cannot be combined with the DFT, ASFT or EAFT losses.")
 
         if self.stage == "ppo" and self.reward_model is None:
             raise ValueError("`reward_model` is necessary for PPO training.")

@@ -765,6 +765,38 @@ def _kl_divergence(
     return (kl * mask).sum() / mask.sum()
 
 
+def ambient_loss_func(
+    logits: "torch.Tensor",
+    ref_logits: "torch.Tensor",
+    labels: "torch.Tensor",
+    num_items_in_batch: Optional["torch.Tensor"] = None,
+    temperature: float = 2.5,
+    ignore_index: int = -100,
+) -> "torch.Tensor":
+    r"""Compute the Ambient SFT matching loss (https://huggingface.co/papers/2611.23229).
+
+    Cross-entropy from the initial model's tempered next-token distribution to the model's tempered distribution at
+    every supervised position, scaled by the ratio of the initial model's entropy at `temperature` to its entropy at
+    temperature 1, and reduced like the standard SFT loss.
+    """
+    shift_labels = labels[..., 1:]
+    loss_mask = shift_labels != ignore_index
+    ref_probs = F.softmax(ref_logits[..., :-1, :].float() / temperature, dim=-1)
+    log_probs = F.log_softmax(logits[..., :-1, :].float() / temperature, dim=-1)
+    per_token_loss = -(ref_probs * log_probs).sum(-1) * loss_mask
+    with torch.no_grad():
+        entropy = -(ref_probs * ref_probs.clamp(min=1e-12).log()).sum(-1)
+        ref_log_probs = F.log_softmax(ref_logits[..., :-1, :].float(), dim=-1)
+        base_entropy = -(ref_log_probs.exp() * ref_log_probs).sum(-1)
+        entropy_scale = (entropy * loss_mask).sum() / (base_entropy * loss_mask).sum().clamp(min=1e-8)
+
+    num_tokens = loss_mask.sum() if num_items_in_batch is None else num_items_in_batch
+    if torch.is_tensor(num_tokens):
+        num_tokens = num_tokens.to(per_token_loss.device)
+
+    return entropy_scale * per_token_loss.sum() / torch.as_tensor(num_tokens).clamp(min=1)
+
+
 def eaft_loss_func(
     outputs: "torch.Tensor",
     labels: "torch.Tensor",

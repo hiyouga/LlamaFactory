@@ -124,6 +124,10 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
                 asft_alpha=finetuning_args.asft_alpha,
             )
 
+        if finetuning_args.use_ambient_loss:
+            # every rank draws the same coins in the same order, so they agree without communication
+            self.ambient_generator = torch.Generator().manual_seed(training_args.seed)
+
         if training_args.fp8 and hasattr(self, "accelerator"):  # verify FP8 status after trainer initialization
             verify_fp8_status(self.accelerator, training_args)
 
@@ -158,8 +162,39 @@ class CustomSeq2SeqTrainer(Seq2SeqTrainer):
                 ref_logits = ref_outputs.logits
             outputs = model(**inputs)
             return self.compute_loss_func(outputs, inputs["labels"], ref_logits)
+        elif self.finetuning_args.use_ambient_loss and model.training:
+            # one coin per micro-batch, so that a step with gradient accumulation mixes both losses
+            coin = torch.rand(1, generator=self.ambient_generator).item()
+            if coin >= self.finetuning_args.ambient_clean_probability:
+                return self._compute_ambient_loss(model, inputs, *args, **kwargs)
+
+            return super().compute_loss(model, inputs, *args, **kwargs)
         else:
             return super().compute_loss(model, inputs, *args, **kwargs)
+
+    def _compute_ambient_loss(self, model, inputs, return_outputs=False, num_items_in_batch=None):
+        from ..trainer_utils import ambient_loss_func
+
+        model_inputs = {k: v for k, v in inputs.items() if k != "labels"}
+        outputs = model(**model_inputs)
+        with torch.no_grad():
+            if self.ref_model is None:  # LoRA: the initial model is the model without its adapters
+                with self.accelerator.unwrap_model(model).disable_adapter():
+                    ref_logits = model(**model_inputs).logits
+            else:
+                ref_logits = self.ref_model(**model_inputs).logits
+
+        if not self.model_accepts_loss_kwargs:  # the SFT loss is then a per-micro-batch mean, so match it
+            num_items_in_batch = None
+
+        loss = ambient_loss_func(
+            outputs.logits, ref_logits, inputs["labels"], num_items_in_batch, self.finetuning_args.ambient_temperature
+        )
+        # like `Trainer.compute_loss`: `num_items_in_batch` counts the tokens of every rank, and DDP averages gradients
+        if self.args.average_tokens_across_devices and num_items_in_batch is not None:
+            loss = loss * self.accelerator.num_processes
+
+        return (loss, outputs) if return_outputs else loss
 
     @override
     def prediction_step(
