@@ -126,11 +126,11 @@ def get_transformer_layer_cls(model: HFModel) -> set[type[nn.Module]]:
 
 
 def _save_pretrained(model: HFModel, output_dir: str, state_dict: dict) -> None:
-    """Serialize remote model code using its original class instead of FSDP2's generated wrapper."""
+    """Serialize through the original HF class instead of FSDP2's generated wrapper."""
     model_cls = type(model)
-    if isinstance(model, FSDPModule) and getattr(model_cls, "_auto_class", None) is not None:
+    if isinstance(model, FSDPModule):
         # fully_shard creates a class with bases (FSDPModule, original_model_class).
-        # HF otherwise copies PyTorch's FSDP source and writes an unloadable auto_map.
+        # HF needs the original identity for both custom code export and native weight conversions.
         model.__class__ = model_cls.__bases__[1]
     try:
         model.save_pretrained(output_dir, state_dict=state_dict, max_shard_size="4GB")
@@ -547,8 +547,16 @@ class FSDP2Engine:
         if not checkpoint_files:
             raise ValueError(f"No checkpoint files found in {hf_model_path}")
 
-        param_map = dict(model.named_parameters())
         conversion_ctx = self._try_build_hf_weight_conversion_context(model)
+        # Meta initialization restores derived non-persistent buffers separately.
+        state = conversion_ctx["meta_state_dict"] if conversion_ctx is not None else model.state_dict()
+        persistent_buffers = {name: buf for name, buf in model.named_buffers() if name in state}
+        tensor_map = dict(model.named_parameters()) | persistent_buffers
+        missing_router_buffers = set()
+        if getattr(getattr(model, "config", None), "model_type", None) == "deepseek_v4":
+            missing_router_buffers = {
+                key for key in persistent_buffers if key.endswith((".gate.tid2eid", ".gate.e_score_correction_bias"))
+            }
         total_files = len(checkpoint_files)
 
         for i, ckpt_file in enumerate(checkpoint_files):
@@ -571,6 +579,8 @@ class FSDP2Engine:
                                 conversion_ctx["prefix"],
                                 meta_state_dict=conversion_ctx["meta_state_dict"],
                             )
+                            if renamed_key not in tensor_map and key in tensor_map:
+                                renamed_key, source_pattern = key, None
 
                         if source_pattern is not None:
                             template = conversion_ctx["converter_templates"][source_pattern]
@@ -583,9 +593,10 @@ class FSDP2Engine:
                                 source_pattern,
                                 _make_safetensor_loader(ckpt_file, key),
                             )
-                        elif renamed_key in param_map:
+                        elif renamed_key in tensor_map:
                             tensor = f.get_tensor(key)
-                            self._copy_weights(param_map[renamed_key], tensor)
+                            self._copy_weights(tensor_map[renamed_key], tensor)
+                            missing_router_buffers.discard(renamed_key)
             else:
                 state_dict = torch.load(ckpt_file, map_location="cpu")
                 for key, tensor in sorted(state_dict.items(), key=lambda item: sort_key(item[0])):
@@ -596,9 +607,11 @@ class FSDP2Engine:
                             key,
                             conversion_ctx["renamings"],
                             conversion_ctx["converters"],
-                            prefix=conversion_ctx["prefix"],
+                            conversion_ctx["prefix"],
                             meta_state_dict=conversion_ctx["meta_state_dict"],
                         )
+                        if renamed_key not in tensor_map and key in tensor_map:
+                            renamed_key, source_pattern = key, None
 
                     if source_pattern is not None:
                         template = conversion_ctx["converter_templates"][source_pattern]
@@ -606,8 +619,9 @@ class FSDP2Engine:
                             renamed_key, copy.deepcopy(template)
                         )
                         converter.add_tensor(renamed_key, key, source_pattern, tensor)
-                    elif renamed_key in param_map:
-                        self._copy_weights(param_map[renamed_key], tensor)
+                    elif renamed_key in tensor_map:
+                        self._copy_weights(tensor_map[renamed_key], tensor)
+                        missing_router_buffers.discard(renamed_key)
                 del state_dict
                 gc.collect()
 
@@ -620,10 +634,16 @@ class FSDP2Engine:
                 for target_name, tensor in realized_tensors.items():
                     if isinstance(tensor, list):
                         tensor = tensor[0]
-                    if target_name in param_map:
-                        self._copy_weights(param_map[target_name], tensor)
+                    if target_name in tensor_map:
+                        self._copy_weights(tensor_map[target_name], tensor)
+                        missing_router_buffers.discard(target_name)
                 del realized_tensors
                 gc.collect()
+
+        if missing_router_buffers:
+            raise ValueError(
+                f"DeepSeek V4 checkpoint is missing router buffers: {', '.join(sorted(missing_router_buffers))}"
+            )
 
     def _resolve_hf_checkpoint_dir(self, hf_model_path: str) -> str:
         """Resolve a HF model identifier or local path to a local directory containing checkpoint files.

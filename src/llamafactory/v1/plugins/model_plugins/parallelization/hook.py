@@ -26,6 +26,10 @@ from .batch import MULTIMODAL_ENCODER_INPUT_KEYS, split_sequence_tensor
 
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from torch import Tensor
+
     from ....utils.types import HFModel
 
 
@@ -65,7 +69,9 @@ def _split_deepstack_inputs(kwargs: dict[str, Any], device_mesh) -> None:
     ]
 
 
-def install_sequence_parallel_hook(model: HFModel) -> None:
+def install_sequence_parallel_hook(
+    model: HFModel, *, input_validator: Callable[[Tensor, Tensor | None], None] | None = None
+) -> None:
     """Install the common CP split at the model's language boundary."""
     get_base_model = getattr(model, "get_base_model", None)
     if callable(get_base_model):
@@ -103,6 +109,8 @@ def install_sequence_parallel_hook(model: HFModel) -> None:
         position_ids = kwargs["position_ids"]
         if position_ids.shape[-1] != sequence_length:
             raise ValueError("position_ids must match the global sequence length before CP splitting.")
+        if input_validator is not None:
+            input_validator(position_ids, attention_mask)
 
         _split_deepstack_inputs(kwargs, device_mesh)
 

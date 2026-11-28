@@ -14,12 +14,12 @@
 
 """Rendering: turn a v1 ``Sample`` into a tokenized ``ModelInput``.
 
-Public entry point is :class:`Renderer`. Internals are split by concern:
+Public entry points are :class:`Renderer` and :func:`create_renderer`. Internals are split by concern:
 ``format`` (message<->HF conversion) and ``escape`` (special-token escaping). Assistant supervision
 is located by a prompt/full token diff rather than a per-model marker table.
 """
 
-from .rendering import Renderer
+from .rendering import Renderer, create_renderer
 
 
-__all__ = ["Renderer"]
+__all__ = ["Renderer", "create_renderer"]

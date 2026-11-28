@@ -33,10 +33,13 @@ class FSDPTurboEPModelSpec:
         ep_modules: list[str],
         ep_fsdp_modules: list[str] | None = None,
         prepare_fn: Callable[[HFModel], HFModel] | None = None,
+        *,
+        wrap_unit_efsdp: bool = False,
     ) -> None:
         self.ep_modules = ep_modules
         self.ep_fsdp_modules = ep_fsdp_modules
         self.prepare_fn = prepare_fn
+        self.wrap_unit_efsdp = wrap_unit_efsdp
 
     @classmethod
     def register(
@@ -98,3 +101,9 @@ def _prepare_qwen3_moe_for_ep(model: HFModel) -> HFModel:
 )
 def _prepare_qwen3_5_moe_for_ep(model: HFModel) -> HFModel:
     return model
+
+
+FSDPTurboEPModelSpec._registry["deepseek_v4"] = FSDPTurboEPModelSpec(
+    ep_modules=["model.layers.{*}.mlp.experts"],
+    wrap_unit_efsdp=True,
+)

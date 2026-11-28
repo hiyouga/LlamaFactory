@@ -84,3 +84,78 @@ def test_fit_finalizes_accumulated_gradients_before_clipping_and_step(monkeypatc
     assert events == ["backward", "backward", "synchronize", "clip", "step"] * 2
     assert model.weight.item() == pytest.approx(0.8, abs=1e-6)
     assert model.weight.grad is None
+
+
+@pytest.mark.parametrize("attention", ["eager", "flash_attention_2"])
+@pytest.mark.parametrize("strategy", ["normal", "dynamic_batching", "padding_free", "dynamic_padding_free"])
+def test_padding_free_batching_requires_flash_attention(monkeypatch, attention, strategy):
+    from llamafactory.v1.config.arg_utils import BatchingStrategy
+
+    strategy = BatchingStrategy(strategy)
+    trainer = SimpleNamespace(
+        model=SimpleNamespace(config=SimpleNamespace(_attn_implementation=attention)),
+        train_dataset=[],
+        renderer=None,
+        args=SimpleNamespace(
+            batching_strategy=strategy,
+            micro_batch_size=1,
+            global_batch_size=1,
+            cutoff_len=8,
+            batching_workers=0,
+            seed=42,
+        ),
+    )
+    created = []
+    monkeypatch.setattr(base_trainer, "BatchGenerator", lambda **kwargs: created.append(kwargs) or kwargs)
+    if (
+        strategy in (BatchingStrategy.PADDING_FREE, BatchingStrategy.DYNAMIC_PADDING_FREE)
+        and attention != "flash_attention_2"
+    ):
+        with pytest.raises(ValueError, match=strategy.value):
+            BaseTrainer._create_batch_generator(trainer)
+        assert not created
+    else:
+        BaseTrainer._create_batch_generator(trainer)
+        assert trainer.train_batch_generator is created[0]
+
+
+@pytest.mark.parametrize("cp_size", [1, 2])
+def test_distributed_v4_sft_requires_an_explicit_backend(monkeypatch, cp_size):
+    from llamafactory.v1.config import TrainingArguments
+    from llamafactory.v1.trainers import sft_trainer
+
+    interface = SimpleNamespace(get_world_size=lambda: 2)
+    monkeypatch.setattr(sft_trainer, "DistributedInterface", lambda: interface)
+    model = SimpleNamespace(config=SimpleNamespace(model_type="deepseek_v4"))
+    with pytest.raises(ValueError, match="Distributed DeepSeek V4 SFT requires"):
+        sft_trainer.SFTTrainer(TrainingArguments(cp_size=cp_size), model, None, [])
+
+
+@pytest.mark.parametrize("backend", ["fsdp2", "fsdpturbo"])
+def test_sft_entry_releases_completed_optimizer_state_before_export(monkeypatch, backend):
+    from llamafactory.v1.trainers import sft_trainer
+
+    events = []
+    parameter = torch.nn.Parameter(torch.ones(1))
+    optimizer = torch.optim.AdamW([parameter])
+    optimizer.state[parameter]["exp_avg"] = torch.ones(1)
+
+    def fit():
+        assert optimizer.state
+        events.append("fit")
+
+    def save():
+        assert not optimizer.state
+        assert optimizer.param_groups[0]["params"][0] is parameter
+        events.append("save")
+
+    trainer = SimpleNamespace(optimizer=optimizer, fit=fit, save_model=save)
+    arguments = SimpleNamespace(dist_config=SimpleNamespace(name=backend))
+    interface = SimpleNamespace(destroy=lambda: events.append("destroy"))
+    monkeypatch.setattr(sft_trainer, "get_args", lambda _: (None, SimpleNamespace(train_dataset=[]), arguments, None))
+    monkeypatch.setattr(sft_trainer, "DistributedInterface", lambda *_: interface)
+    monkeypatch.setattr(sft_trainer, "DataEngine", lambda _: [])
+    monkeypatch.setattr(sft_trainer, "ModelEngine", lambda *_, **__: SimpleNamespace(model=None, renderer=None))
+    monkeypatch.setattr(sft_trainer, "SFTTrainer", lambda **_: trainer)
+    sft_trainer.run_sft({})
+    assert events == ["fit", "save", "destroy"]

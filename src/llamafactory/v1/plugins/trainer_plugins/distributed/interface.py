@@ -53,10 +53,17 @@ class FSDPTurboParams:
     fsdp_ignored_modules: list[str] = field(default_factory=list)
     hook_modules: list[str] = field(default_factory=list)
     fsdp_implementation: str = "native"
+    efsdp_all_gather_on_compute_stream: bool = False
 
     def __post_init__(self) -> None:
         if self.ep_size < 1:
             raise ValueError(f"ep_size must be positive, got {self.ep_size}.")
+        if self.efsdp_all_gather_on_compute_stream and (
+            self.ep_size == 1 or self.fsdp_implementation != "native" or self.offload_params
+        ):
+            raise ValueError(
+                "`efsdp_all_gather_on_compute_stream` requires native EFSDP, `ep_size > 1`, and no CPU offload."
+            )
 
 
 @dataclass

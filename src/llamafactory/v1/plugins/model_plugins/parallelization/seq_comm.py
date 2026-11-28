@@ -29,10 +29,14 @@ def all_to_all_tensor(
     group: Optional[dist.ProcessGroup] = None,
 ):
     seq_world_size = dist.get_world_size(group)
+    if local_input.shape[scatter_dim] % seq_world_size:
+        raise ValueError("The all-to-all scatter dimension must be divisible by the process-group size.")
     input_list = [t.contiguous() for t in torch.tensor_split(local_input, seq_world_size, scatter_dim)]
-    output_list = [torch.empty_like(input_list[0]) for _ in range(seq_world_size)]
-    dist.all_to_all(output_list, input_list, group=group)
-    return torch.cat(output_list, dim=gather_dim).contiguous()
+    # Keep the peer axis explicit; all_to_all_single also supports CPU/Gloo.
+    send = torch.stack(input_list)
+    received = torch.empty_like(send)
+    dist.all_to_all_single(received, send, group=group)
+    return torch.cat(received.unbind(0), dim=gather_dim).contiguous()
 
 
 class SeqAllToAll4D(torch.autograd.Function):

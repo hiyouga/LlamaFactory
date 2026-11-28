@@ -149,19 +149,14 @@ class BaseTrainer:
         if self.args.cp_size > 1:
             from ..plugins.model_plugins.parallelization.sequence_parallel import SequenceParallelModelPlugin
 
-            if model.config._attn_implementation != "flash_attention_2":
-                raise ValueError(
-                    "Sequence parallelism requires flash attention. Please set `flash_attn: flash_attention_2`."
-                )
-
             SequenceParallelModelPlugin(self.args.cp_mode)(model, self.args.cp_size)
 
     def _create_batch_generator(self) -> None:
         if (
-            self.args.batching_strategy == BatchingStrategy.PADDING_FREE
+            self.args.batching_strategy in (BatchingStrategy.PADDING_FREE, BatchingStrategy.DYNAMIC_PADDING_FREE)
             and getattr(self.model.config, "_attn_implementation", None) != "flash_attention_2"
         ):
-            raise ValueError("`padding_free` requires `flash_attn: flash_attention_2`.")
+            raise ValueError(f"`{self.args.batching_strategy}` requires `flash_attn: flash_attention_2`.")
 
         self.train_batch_generator = BatchGenerator(
             dataset=self.train_dataset,
