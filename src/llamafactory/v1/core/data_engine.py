@@ -119,7 +119,7 @@ class DataEngine(Dataset):
 
             size = self.dataset_infos[dataset_name].get("size")
             weight = self.dataset_infos[dataset_name].get("weight")
-            if size or weight:
+            if size is not None or weight is not None:
                 from ..plugins.data_plugins.loader import adjust_data_index
 
                 data_index = adjust_data_index(data_index, size, weight)
