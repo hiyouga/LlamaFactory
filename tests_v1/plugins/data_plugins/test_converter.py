@@ -158,6 +158,32 @@ def test_pair_converter_multimodal_shared_media():
         ]
 
 
+@pytest.mark.parametrize("tool_result", ["Sunny, 22C", '{"weather": "Sunny", "temperature": 22}'])
+def test_pair_converter_tool_results(tool_result: str):
+    example = {
+        "chosen": [
+            {"role": "user", "content": "What is the weather?"},
+            {"role": "assistant", "content": "Checking the weather."},
+            {"role": "tool", "content": tool_result},
+            {"role": "assistant", "content": "It is sunny and 22C."},
+        ],
+        "rejected": [
+            {"role": "user", "content": "What is the weather?"},
+            {"role": "assistant", "content": "Checking the weather."},
+            {"role": "tool", "content": tool_result},
+            {"role": "assistant", "content": "It is raining."},
+        ],
+    }
+    out = DataConverterPlugin("pair")(example)
+    for side in ("chosen_messages", "rejected_messages"):
+        assert len(out[side]) == 4
+        assert out[side][2] == {
+            "role": "tool",
+            "content": [{"type": "text", "value": tool_result}],
+            "loss_weight": 0.0,
+        }
+
+
 def test_converter_media_count_mismatch():
     # more tags than media files
     with pytest.raises(ValueError, match="More <image> tags"):
