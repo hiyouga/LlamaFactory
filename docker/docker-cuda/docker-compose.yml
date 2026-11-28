@@ -6,6 +6,8 @@ services:
       args:
         PIP_INDEX: https://pypi.org/simple
     container_name: llamafactory
+    environment:
+      - GRADIO_SERVER_NAME=0.0.0.0
     ports:
       - "7860:7860"
       - "8000:8000"
