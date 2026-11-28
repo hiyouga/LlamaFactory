@@ -12,6 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import platform
 from typing import TYPE_CHECKING
 
 from ...extras import logging
@@ -25,7 +26,9 @@ if TYPE_CHECKING:
 logger = logging.get_logger(__name__)
 
 
-def find_all_linear_modules(model: "PreTrainedModel", freeze_vision_tower: bool) -> list[str]:
+def find_all_linear_modules(
+    model: "PreTrainedModel", freeze_vision_tower: bool, *, for_kt_lora: bool = False
+) -> list[str]:
     r"""Find all available modules to apply LoRA, GaLore or APOLLO."""
     model_type = getattr(model.config, "model_type", None)
     forbidden_modules = {"lm_head"}
@@ -40,13 +43,24 @@ def find_all_linear_modules(model: "PreTrainedModel", freeze_vision_tower: bool)
     if freeze_vision_tower and model_type in COMPOSITE_MODELS:
         forbidden_modules.update(COMPOSITE_MODELS[model_type].vision_model_keys)
 
+    kt_managed_modules = set()
+    if for_kt_lora and model_type == "deepseek_v3" and platform.machine().lower() == "aarch64":
+        for wrapper in getattr(model, "_kt_wrappers", ()) or ():
+            if getattr(wrapper, "_use_fused_expert_lora", False) or getattr(wrapper, "_fused_experts", False):
+                experts = getattr(wrapper, getattr(wrapper, "_experts_attr", "experts"), None)
+                if experts is not None:
+                    kt_managed_modules.update(experts.modules())
     module_names = set()
     for name, module in model.named_modules():
+        if kt_managed_modules and module in kt_managed_modules:
+            continue
+
         if any(forbidden_module in name for forbidden_module in forbidden_modules):
             continue
 
         if "Linear" in module.__class__.__name__ and "Embedding" not in module.__class__.__name__:
-            module_names.add(name.split(".")[-1])
+            # A suffix could also match one of the excluded expert projections.
+            module_names.add(name if kt_managed_modules else name.split(".")[-1])
 
     logger.info_rank0("Found linear modules: {}".format(",".join(module_names)))
     return list(module_names)

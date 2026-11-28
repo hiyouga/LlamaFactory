@@ -13,12 +13,14 @@
 # limitations under the License.
 
 import os
+import platform
 
 import pytest
 import torch
-from transformers import AutoConfig, AutoModelForCausalLM
+from peft import LoraConfig, inject_adapter_in_model
+from transformers import AutoConfig, AutoModelForCausalLM, PretrainedConfig
 
-from llamafactory.model.model_utils.misc import find_expanded_modules
+from llamafactory.model.model_utils.misc import find_all_linear_modules, find_expanded_modules
 
 
 HF_TOKEN = os.getenv("HF_TOKEN")
@@ -41,3 +43,41 @@ def test_expanded_modules():
         "model.layers.31.self_attn.q_proj",
         "model.layers.31.self_attn.v_proj",
     ]
+
+
+@pytest.mark.parametrize("machine", ["x86_64", "aarch64"])
+@pytest.mark.parametrize("ownership", [("unwrapped",), ("peft",), ("forced",), ("packed",), ("forced", "peft")])
+def test_deepseek_v3_auto_lora_targets(ownership, machine, monkeypatch):
+    monkeypatch.setattr(platform, "machine", lambda: machine)
+    model = torch.nn.Module()
+    model.config = PretrainedConfig()
+    model.config.model_type = "deepseek_v3"
+    model.layers = torch.nn.ModuleList()
+    model.lm_head = torch.nn.Linear(4, 4)
+    projections = ("gate_proj", "up_proj", "down_proj")
+    for owner in ownership:
+        layer = torch.nn.Module()
+        layer.experts = torch.nn.ModuleList(
+            [torch.nn.ModuleDict({name: torch.nn.Linear(4, 4) for name in projections}) for _ in range(2)]
+        )
+        layer.shared_experts = torch.nn.ModuleDict({name: torch.nn.Linear(4, 4) for name in projections})
+        layer._use_fused_expert_lora = owner == "forced"
+        layer._fused_experts = owner == "packed"
+        model.layers.append(layer)
+
+    if "unwrapped" not in ownership:
+        model._kt_wrappers = list(model.layers)
+
+    assert set(find_all_linear_modules(model, False)) == set(projections)
+    targets = find_all_linear_modules(model, False, for_kt_lora=True)
+    if machine == "x86_64":
+        assert set(targets) == set(projections)
+
+    inject_adapter_in_model(LoraConfig(r=2, target_modules=targets), model)
+    for layer, owner in zip(model.layers, ownership):
+        peft_managed = machine == "x86_64" or owner in ("peft", "unwrapped")
+        for expert in layer.experts:
+            assert all(hasattr(proj, "lora_A") == peft_managed for proj in expert.values())
+        assert all(hasattr(proj, "lora_A") for proj in layer.shared_experts.values())
+
+    assert not hasattr(model.lm_head, "lora_A")
