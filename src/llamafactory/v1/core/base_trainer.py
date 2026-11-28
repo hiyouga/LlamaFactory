@@ -247,6 +247,11 @@ class BaseTrainer:
         """
         ...
 
+    def _get_micro_batch_loss_scales(self, micro_batches: list[BatchInput]) -> list[float]:
+        counts = [compute_valid_tokens([batch]) for batch in micro_batches]
+        total = DistributedInterface().all_reduce(sum(counts), op=ReduceOp.SUM)
+        return [count * self.dp_size / (total + 1e-6) for count in counts]
+
     def fit(self) -> None:
         """Train the model."""
         self.model.train()
@@ -266,14 +271,10 @@ class BaseTrainer:
                 self.callback_handler.on_step_begin(self.args, self.state)
 
                 step_loss = 0
-                step_valid_tokens = compute_valid_tokens(micro_batches)
-                step_valid_tokens = DistributedInterface().all_reduce(step_valid_tokens, op=ReduceOp.SUM)
+                loss_scales = self._get_micro_batch_loss_scales(micro_batches)
                 num_micro = len(micro_batches)
                 for i, micro_batch in enumerate(micro_batches):
-                    loss = self.compute_loss(micro_batch)
-                    mini_step_valid_tokens = compute_valid_tokens([micro_batch])
-                    # fsdp uses mean reduction so we need to scale the loss by dp_size
-                    loss = loss * mini_step_valid_tokens * self.dp_size / (step_valid_tokens + 1e-6)
+                    loss = self.compute_loss(micro_batch) * loss_scales[i]
 
                     if self._deepspeed_engine is not None:
                         # deepspeed: set sync_gradients so engine.step() only fires on last micro-batch
