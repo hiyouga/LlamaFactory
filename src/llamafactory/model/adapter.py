@@ -226,15 +226,18 @@ def _setup_lora_tuning(
         logger.info_rank0("Loaded adapter(s): {}".format(",".join(model_args.adapter_name_or_path)))
 
     if is_trainable and adapter_to_resume is None:  # create new lora weights while training
-        if len(finetuning_args.lora_target) == 1 and finetuning_args.lora_target[0] == "all":
+        use_all_modules = len(finetuning_args.lora_target) == 1 and finetuning_args.lora_target[0] == "all"
+        if use_all_modules:
             target_modules = find_all_linear_modules(model, finetuning_args.freeze_vision_tower)
         else:
             target_modules = finetuning_args.lora_target
 
         if finetuning_args.use_llama_pro:
-            target_modules = find_expanded_modules(model, target_modules, finetuning_args.freeze_trainable_layers)
+            target_modules = find_expanded_modules(
+                model, target_modules, finetuning_args.freeze_trainable_layers, strict_numeric=use_all_modules
+            )
 
-        target_modules = patch_target_modules(model, finetuning_args, target_modules)
+        target_modules = patch_target_modules(model, finetuning_args, target_modules, strict_numeric=use_all_modules)
 
         if (
             finetuning_args.use_dora
