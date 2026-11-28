@@ -2704,6 +2704,27 @@ class Qwen3VLPlugin(Qwen2VLPlugin):
         return mm_inputs
 
     @override
+    def get_mm_inputs(
+        self,
+        images: list["ImageInput"],
+        videos: list["VideoInput"],
+        audios: list["AudioInput"],
+        imglens: list[int],
+        vidlens: list[int],
+        audlens: list[int],
+        batch_ids: list[list[int]],
+        processor: Optional["MMProcessor"],
+    ) -> dict[str, Union[list[list[int]], "torch.Tensor"]]:
+        self._validate_input(processor, images, videos, audios)
+        mm_inputs = self._get_mm_inputs(images, videos, audios, processor)
+        if ("image_grid_thw" in mm_inputs or "video_grid_thw" in mm_inputs) and hasattr(
+            processor, "create_mm_token_type_ids"
+        ):
+            mm_inputs["mm_token_type_ids"] = processor.create_mm_token_type_ids(batch_ids)
+
+        return mm_inputs
+
+    @override
     def process_messages(
         self,
         messages: list[dict[str, str]],
