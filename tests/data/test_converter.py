@@ -62,3 +62,26 @@ def test_sharegpt_converter():
         "_videos": None,
         "_audios": None,
     }
+
+
+@pytest.mark.runs_on(["cpu", "mps", "xpu"])
+def test_sharegpt_converter_with_nested_video_frames(tmp_path):
+    dataset_attr = DatasetAttr("file", "sample.json", formatting="sharegpt", videos="videos")
+    example = {
+        "conversations": [
+            {"from": "human", "value": "<video>Describe the clip."},
+            {"from": "gpt", "value": "A still frame."},
+        ],
+        "videos": [["frame.png"]],
+    }
+    for name in ("a", "b"):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "frame.png").touch()
+
+    # converting the same sample with different media dirs must not mutate it in place
+    for name in ("a", "b"):
+        data_args = DataArguments(media_dir=str(tmp_path / name))
+        dataset_converter = get_dataset_converter("sharegpt", dataset_attr, data_args)
+        assert dataset_converter(example)["_videos"] == [[str(tmp_path / name / "frame.png")]]
+
+    assert example["videos"] == [["frame.png"]]
