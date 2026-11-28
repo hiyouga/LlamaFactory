@@ -329,7 +329,7 @@ class HuggingfaceEngine(BaseEngine):
         input_kwargs: Optional[dict[str, Any]] = {},
     ) -> list[float]:
         max_length: Optional[int] = input_kwargs.pop("max_length", None)
-        device = getattr(model.pretrained_model, "device", "cuda")
+        device = getattr(model.pretrained_model, "device", torch.device("cpu"))
         inputs: dict[str, torch.Tensor] = tokenizer(
             batch_input,
             padding=True,

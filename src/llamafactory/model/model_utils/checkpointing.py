@@ -61,17 +61,20 @@ def _get_gradient_checkpointing_kwargs(model_args: "ModelArguments") -> dict[str
 
 
 def get_unsloth_gradient_checkpointing_func() -> Callable:
+    _device_type = str(torch.accelerator.current_accelerator()) if hasattr(torch, "accelerator") else "cuda"
+
     class UnslothGradientCheckpointing(torch.autograd.Function):
         r"""Saves VRAM by smartly offloading to RAM."""
 
         @staticmethod
-        @torch.cuda.amp.custom_fwd
+        @torch.amp.custom_fwd(device_type=_device_type)
         def forward(
             ctx: "torch.autograd.Function",
             forward_function: "torch.Module",
             hidden_states: "torch.Tensor",
             *args: Union["torch.Tensor", Any],
         ) -> "torch.Tensor":
+            ctx._device = hidden_states.device  # save compute device for backward
             saved_hidden_states = hidden_states.to("cpu", non_blocking=True)
             with torch.no_grad():
                 outputs = forward_function(hidden_states, *args)
@@ -82,10 +85,10 @@ def get_unsloth_gradient_checkpointing_func() -> Callable:
             return outputs
 
         @staticmethod
-        @torch.cuda.amp.custom_bwd
+        @torch.amp.custom_bwd(device_type=_device_type)
         def backward(ctx: "torch.autograd.Function", grad_output: "torch.Tensor") -> "torch.Tensor":
             (hidden_states,) = ctx.saved_tensors
-            hidden_states = hidden_states.to("cuda", non_blocking=True).detach()
+            hidden_states = hidden_states.to(ctx._device, non_blocking=True).detach()
             hidden_states.requires_grad_(True)
             with torch.enable_grad():
                 outputs = ctx.forward_function(hidden_states, *ctx.args)
